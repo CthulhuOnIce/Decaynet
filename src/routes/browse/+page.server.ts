@@ -16,6 +16,9 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	if (kind) q = q.eq('kind', kind);
 	if (status) q = q.eq('current_status', status);
 	if (article) q = q.eq('article_status', article);
+	const visibility = url.searchParams.get('visibility') ?? '';
+	if (visibility === 'private') q = q.eq('is_private', true);
+	if (visibility === 'public') q = q.eq('is_private', false);
 	if (tag) {
 		const { data: tagged } = await locals.supabase.rpc('entities_tagged', { p_tag: tag, p_limit: 5000 });
 		q = q.in('id', [...new Set((tagged ?? []).map((r: { id: string }) => r.id))]);
@@ -32,7 +35,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		rows: data ?? [],
 		count: count ?? 0,
 		error: error?.message ?? null,
-		filters: { kind, status, article, sort, tag },
+		filters: { kind, status, article, sort, tag, visibility },
 		tags,
 		page,
 		pages: Math.max(1, Math.ceil((count ?? 0) / PAGE))

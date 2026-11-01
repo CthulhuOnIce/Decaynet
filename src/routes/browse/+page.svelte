@@ -58,6 +58,16 @@
 				<label for="tg">Tag (incl. sub-traits)</label>
 				<TagSelect id="tg" tags={data.tags} by="slug" value={data.filters.tag} placeholder="any" name="tag" />
 			</div>
+			{#if (data.perms ?? []).includes('view_private')}
+				<div>
+					<label for="vis">Visibility</label>
+					<select id="vis" value={data.filters.visibility} onchange={(e) => setFilter('visibility', e.currentTarget.value)}>
+						<option value="">all</option>
+						<option value="public">published</option>
+						<option value="private">private drafts</option>
+					</select>
+				</div>
+			{/if}
 			<div>
 				<label for="so">Sort</label>
 				<select id="so" value={data.filters.sort} onchange={(e) => setFilter('sort', e.currentTarget.value)}>
@@ -80,6 +90,7 @@
 				<tr>
 					<td>
 						<a href="/e/{r.slug}"><strong>{r.name}</strong></a>
+						{#if r.is_private}<Badge color="#e0a23a" label="Private" />{/if}
 						{#if r.summary}<div class="muted small">{r.summary}</div>{/if}
 					</td>
 					<td><KindBadge kind={r.kind} /></td>

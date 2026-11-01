@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { loadTags, requireEditor } from '$lib/server/db';
+import { loadTags, newPagesPrivate, requireEditor } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, required, slugify, str, temporalFromForm } from '$lib/server/forms';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -55,7 +55,8 @@ export const actions: Actions = {
 					summary: str(fd, 'summary'),
 					exists_from: captured.from,
 					exists_from_precision: captured.fromPrecision,
-					lifespan_confidence: captured.approximate ? 'approximate' : 'probable'
+					lifespan_confidence: captured.approximate ? 'approximate' : 'probable',
+					is_private: await newPagesPrivate(sb)
 				})
 				.select('id, slug')
 				.single();

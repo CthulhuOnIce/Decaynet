@@ -18,6 +18,7 @@ Built with **SvelteKit 2 / Svelte 5**, **Supabase** (Postgres 17 + PostGIS, Auth
 - [Guides](#guides)
   - [Reading the map](#reading-the-map)
   - [Adding and editing pages](#adding-and-editing-pages)
+  - [Private pages (drafts)](#private-pages-drafts)
   - [Buildings, spaces and tenants](#buildings-spaces-and-tenants)
   - [Tracing from a scanned map (workbench)](#tracing-from-a-scanned-map-workbench)
   - [When a whole area's layout changed](#when-a-whole-areas-layout-changed)
@@ -210,6 +211,24 @@ At country or world scale, the map only fetches what's in view (plus a margin) a
 5. **Write the article** with **Edit article** (Markdown). Link pages with `[[slug]]` or `[[slug|label]]`; links to pages that don't exist yet show red. Set the article status (stub → draft → needs sources → needs review → good) and add an edit summary.
 6. **Add media** with **+ Media**. A photo has three dates: when it was taken, the period it shows, and when it was added. You can also mark where the camera stood.
 
+### Private pages (drafts)
+
+![A private page waiting to be published](docs/images/private-page.png)
+
+A page can be **private**: hidden from the public until it's ready. Use this for half-researched buildings, sensitive stories still being checked, or a batch of imported pages you want to review first.
+
+- **Who can see it:** the person who created it, and roles with the **View private pages** permission (contributors and up by default; change it in *Roles & permissions*).
+- **Everyone else sees nothing.** The page returns *not found*, and it's left out of the map, search, browse, the timeline, recent changes, connections from other pages and the REST API. This is enforced by row-level security in the database, not just hidden in the UI. Its article, facts, tags, shapes and history are hidden along with it.
+- **Making a page private:**
+  - tick *Keep private until it's ready* when creating it;
+  - use **Make private** on the page or the checkbox in *Edit facts*;
+  - tick *new pages private* when applying an import.
+- **Publishing:** click **Publish** on the private-page banner. The page goes live and `published_at` is stamped.
+- **Default for new pages:** *Admin → Site settings → Accounts → New pages start private*. This applies to pages created by hand, from media uploads, tips, the workbench and imports.
+- **Finding drafts:** *Maintenance → Private drafts awaiting publication*, or *Browse → Visibility: private drafts*.
+
+Responses that can include private pages are sent with `Cache-Control: private, no-store`, so a shared cache or CDN never serves them to the public. One limit: uploaded media files live in a public storage bucket under unguessable paths. A private media page and its metadata are hidden, but anyone who already has a file's direct URL can still open it.
+
 ### Buildings, spaces and tenants
 
 ![Dividing a footprint into spaces](docs/images/facts-spaces.png)
@@ -357,6 +376,7 @@ Tick a box to grant a permission to a role, and add your own roles (e.g. "Archiv
 | Permission | Contributor | Editor | Moderator | Admin |
 |---|:-:|:-:|:-:|:-:|
 | Edit content (pages, facts, articles, tags on pages) | ✓ | ✓ | ✓ | ✓ |
+| View private pages (drafts not yet published) | ✓ | ✓ | ✓ | ✓ |
 | Upload media | ✓ | ✓ | ✓ | ✓ |
 | Create tags | ✓ | ✓ | ✓ | ✓ |
 | Review tips | | ✓ | ✓ | ✓ |
@@ -410,6 +430,7 @@ source_id, source_detail, note     -- citation + "p. 42"
 - **Building → space → tenant:** spaces are entities `part_of` a building, with polygons inside its footprint; tenants `occupy` spaces.
 - **Tags** form a tree inside facets; tagging a sub-trait implies its ancestors, and tag assignments are dated.
 - **Permissions:** every RLS policy calls `has_permission()`, which reads the roles × permissions tables.
+- **Visibility:** `entities.is_private` hides a page and, through `entity_hidden()` in each table's read policy, everything attached to it. The SQL systems run as the caller, so map snapshots, search and timelines respect it automatically.
 
 Key RPCs:
 
@@ -467,6 +488,7 @@ supabase/migrations/             0001 foundation · 0002 components · 0003 arti
                                  0008 permissions/settings · 0009 tips · 0010 spaces/layout tools
                                  0011 session-only overlays + source link · 0012 external ids & import
                                  0013 region-agnostic settings (units, address format, language, bounds)
+                                 0014 private pages (visibility enforced by RLS)
 supabase/seed.sql                optional Gary, Indiana demo (settings, pages, eras)
 src/lib/map/style.ts             MapLibre layers for snapshots, ghosts, spaces, moments
 src/lib/components/              TimeMachineMap, YearSlider, EntityPanel, Timeline, MiniMap,

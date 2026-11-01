@@ -1,9 +1,10 @@
-import { error } from '@sveltejs/kit';
-import { entityBySlug } from '$lib/server/db';
+import { error, fail } from '@sveltejs/kit';
+import { entityBySlug, requirePermission } from '$lib/server/db';
+import { dbMessage } from '$lib/server/forms';
 import { renderArticle } from '$lib/server/markdown';
 import { yearToDate } from '$lib/time';
 import type { EntitySnapshot, EntityTag, RelationRow, SourceRow, Space, TimelineRow } from '$lib/types';
-import type { PageServerLoad } from './$types';
+import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, url, locals }) => {
 	const sb = locals.supabase;
@@ -72,4 +73,17 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 		spaces: (spaces ?? []) as Space[],
 		sources: (sources ?? []) as SourceRow[]
 	};
+};
+
+export const actions: Actions = {
+	/** Publish a private page, or take a public one back to private. */
+	visibility: async ({ request, locals, params }) => {
+		await requirePermission(locals, 'edit_content');
+		const entity = await entityBySlug(locals.supabase, params.slug);
+		const fd = await request.formData();
+		const makePrivate = fd.get('private') === 'true';
+		const { error: err } = await locals.supabase.from('entities').update({ is_private: makePrivate }).eq('id', entity.id);
+		if (err) return fail(400, { error: dbMessage(err) });
+		return { ok: makePrivate ? 'Page is now private.' : 'Published: the page is now public.' };
+	}
 };

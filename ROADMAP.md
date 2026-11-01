@@ -40,6 +40,9 @@ Pick any address in Gary and any year since 1906, and see:
 - [x] Anonymous tips: optional images, IP mode (off / hash / full), captcha (Turnstile / hCaptcha), rate limit, honeypot
 - [x] Tip review queue: status workflow, notes, link/create page, promote images to media
 - [ ] Email notifications for new tips / watched pages ⚑ (Supabase SMTP vs. a queue + Resend)
+- [x] Private pages: hidden from the public until published (RLS-enforced), default-private setting, import as private
+- [ ] Private media files (signed URLs from a private bucket for media on private pages)
+- [ ] Scheduled publishing and a review step ("ready for review" → moderator publishes)
 - [ ] Watchlists ("tell me when this building's page changes")
 - [ ] Talk / discussion threads per page and per fact
 - [ ] Privacy notice + tip data retention job (auto-purge raw IPs after N days)
@@ -164,4 +167,5 @@ The street grid, shoreline and river were not always where they are today. What 
 | 2026-11-01 | Licensed AGPL-3.0-or-later; ship as a Docker image. |
 | 2026-11-01 | External data (OHM, Wikidata) is fetched live in the app and always previewed; imports fill gaps, never overwrite, and can be undone. No bundled data dumps. |
 | 2026-11-01 | Region-agnostic: no city in code or schema; Gary is an optional demo seed. Region, units, address format, language, bounds and vocabulary are site settings. |
+| 2026-11-01 | Private pages are enforced in the database (RLS on entities and every per-entity table), not in the UI; personalised API responses are never publicly cacheable. |
 | 2026-11-01 | `docker compose up` bundles a self-hosted Supabase (db, auth, rest, storage, kong); an external-Supabase compose file remains for Supabase Cloud. |

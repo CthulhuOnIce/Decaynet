@@ -1,5 +1,5 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { requirePermission } from '$lib/server/db';
+import { newPagesPrivate, requirePermission } from '$lib/server/db';
 import { dbMessage, required, slugify, str } from '$lib/server/forms';
 import { parseFuzzyDate } from '$lib/time';
 import type { Actions, PageServerLoad } from './$types';
@@ -61,7 +61,13 @@ export const actions: Actions = {
 		const { data: tip } = await locals.supabase.from('tips').select('location').eq('id', params.id).single();
 		const { data: entity, error: err } = await locals.supabase
 			.from('entities')
-			.insert({ kind, name, slug: `${slugify(name)}-${crypto.randomUUID().slice(0, 4)}`, summary: 'Created from an anonymous tip.' })
+			.insert({
+				kind,
+				name,
+				slug: `${slugify(name)}-${crypto.randomUUID().slice(0, 4)}`,
+				summary: 'Created from an anonymous tip.',
+				is_private: await newPagesPrivate(locals.supabase)
+			})
 			.select('id, slug')
 			.single();
 		if (err) return fail(400, { error: dbMessage(err) });

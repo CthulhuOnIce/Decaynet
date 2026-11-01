@@ -41,7 +41,12 @@ export const actions: Actions = {
 		}
 		const { data, error } = await locals.supabase.rpc('apply_import', { p_plan: payload });
 		if (error) return fail(400, { error: dbMessage(error) });
-		return { applied: data as { batch_id: string; created: number; merged: number } };
+		const applied = data as { batch_id: string; created: number; merged: number };
+		if (fd.get('private') === 'on' && applied.created) {
+			const r = await locals.supabase.rpc('set_import_privacy', { p_batch: applied.batch_id, p_private: true });
+			if (r.error) return fail(400, { error: `Imported, but making the pages private failed: ${dbMessage(r.error)}` });
+		}
+		return { applied, private: fd.get('private') === 'on' };
 	},
 	undo: async ({ request, locals }) => {
 		await requirePermission(locals, 'moderate');

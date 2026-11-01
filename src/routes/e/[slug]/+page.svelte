@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { enhance } from '$app/forms';
 	import { untrack } from 'svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import KindBadge from '$lib/components/KindBadge.svelte';
@@ -11,7 +12,7 @@
 	import { isImage, mediaSrc } from '$lib/media';
 	import type { RelationRow } from '$lib/types';
 
-	let { data } = $props();
+	let { data, form } = $props();
 	const e = $derived(data.entity);
 	const snap = $derived(data.snapshot);
 	const kind = $derived(data.vocab.kinds.find((k) => k.id === e.kind));
@@ -54,6 +55,22 @@
 <svelte:head><title>{e.name} · {data.settings.site_name}</title></svelte:head>
 
 <div class="page">
+	{#if e.is_private}
+		<div class="private-banner">
+			<span>
+				<strong>Private page.</strong> Only you{(data.perms ?? []).includes('view_private') ? ' and people with the “View private pages” permission' : ''} can see it.
+				It's hidden from the map, search, timelines and history for everyone else until it's published.
+			</span>
+			{#if canEdit}
+				<form method="post" action="?/visibility" use:enhance>
+					<input type="hidden" name="private" value="false" />
+					<button class="primary">Publish</button>
+				</form>
+			{/if}
+		</div>
+	{/if}
+	{#if form && 'ok' in form && form.ok}<p class="notice ok">{form.ok}</p>{/if}
+	{#if form && 'error' in form && form.error}<p class="notice error">{form.error}</p>{/if}
 	<header class="head">
 		<div class="eyebrow">
 			{kind?.label ?? e.kind}
@@ -79,6 +96,7 @@
 				<Badge color={data.article.article_statuses.color} label="Article: {data.article.article_statuses.label}" title={data.article.article_statuses.description ?? ''} />
 			{/if}
 			{#if data.article?.locked}<Badge color="#8fb3c9" label="Locked" />{/if}
+			{#if e.is_private}<Badge color="#e0a23a" label="Private" title="Hidden from the public until published" />{/if}
 			<span class="spacer"></span>
 			<a class="btn ghost" href="/?y={data.year}&sel={e.id}">View on map</a>
 			{#if canEdit}
@@ -87,6 +105,18 @@
 				<a class="btn ghost" href="/media/new?depicts={e.slug}">+ Media</a>
 			{/if}
 			<a class="btn ghost" href="/e/{e.slug}/history">History</a>
+			{#if canEdit && !e.is_private}
+				<form
+					method="post"
+					action="?/visibility"
+					use:enhance={({ cancel }) => {
+						if (!confirm('Hide this page from the public again?')) cancel();
+					}}
+				>
+					<input type="hidden" name="private" value="true" />
+					<button class="ghost" title="Hide from the public until it's ready">Make private</button>
+				</form>
+			{/if}
 		</div>
 		{#if data.tags.length}
 			<div class="tags"><TagChips tags={data.tags} /></div>
@@ -295,6 +325,18 @@
 <style>
 	.head {
 		margin-bottom: 26px;
+	}
+	.private-banner {
+		display: flex;
+		gap: 16px;
+		align-items: center;
+		justify-content: space-between;
+		padding: 12px 16px;
+		margin-bottom: 18px;
+		border: 1px dashed var(--amber);
+		border-radius: var(--radius);
+		background: rgba(224, 162, 58, 0.08);
+		font-size: 0.9rem;
 	}
 	.head h1 {
 		font-size: 2.6rem;

@@ -1,10 +1,11 @@
 import { error, json } from '@sveltejs/kit';
+import { visibilityCache } from '$lib/server/cache';
 import type { RequestHandler } from './$types';
 
 const isDate = (s: string | null): s is string => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 /** GeoJSON of everything standing (and, optionally, gone) on a date. */
-export const GET: RequestHandler = async ({ url, locals, setHeaders }) => {
+export const GET: RequestHandler = async ({ url, locals, setHeaders, cookies }) => {
 	const at = url.searchParams.get('at');
 	if (!isDate(at)) error(400, 'at must be YYYY-MM-DD');
 	const kinds = url.searchParams.get('kinds')?.split(',').filter(Boolean);
@@ -20,6 +21,6 @@ export const GET: RequestHandler = async ({ url, locals, setHeaders }) => {
 			: {})
 	});
 	if (err) error(500, err.message);
-	setHeaders({ 'cache-control': 'public, max-age=30' });
+	setHeaders(visibilityCache(cookies));
 	return json(data);
 };

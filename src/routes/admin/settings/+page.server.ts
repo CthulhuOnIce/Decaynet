@@ -59,6 +59,7 @@ export const actions: Actions = {
 				basemap_attribution: str(fd, 'basemap_attribution') ?? '',
 				basemap_mode: str(fd, 'basemap_mode') ?? 'fade',
 				allow_signups: bool(fd, 'allow_signups'),
+				new_pages_private: bool(fd, 'new_pages_private'),
 				default_role: str(fd, 'default_role') ?? 'contributor',
 				tips_enabled: bool(fd, 'tips_enabled'),
 				tips_intro: str(fd, 'tips_intro') ?? '',

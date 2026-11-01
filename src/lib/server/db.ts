@@ -53,6 +53,12 @@ export async function requirePermission(locals: App.Locals, permission: Permissi
 	return user;
 }
 
+/** Whether pages created by tools (media, tips, workbench, import) start private. */
+export async function newPagesPrivate(supabase: SupabaseClient): Promise<boolean> {
+	const { data } = await supabase.from('site_settings').select('new_pages_private').single();
+	return !!data?.new_pages_private;
+}
+
 export async function loadSettings(supabase: SupabaseClient): Promise<SiteSettings> {
 	const { data, error: err } = await supabase.from('site_settings').select('*').single();
 	if (err) error(500, `Could not load site settings: ${err.message}`);

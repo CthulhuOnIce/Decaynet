@@ -156,6 +156,11 @@
 				{/if}
 			</div>
 			<p class="hint">The lifespan decides when this appears on the time-machine map. Ending it turns a building into a “ghost”.</p>
+			<input type="hidden" name="has_private" value="1" />
+			<label class="row" style="gap: 8px; margin: 6px 0 12px; color: var(--ink)">
+				<input type="checkbox" name="is_private" checked={e.is_private} />
+				Private: hidden from the public until published
+			</label>
 			<button class="primary">Save identity</button>
 		</form>
 	</section>

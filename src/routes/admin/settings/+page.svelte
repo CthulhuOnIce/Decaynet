@@ -122,7 +122,9 @@
 				</select>
 			</div>
 		</div>
-		<p class="hint"><a href="/admin/roles">Edit what each role can do →</a></p>
+		<label class="check"><input type="checkbox" name="new_pages_private" checked={s.new_pages_private} /> New pages start private (hidden until published)</label>
+		<p class="hint">Applies to pages created by hand, from media uploads, tips, the workbench and imports. Editors can still choose per page.</p>
+		<p class="hint"><a href="/admin/roles">Edit what each role can do, including who can see private pages →</a></p>
 	</section>
 
 	<section class="card">

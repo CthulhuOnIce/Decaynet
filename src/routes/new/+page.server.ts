@@ -38,7 +38,8 @@ export const actions: Actions = {
 					exists_from_precision: life.fromPrecision,
 					exists_to: life.to,
 					exists_to_precision: life.toPrecision,
-					lifespan_confidence: life.approximate ? 'approximate' : 'probable'
+					lifespan_confidence: life.approximate ? 'approximate' : 'probable',
+					is_private: fd.get('is_private') === 'on'
 				})
 				.select('id, slug')
 				.single();

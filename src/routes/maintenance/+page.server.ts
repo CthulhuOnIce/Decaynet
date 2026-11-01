@@ -30,6 +30,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		})
 	);
 
+	const { count: privateCount } = await sb.from('entities').select('id', { count: 'exact', head: true }).eq('is_private', true);
+
 	let q = sb.from('entity_health').select('*').order('article_updated_at', { ascending: true }).limit(200);
 	if (issue) q = q.contains('issues', [issue]);
 	if (status) q = q.eq('article_status', status);
@@ -41,6 +43,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		issues: ISSUES,
 		statusCounts: Object.fromEntries(statusCounts) as Record<string, number>,
 		issueCounts: Object.fromEntries(issueCounts) as Record<string, number>,
+		privateCount: privateCount ?? 0,
 		rows: rows ?? []
 	};
 };

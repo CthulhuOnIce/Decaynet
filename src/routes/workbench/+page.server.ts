@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { requirePermission } from '$lib/server/db';
+import { newPagesPrivate, requirePermission } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, required, slugify, str } from '$lib/server/forms';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -67,7 +67,8 @@ export const actions: Actions = {
 					exists_from_precision: life.fromPrecision,
 					exists_to: life.to,
 					exists_to_precision: life.toPrecision,
-					lifespan_confidence: confidence
+					lifespan_confidence: confidence,
+					is_private: await newPagesPrivate(locals.supabase)
 				})
 				.select('id, slug')
 				.single();

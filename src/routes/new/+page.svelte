@@ -88,6 +88,11 @@
 			</div>
 		{/if}
 
+		<label class="row private">
+			<input type="checkbox" name="is_private" checked={v.is_private ? v.is_private === 'on' : data.settings.new_pages_private} />
+			<span><strong>Keep private until it's ready</strong> <span class="muted small">(hidden from the public; publish it from the page)</span></span>
+		</label>
+
 		<div class="row">
 			<button class="primary">Create page</button>
 			{#if kind === 'media'}<a href="/media/new">Uploading a file? Use the media uploader →</a>{/if}
@@ -96,6 +101,11 @@
 </div>
 
 <style>
+	.private {
+		gap: 8px;
+		margin: 0;
+		color: var(--ink);
+	}
 	.kinds {
 		display: flex;
 		flex-wrap: wrap;

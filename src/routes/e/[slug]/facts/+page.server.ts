@@ -105,7 +105,8 @@ export const actions: Actions = {
 					exists_from_precision: life.fromPrecision,
 					exists_to: life.to,
 					exists_to_precision: life.toPrecision,
-					lifespan_confidence: life.approximate && conf === 'probable' ? 'approximate' : conf
+					lifespan_confidence: life.approximate && conf === 'probable' ? 'approximate' : conf,
+					...(fd.has('has_private') ? { is_private: fd.get('is_private') === 'on' } : {})
 				})
 				.eq('id', entityId)
 		);

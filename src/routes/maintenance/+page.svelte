@@ -39,6 +39,12 @@
 
 	<h2>Work queues</h2>
 	<div class="queues">
+		{#if (data.perms ?? []).includes('view_private')}
+			<a class="queue card" href="/browse?visibility=private&sort=recent">
+				<span class="n">{data.privateCount}</span>
+				<span>Private drafts awaiting publication</span>
+			</a>
+		{/if}
 		{#each Object.entries(data.issues) as [k, label] (k)}
 			<a class="queue card" class:on={data.issue === k} href="?issue={k}">
 				<span class="n">{data.issueCounts[k]}</span>

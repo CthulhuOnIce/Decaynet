@@ -92,6 +92,9 @@ export interface Entity {
 	exists_to: string | null;
 	exists_to_precision: Precision;
 	lifespan_confidence: Confidence;
+	is_private: boolean;
+	published_at: string | null;
+	created_by: string | null;
 	created_at: string;
 	updated_at: string;
 }
@@ -305,6 +308,7 @@ export interface EntityTag {
 export type Permission =
 	| 'edit_content'
 	| 'upload_media'
+	| 'view_private'
 	| 'create_tags'
 	| 'review_tips'
 	| 'bulk_edit'
@@ -343,6 +347,7 @@ export interface SiteSettings {
 	/** [west, south, east, north] or null for the whole world */
 	map_bounds: [number, number, number, number] | null;
 	setup_complete: boolean;
+	new_pages_private: boolean;
 	updated_at: string;
 }
 

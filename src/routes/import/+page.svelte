@@ -233,6 +233,7 @@
 
 	const kindLabel = (id: string) => data.vocab.kinds.find((k) => k.id === id)?.label ?? id;
 	let applying = $state(false);
+	let importPrivate = $state(untrack(() => data.settings.new_pages_private));
 </script>
 
 <svelte:head><title>Import · {data.settings.site_name}</title></svelte:head>
@@ -248,7 +249,7 @@
 
 		{#if form && 'applied' in form && form.applied}
 			<p class="notice ok">
-				Imported: {form.applied.created} new page{form.applied.created === 1 ? '' : 's'}, {form.applied.merged} updated.
+				Imported: {form.applied.created} new page{form.applied.created === 1 ? '' : 's'}{'private' in form && form.private ? ' (private until published)' : ''}, {form.applied.merged} updated.
 				<a href="/changes">See recent changes →</a>
 			</p>
 		{/if}
@@ -367,7 +368,7 @@
 						action="?/apply"
 						use:enhance={({ cancel }) => {
 							if (!selected.length) return cancel();
-							if (!confirm(`Apply ${selected.length} change(s)?\n\n${nCreate} new page(s)\n${nMerge} update(s) to existing pages\n\nEvery fact will be cited to this import.`)) return cancel();
+							if (!confirm(`Apply ${selected.length} change(s)?\n\n${nCreate} new page(s)${importPrivate ? ' (private)' : ''}\n${nMerge} update(s) to existing pages\n\nEvery fact will be cited to this import.`)) return cancel();
 							applying = true;
 							return async ({ result, update }) => {
 								applying = false;
@@ -380,6 +381,9 @@
 						}}
 					>
 						<input type="hidden" name="plan" value={planJson} />
+						<label class="privcheck" title="New pages stay hidden from the public until you publish them">
+							<input type="checkbox" name="private" bind:checked={importPrivate} /> new pages private
+						</label>
 						<button class="primary" disabled={!selected.length || applying}>
 							{applying ? 'Applying…' : `Apply ${selected.length} (${nCreate} new, ${nMerge} updates)`}
 						</button>
@@ -546,6 +550,20 @@
 	}
 	.spacer {
 		flex: 1;
+	}
+	form[action='?/apply'] {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+	.privcheck {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		margin: 0;
+		font-size: 0.8rem;
+		color: var(--ink-2);
+		white-space: nowrap;
 	}
 	.rows {
 		overflow-y: auto;
