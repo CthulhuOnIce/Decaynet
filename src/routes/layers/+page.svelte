@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { can } from '$lib/perms';
 
 	let { data, form } = $props();
-	const isMod = $derived(['moderator', 'admin'].includes(data.profile?.role ?? ''));
+	const isMod = $derived(can('manage_layers'));
 </script>
 
 <svelte:head><title>Map overlays · Decaynet</title></svelte:head>
@@ -13,7 +14,7 @@
 		Georeferenced rasters (Sanborn fire-insurance sheets, plat maps, USGS topos, aerial surveys) served as XYZ tiles.
 		Georeference scans with a tool such as <a href="https://mapwarper.net" target="_blank" rel="noopener">Map Warper</a>
 		or <a href="https://allmaps.org" target="_blank" rel="noopener">Allmaps</a>, then paste the tile URL here. On the
-		map, overlays whose period covers the current year are marked with ●.
+		map, overlays whose period covers the current year are marked with ●. To align a scan yourself, use the <a href="/workbench">workbench</a>.
 	</p>
 	{#if form?.error}<p class="notice error">{form.error}</p>{/if}
 
@@ -24,7 +25,8 @@
 				<tr class:off={!l.enabled}>
 					<td>
 						<strong>{l.title}</strong>
-						<div class="mono small muted">{l.tile_url}</div>
+						<div class="mono small muted">{l.kind === 'image' ? 'Georeferenced scan (4 corners)' : l.tile_url}</div>
+						{#if l.notes}<div class="small muted">{l.notes}</div>{/if}
 						{#if l.attribution}<div class="small muted">{l.attribution}</div>{/if}
 					</td>
 					<td class="date">{l.depicts_from?.slice(0, 4) ?? '?'} – {l.depicts_to?.slice(0, 4) ?? '?'}</td>
@@ -70,7 +72,7 @@
 			<button class="primary">Add overlay</button>
 		</form>
 	{:else}
-		<p class="notice">Moderators can add overlays. Ask in the community, or post the tile URL on a page's talk notes.</p>
+		<p class="notice">Overlay managers can add overlays. Know of a good scan? <a href="/tip">Send a tip</a>.</p>
 	{/if}
 </div>
 

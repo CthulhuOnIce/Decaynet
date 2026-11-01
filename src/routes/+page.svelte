@@ -13,7 +13,10 @@
 
 	// ---- state, seeded from a shareable URL: /?y=1955&sel=<uuid>&c=-87.33,41.60,15
 	const params = page.url.searchParams;
-	let year = $state(untrack(() => Math.max(data.minYear, Math.min(data.maxYear, Number(params.get('y')) || 1955))));
+	let year = $state(
+		untrack(() => Math.max(data.minYear, Math.min(data.maxYear, Number(params.get('y')) || data.settings.default_year)))
+	);
+	let basemap = $state(untrack(() => data.settings.basemap_mode));
 	let selected = $state<string | null>(params.get('sel'));
 	const c = params.get('c')?.split(',').map(Number);
 	const startView =
@@ -115,7 +118,7 @@
 	});
 </script>
 
-<svelte:head><title>{year} · Decaynet</title></svelte:head>
+<svelte:head><title>{year} · {data.settings.site_name}</title></svelte:head>
 
 <div class="shell" class:with-panel={!!selected}>
 	<div class="map-area">
@@ -131,8 +134,9 @@
 			{overlay}
 			{overlayOpacity}
 			{selected}
-			center={startView?.center}
-			zoom={startView?.zoom}
+			{basemap}
+			center={startView?.center ?? [data.settings.map_center_lon, data.settings.map_center_lat]}
+			zoom={startView?.zoom ?? data.settings.map_zoom}
 			onselect={(p: Picked | null) => (selected = p?.id ?? null)}
 			{onmoments}
 			onview={(v) => (view = v)}
@@ -159,6 +163,16 @@
 						<input type="checkbox" bind:checked={showMoments} />
 						<span class="sw" style:background="var(--amber)"></span>Events ±5 yrs
 					</label>
+				</div>
+
+				<div class="group">
+					<div class="eyebrow">Modern basemap</div>
+					<div class="seg" role="radiogroup" aria-label="Modern basemap">
+						{#each [['fade', 'Fade with time'], ['always', 'Always'], ['hidden', 'Hidden']] as [v, l] (v)}
+							<button class:on={basemap === v} onclick={() => (basemap = v as typeof basemap)} role="radio" aria-checked={basemap === v}>{l}</button>
+						{/each}
+					</div>
+					<p class="hint">Hide it when the historical layout differs from today's streets.</p>
 				</div>
 
 				<div class="group">
@@ -301,6 +315,21 @@
 	}
 	.ghost-sw {
 		border: 1.5px dashed #8c8173;
+	}
+	.seg {
+		display: flex;
+		gap: 2px;
+	}
+	.seg button {
+		flex: 1;
+		padding: 4px 6px;
+		font-size: 0.75rem;
+		justify-content: center;
+	}
+	.seg button.on {
+		background: var(--rust);
+		border-color: var(--rust);
+		color: #fff;
 	}
 	.legend .leg {
 		display: flex;

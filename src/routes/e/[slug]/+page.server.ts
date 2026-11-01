@@ -2,7 +2,7 @@ import { error } from '@sveltejs/kit';
 import { entityBySlug } from '$lib/server/db';
 import { renderArticle } from '$lib/server/markdown';
 import { yearToDate } from '$lib/time';
-import type { EntitySnapshot, EntityTag, RelationRow, SourceRow, TimelineRow } from '$lib/types';
+import type { EntitySnapshot, EntityTag, RelationRow, SourceRow, Space, TimelineRow } from '$lib/types';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, url, locals }) => {
@@ -26,6 +26,9 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 	for (const r of [snapshot, timeline, relations, geoms]) if (r.error) error(500, r.error.message);
 
 	const rels = (relations.data ?? []) as RelationRow[];
+	const { data: spaces } = ['building', 'site'].includes(entity.kind)
+		? await sb.rpc('building_spaces', { p_building: entity.id, p_at: yearToDate(year) })
+		: { data: [] };
 	const tl = (timeline.data ?? []) as TimelineRow[];
 
 	// Media that depicts this entity, for the gallery
@@ -66,6 +69,7 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 		statusEvents: statusEvents.data ?? [],
 		gallery: gallery ?? [],
 		tags: (tags.data ?? []) as EntityTag[],
+		spaces: (spaces ?? []) as Space[],
 		sources: (sources ?? []) as SourceRow[]
 	};
 };

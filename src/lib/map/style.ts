@@ -11,17 +11,18 @@ export const FONT = ['Noto Sans Medium'];
  * time machine fades this layer out as you travel back so historical data and
  * overlays dominate.
  */
-export function baseStyle(): StyleSpecification {
+export function baseStyle(settings?: { basemap_url?: string; basemap_attribution?: string } | null): StyleSpecification {
 	return {
 		version: 8,
 		glyphs: GLYPHS,
 		sources: {
 			basemap: {
 				type: 'raster',
-				tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+				tiles: [settings?.basemap_url || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
 				tileSize: 256,
 				maxzoom: 19,
 				attribution:
+					settings?.basemap_attribution ||
 					'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors'
 			}
 		},
@@ -50,6 +51,9 @@ const isPoint: ExpressionSpecification = ['==', ['geometry-type'], 'Point'];
 const live: ExpressionSpecification = ['!=', ['get', 'ghost'], true];
 const ghost: ExpressionSpecification = ['==', ['get', 'ghost'], true];
 const selected: ExpressionSpecification = ['boolean', ['feature-state', 'selected'], false];
+const notSpace: ExpressionSpecification = ['!=', ['get', 'kind'], 'space'];
+const isSpace: ExpressionSpecification = ['==', ['get', 'kind'], 'space'];
+const isNature: ExpressionSpecification = ['in', ['get', 'kind'], ['literal', ['water', 'landform']]];
 const GHOST = '#8c8173';
 const HILITE = '#f2c14e';
 
@@ -86,18 +90,60 @@ export function snapshotLayers(source: string): LayerSpecification[] {
 			id: `${source}-area-fill`,
 			type: 'fill',
 			source,
-			filter: ['all', isPoly, live, ['!=', ['get', 'kind'], 'district']],
+			filter: ['all', isPoly, live, ['!=', ['get', 'kind'], 'district'], notSpace],
 			paint: {
 				'fill-color': ['get', 'color'],
-				'fill-opacity': ['case', selected, 0.65, 0.38]
+				'fill-opacity': ['case', selected, 0.65, isNature, 0.28, 0.38]
 			}
 		},
 		{
 			id: `${source}-area-line`,
 			type: 'line',
 			source,
-			filter: ['all', isPoly, live, ['!=', ['get', 'kind'], 'district']],
-			paint: { 'line-color': ['case', selected, HILITE, ['get', 'color']], 'line-width': ['case', selected, 2.5, 1] }
+			filter: ['all', isPoly, live, ['!=', ['get', 'kind'], 'district'], notSpace],
+			paint: {
+				'line-color': ['case', selected, HILITE, ['get', 'color']],
+				'line-width': ['case', selected, 2.5, 1],
+				'line-opacity': ['case', isNature, 0.5, 1]
+			}
+		},
+		// Spaces (storefronts, suites, halls) inside building footprints, once zoomed in
+		{
+			id: `${source}-space-fill`,
+			type: 'fill',
+			source,
+			minzoom: 16,
+			filter: ['all', isPoly, live, isSpace],
+			paint: {
+				'fill-color': ['case', ['get', 'vacant_space'], '#3a312a', '#d9a46b'],
+				'fill-opacity': ['case', selected, 0.85, 0.6]
+			}
+		},
+		{
+			id: `${source}-space-line`,
+			type: 'line',
+			source,
+			minzoom: 16,
+			filter: ['all', isPoly, isSpace],
+			paint: {
+				'line-color': ['case', selected, HILITE, '#f1dcc0'],
+				'line-width': ['case', selected, 2.5, 0.8],
+				'line-dasharray': [2, 1]
+			}
+		},
+		{
+			id: `${source}-space-label`,
+			type: 'symbol',
+			source,
+			minzoom: 17,
+			filter: ['all', isPoly, isSpace],
+			layout: {
+				'text-field': ['coalesce', ['get', 'tenant'], ['concat', ['get', 'name'], ' (vacant)']],
+				'text-font': FONT,
+				'text-size': 10.5,
+				'text-max-width': 7
+			},
+			paint: { 'text-color': '#fff6e6', 'text-halo-color': '#17130f', 'text-halo-width': 1.4 }
 		},
 		{
 			id: `${source}-ghost-line`,
@@ -176,7 +222,7 @@ export function snapshotLayers(source: string): LayerSpecification[] {
 			type: 'symbol',
 			source,
 			minzoom: 14.2,
-			filter: ['all', ['any', isPoint, isPoly], ['!=', ['get', 'kind'], 'district']],
+			filter: ['all', ['any', isPoint, isPoly], ['!=', ['get', 'kind'], 'district'], notSpace],
 			layout: {
 				'text-field': ['get', 'name'],
 				'text-font': FONT,
@@ -243,6 +289,7 @@ export function momentLayers(source: string): LayerSpecification[] {
 export const interactiveLayers = (source: string) =>
 	[
 		'district-fill',
+		'space-fill',
 		'area-fill',
 		'ghost-area',
 		'line',

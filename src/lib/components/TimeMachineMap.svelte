@@ -12,6 +12,8 @@
 	} from '$lib/map/style';
 	import { yearToDate } from '$lib/time';
 	import type { MapLayer, Picked } from '$lib/types';
+	import { page } from '$app/state';
+	import { mediaSrc } from '$lib/media';
 
 	let {
 		year,
@@ -21,6 +23,7 @@
 		ghosts = true,
 		moments = true,
 		tag = null,
+		basemap = 'fade',
 		overlay = null,
 		overlayOpacity = 0.75,
 		selected = null,
@@ -38,6 +41,8 @@
 		moments?: boolean;
 		/** only entities carrying this tag (or a sub-trait) in the current year */
 		tag?: string | null;
+		/** fade: modern map fades as you go back · always · hidden */
+		basemap?: 'fade' | 'always' | 'hidden';
 		overlay?: MapLayer | null;
 		overlayOpacity?: number;
 		selected?: string | null;
@@ -112,6 +117,12 @@
 	/** The present-day basemap fades as you travel back in time. */
 	function applyEra() {
 		if (!map || !ready) return;
+		map.setLayoutProperty('basemap', 'visibility', basemap === 'hidden' ? 'none' : 'visible');
+		if (basemap === 'always') {
+			map.setPaintProperty('basemap', 'raster-opacity', 0.6);
+			map.setPaintProperty('basemap', 'raster-saturation', -0.65);
+			return;
+		}
 		const t = Math.max(0, Math.min(1, (year - minYear) / Math.max(1, maxYear - minYear)));
 		const modern = Math.pow(t, 2.2);
 		map.setPaintProperty('basemap', 'raster-opacity', 0.14 + 0.5 * modern);
@@ -123,15 +134,23 @@
 		if (map.getLayer('overlay')) map.removeLayer('overlay');
 		if (map.getSource('overlay')) map.removeSource('overlay');
 		if (!overlay) return;
-		map.addSource('overlay', {
-			type: 'raster',
-			tiles: [overlay.tile_url],
-			tileSize: overlay.tile_size,
-			minzoom: overlay.min_zoom,
-			maxzoom: overlay.max_zoom,
-			attribution: overlay.attribution ?? undefined,
-			...(overlay.bounds ? { bounds: overlay.bounds } : {})
-		});
+		if (overlay.kind === 'image' && overlay.image_path && overlay.corners) {
+			map.addSource('overlay', {
+				type: 'image',
+				url: mediaSrc(overlay.image_path)!,
+				coordinates: overlay.corners as [[number, number], [number, number], [number, number], [number, number]]
+			});
+		} else if (overlay.tile_url) {
+			map.addSource('overlay', {
+				type: 'raster',
+				tiles: [overlay.tile_url],
+				tileSize: overlay.tile_size,
+				minzoom: overlay.min_zoom,
+				maxzoom: overlay.max_zoom,
+				attribution: overlay.attribution ?? undefined,
+				...(overlay.bounds ? { bounds: overlay.bounds } : {})
+			});
+		} else return;
 		map.addLayer(
 			{ id: 'overlay', type: 'raster', source: 'overlay', paint: { 'raster-opacity': overlayOpacity } },
 			'snapshot-district-fill'
@@ -146,7 +165,7 @@
 		const maplibregl = (await import('maplibre-gl')).default;
 		map = new maplibregl.Map({
 			container,
-			style: baseStyle(),
+			style: baseStyle(page.data.settings),
 			center,
 			zoom,
 			attributionControl: { compact: true },
@@ -192,7 +211,9 @@
 				const p = f.properties;
 				const sub = p.ghost
 					? 'gone by this year'
-					: (p.status_label ?? p.subtype ?? p.kind ?? '').toString().replace(/_/g, ' ');
+					: p.kind === 'space'
+						? p.tenant || 'vacant'
+						: (p.status_label ?? p.subtype ?? p.kind ?? '').toString().replace(/_/g, ' ');
 				const node = document.createElement('div');
 				const b = document.createElement('strong');
 				b.textContent = p.name;
@@ -223,7 +244,7 @@
 
 	// Refetch when the year or filters change (debounced so slider drags stay smooth)
 	$effect(() => {
-		void [year, ghosts, moments, tag, kinds.join(',')];
+		void [year, ghosts, moments, tag, basemap, kinds.join(',')];
 		if (!ready) return;
 		applyEra();
 		clearTimeout(debounce);

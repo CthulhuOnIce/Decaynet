@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { requireEditor } from '$lib/server/db';
+import { requireEditor, requirePermission } from '$lib/server/db';
 import { FormError, dbMessage, required, str } from '$lib/server/forms';
 import { parseFuzzyDate, precisionEndInclusive } from '$lib/time';
 import type { Actions, PageServerLoad } from './$types';
@@ -11,7 +11,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	create: async ({ request, locals }) => {
-		await requireEditor(locals);
+		await requirePermission(locals, 'manage_layers');
 		const fd = await request.formData();
 		try {
 			const url = required(fd, 'tile_url', 'Tile URL');

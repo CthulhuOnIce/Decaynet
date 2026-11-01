@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { page } from '$app/state';
 	import TemporalFields from '$lib/components/TemporalFields.svelte';
 	import EntityPicker from '$lib/components/EntityPicker.svelte';
 	import GeometryPicker from '$lib/components/GeometryPicker.svelte';
@@ -15,11 +16,12 @@
 	const applies = (list: string[] | null) => !list || list.includes(e.kind);
 
 	const attrKeys = $derived(data.vocab.attributeKeys.filter((a) => applies(a.applies_to)));
-	let relDirection = $state<'out' | 'in'>('out');
+	// ?rel=occupies&dir=in pre-fills the relation form ("add a tenant to this space")
+	let relDirection = $state<'out' | 'in'>(page.url.searchParams.get('dir') === 'in' ? 'in' : 'out');
 	const relTypes = $derived(
 		data.vocab.relationTypes.filter((r) => applies(relDirection === 'out' ? r.subject_kinds : r.object_kinds))
 	);
-	let relPredicate = $state('');
+	let relPredicate = $state(page.url.searchParams.get('rel') ?? '');
 	const relOtherKinds = $derived.by(() => {
 		const rt = data.vocab.relationTypes.find((r) => r.id === relPredicate);
 		return (relDirection === 'out' ? rt?.object_kinds : rt?.subject_kinds) ?? null;
@@ -27,9 +29,13 @@
 	const geomContext = $derived<GeoJSON.Feature[]>(
 		data.geoms.map((g) => ({ type: 'Feature', geometry: g.geojson, properties: {} }))
 	);
-	const defaultMode = $derived(
-		kind?.geometry_hint === 'line' ? 'line' : kind?.geometry_hint === 'polygon' && e.kind !== 'building' ? 'polygon' : 'point'
-	);
+	const defaultMode = $derived(kind?.geometry_hint === 'line' ? 'line' : kind?.geometry_hint === 'polygon' ? 'polygon' : 'point');
+	const isContainer = $derived(['building', 'site'].includes(e.kind));
+	const footprints = $derived(data.geoms.filter((g) => g.geojson?.type === 'Polygon' || g.geojson?.type === 'MultiPolygon'));
+	const spaceContext = $derived<GeoJSON.Feature[]>([
+		...footprints.map((g) => ({ type: 'Feature' as const, geometry: g.geojson, properties: {} })),
+		...data.spaces.filter((s) => s.geojson).map((s) => ({ type: 'Feature' as const, geometry: s.geojson!, properties: {} }))
+	]);
 	const tagById = $derived(Object.fromEntries(data.tags.map((t) => [t.id, t])));
 	const tagFacets = $derived(data.vocab.tagFacets.filter((f) => applies(f.applies_to)).map((f) => f.id));
 	const msg = (section: string) => (form?.section === section ? form : null);
@@ -88,7 +94,7 @@
 	<nav class="toc row">
 		<a href="#identity">Identity</a><a href="#names">Names</a><a href="#states">Condition</a>
 		<a href="#addresses">Addresses</a><a href="#attributes">Attributes</a><a href="#relations">Relations</a><a href="#tags">Tags</a>
-		<a href="#geometry">Location & shape</a>
+		<a href="#geometry">Location & shape</a>{#if isContainer}<a href="#spaces">Spaces</a>{/if}
 	</nav>
 
 	<!-- Identity -------------------------------------------------------- -->
@@ -374,7 +380,7 @@
 				<div>
 					<label for="g-role">Role</label>
 					<select id="g-role" name="role">
-						{#each ['shape', 'footprint', 'centerline', 'point', 'boundary', 'viewpoint'] as r (r)}<option>{r}</option>{/each}
+						{#each ['footprint', 'shape', 'centerline', 'point', 'boundary', 'viewpoint'] as r (r)}<option selected={r === (e.kind === 'building' || e.kind === 'space' ? 'footprint' : 'shape')}>{r}</option>{/each}
 					</select>
 				</div>
 			</div>
@@ -382,6 +388,50 @@
 			<button>Add shape</button>
 		</form>
 	</section>
+
+	{#if isContainer}
+		<section id="spaces" class="card">
+			<h2>Spaces inside this {e.kind}</h2>
+			<p class="hint">
+				Divide the footprint into storefronts, suites, floors or halls. Each space is its own page with its own dates;
+				tenants (businesses, congregations, residents) <em>occupy</em> a space over time, so a single building can show
+				a barber in 1950, a church in 1980 and nothing in 2000. Corners snap to the footprint.
+			</p>
+			{@render status('spaces')}
+			{#if data.spaces.length}
+				<table>
+					<thead><tr><th>Space</th><th>Floor</th><th>Dates</th><th>Tenant today</th><th></th></tr></thead>
+					<tbody>
+						{#each data.spaces as sp (sp.id)}
+							<tr>
+								<td><a href="/e/{sp.slug}">{sp.name}</a>{#if sp.unit_label} <span class="muted small">#{sp.unit_label}</span>{/if}</td>
+								<td class="mono">{sp.floor ?? '–'}</td>
+								<td class="date">{formatRange(sp.exists_from, sp.exists_from_precision, sp.exists_to, sp.exists_to_precision) || 'undated'}</td>
+								<td>{sp.tenants ?? ''}</td>
+								<td><a class="btn ghost" href="/e/{sp.slug}/facts?rel=occupies&dir=in#relations">+ Tenant</a></td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			{/if}
+			{#if footprints.length}
+				<form method="post" action="?/addSpace" use:enhance>
+					<input type="hidden" name="section" value="spaces" />
+					<GeometryPicker mode="polygon" context={spaceContext} height={340} />
+					<div class="fields" style="margin-top: 8px">
+						<div style="grid-column: span 2"><label for="sp-name">Space name</label><input id="sp-name" name="space_name" required placeholder="North storefront" /></div>
+						<div><label for="sp-floor">Floor</label><input id="sp-floor" name="floor" type="number" step="1" value="1" /></div>
+						<div><label for="sp-unit">Unit / suite</label><input id="sp-unit" name="unit_label" placeholder="101" /></div>
+						<div><label for="sp-from">From</label><input id="sp-from" name="valid_from" placeholder="same as building" /></div>
+						<div><label for="sp-to">Until</label><input id="sp-to" name="valid_to" placeholder="blank = still there" /></div>
+					</div>
+					<button>Add space</button>
+				</form>
+			{:else}
+				<p class="notice small">Trace the building's footprint as a polygon in <a href="#geometry">Location & shape</a> first (or in the <a href="/workbench">workbench</a> over a Sanborn sheet).</p>
+			{/if}
+		</section>
+	{/if}
 
 	<section class="card danger-zone">
 		<h2>Danger zone</h2>

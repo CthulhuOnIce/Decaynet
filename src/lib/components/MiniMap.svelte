@@ -1,6 +1,7 @@
 <script lang="ts">
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import { onDestroy, onMount } from 'svelte';
+	import { page } from '$app/state';
 	import type { ExpressionSpecification, GeoJSONSource, Map as MLMap } from 'maplibre-gl';
 	import { GARY_CENTER, baseStyle, boundsOf } from '$lib/map/style';
 
@@ -24,7 +25,7 @@
 		const maplibregl = (await import('maplibre-gl')).default;
 		map = new maplibregl.Map({
 			container: el,
-			style: baseStyle(),
+			style: baseStyle(page.data.settings),
 			center: GARY_CENTER,
 			zoom: 12,
 			attributionControl: { compact: true },

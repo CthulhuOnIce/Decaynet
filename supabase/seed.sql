@@ -20,6 +20,13 @@ language sql immutable as $$
   select extensions.st_setsrid(extensions.st_makeline(extensions.st_makepoint(lon1, lat1),
                                                       extensions.st_makepoint(lon2, lat2)), 4326)
 $$;
+-- Rectangle footprint centred on a point, w x h metres
+create function pg_temp.fp(lon float8, lat float8, w_m float8, h_m float8) returns extensions.geometry
+language sql immutable as $$
+  select extensions.st_makeenvelope(
+    lon - (w_m / 2) / (111320 * cos(radians(lat))), lat - (h_m / 2) / 110574,
+    lon + (w_m / 2) / (111320 * cos(radians(lat))), lat + (h_m / 2) / 110574, 4326)
+$$;
 create function pg_temp.box(w float8, s float8, e float8, n float8) returns extensions.geometry
 language sql immutable as $$ select extensions.st_makeenvelope(w, s, e, n, 4326) $$;
 
@@ -67,6 +74,9 @@ insert into public.entities (kind, slug, name, summary, exists_from, exists_from
   ('site', 'gary-bathing-beach-aquatorium', 'Gary Bathing Beach Aquatorium', 'Lakefront bathhouse in Marquette Park, later restored with a memorial to Octave Chanute.', '1921-01-01', 'year', null, 'year', 'probable'),
   ('site', 'gary-works', 'U.S. Steel Gary Works', 'The lakefront steel mill the city was built to serve.', '1908-01-01', 'year', null, 'year', 'probable'),
   -- organizations
+  -- water
+  ('water', 'lake-michigan', 'Lake Michigan', 'The lake. Its Gary shoreline moved north as mill land was filled in.', null, 'year', null, 'year', 'confirmed'),
+  ('water', 'grand-calumet-river', 'Grand Calumet River', 'River between the mill and the city; its channel was altered for industry.', null, 'year', null, 'year', 'probable'),
   ('organization', 'us-steel', 'United States Steel Corporation', 'Steel company that founded Gary as a company town for Gary Works.', '1901-01-01', 'year', null, 'year', 'confirmed'),
   ('organization', 'gary-land-company', 'Gary Land Company', 'U.S. Steel subsidiary that platted and sold the original town.', '1906-01-01', 'year', null, 'year', 'probable'),
   ('organization', 'city-of-gary', 'City of Gary', 'Municipal government. Incorporated as a town in 1906 and as a city in 1909.', '1906-01-01', 'year', null, 'year', 'probable'),
@@ -115,17 +125,55 @@ insert into public.entity_geometries (entity_id, role, geom, valid_from, valid_t
   (pg_temp.e('7th-avenue'),      'centerline', pg_temp.ln(-87.3520, 41.59843, -87.3150, 41.59843), '1906-01-01', null, 'approximate', null),
   (pg_temp.e('washington-street'),'centerline', pg_temp.ln(-87.33843, 41.6060, -87.33843, 41.5800), '1906-01-01', null, 'approximate', null),
   (pg_temp.e('jackson-street'),  'centerline', pg_temp.ln(-87.3445, 41.6000, -87.3445, 41.5650), null, null, 'approximate', null),
-  (pg_temp.e('gary-land-company-building'), 'point', pg_temp.pt(-87.3369, 41.6046), null, null, 'approximate', 'Current location in Gateway Park. The building was relocated several times; earlier positions are not yet mapped.'),
-  (pg_temp.e('gary-union-station'),   'point', pg_temp.pt(-87.3380, 41.6062), '1910-01-01', null, 'approximate', null),
-  (pg_temp.e('emerson-school'),       'point', pg_temp.pt(-87.3284, 41.5987), '1909-01-01', null, 'approximate', null),
-  (pg_temp.e('palace-theater'),       'point', pg_temp.pt(-87.33745, 41.5976), '1925-01-01', null, 'approximate', null),
-  (pg_temp.e('city-methodist-church'),'point', pg_temp.pt(-87.3381, 41.6007), '1926-01-01', null, 'approximate', null),
-  (pg_temp.e('hotel-gary'),           'point', pg_temp.pt(-87.33745, 41.60055), '1927-01-01', null, 'approximate', null),
-  (pg_temp.e('gary-city-hall'),       'point', pg_temp.pt(-87.33745, 41.6030), '1928-01-01', null, 'approximate', null),
-  (pg_temp.e('genesis-convention-center'), 'point', pg_temp.pt(-87.3404, 41.6028), '1981-01-01', null, 'approximate', null),
-  (pg_temp.e('jackson-family-home'),  'point', pg_temp.pt(-87.3447, 41.5745), null, null, 'approximate', null),
-  (pg_temp.e('gary-bathing-beach-aquatorium'), 'point', pg_temp.pt(-87.2585, 41.6195), '1921-01-01', null, 'approximate', null),
+  (pg_temp.e('gary-land-company-building'), 'footprint', pg_temp.fp(-87.3369, 41.6046, 8, 6), null, null, 'approximate', 'Current location in Gateway Park. The building was relocated several times; earlier positions are not yet mapped.'),
+  (pg_temp.e('gary-union-station'),   'footprint', pg_temp.fp(-87.3380, 41.6062, 60, 26), '1910-01-01', null, 'approximate', null),
+  (pg_temp.e('emerson-school'),       'footprint', pg_temp.fp(-87.3284, 41.5987, 85, 55), '1909-01-01', null, 'approximate', null),
+  (pg_temp.e('palace-theater'),       'footprint', pg_temp.fp(-87.33745, 41.5976, 30, 55), '1925-01-01', null, 'approximate', null),
+  (pg_temp.e('city-methodist-church'),'footprint', pg_temp.fp(-87.3381, 41.6007, 45, 60), '1926-01-01', null, 'approximate', null),
+  (pg_temp.e('hotel-gary'),           'footprint', pg_temp.fp(-87.33745, 41.60055, 40, 42), '1927-01-01', null, 'approximate', null),
+  (pg_temp.e('gary-city-hall'),       'footprint', pg_temp.fp(-87.33745, 41.6030, 60, 40), '1928-01-01', null, 'approximate', null),
+  (pg_temp.e('genesis-convention-center'), 'footprint', pg_temp.fp(-87.3404, 41.6028, 110, 85), '1981-01-01', null, 'approximate', null),
+  (pg_temp.e('jackson-family-home'),  'footprint', pg_temp.fp(-87.3447, 41.5745, 8, 11), null, null, 'approximate', null),
+  (pg_temp.e('gary-bathing-beach-aquatorium'), 'footprint', pg_temp.fp(-87.2585, 41.6195, 60, 22), '1921-01-01', null, 'approximate', null),
   (pg_temp.e('gary-works'),           'shape', pg_temp.box(-87.3800, 41.6090, -87.3000, 41.6250), '1908-01-01', null, 'approximate', 'Very rough block for the mill complex.');
+
+-- Water: present-day approximations. Add earlier shorelines/channels as separate dated geometries.
+insert into public.entity_geometries (entity_id, role, geom, valid_from, confidence, note) values
+  (pg_temp.e('lake-michigan'), 'shape',
+   extensions.st_geomfromtext('POLYGON((-87.45 41.640,-87.38 41.632,-87.30 41.628,-87.26 41.6215,-87.20 41.625,-87.20 41.700,-87.45 41.700,-87.45 41.640))', 4326),
+   null, 'approximate', 'Rough present-day shoreline. Much of Gary Works sits on land filled into the lake after 1906; map the earlier shoreline as a geometry valid before then.'),
+  (pg_temp.e('grand-calumet-river'), 'centerline',
+   extensions.st_geomfromtext('LINESTRING(-87.40 41.6105,-87.34 41.6085,-87.29 41.6075)', 4326),
+   null, 'speculative', 'Placeholder course. Trace the real channel (and its pre-1906 course) from historical maps.');
+
+-- Spaces inside buildings: building > space > tenant
+insert into public.entities (kind, slug, name, summary, exists_from, exists_from_precision, lifespan_confidence) values
+  ('space', 'city-methodist-church-sanctuary', 'Sanctuary', 'Main worship space of City Methodist Church.', '1926-01-01', 'year', 'probable'),
+  ('space', 'city-methodist-church-community-wing', 'Education & community wing', 'Classrooms, offices and an auditorium for civic use.', '1926-01-01', 'year', 'probable'),
+  ('space', 'palace-theater-auditorium', 'Auditorium', null, '1925-01-01', 'year', 'probable'),
+  ('space', 'palace-theater-lobby', 'Lobby', 'Street-front lobby facing Broadway.', '1925-01-01', 'year', 'approximate');
+
+insert into public.entity_geometries (entity_id, role, geom, valid_from, confidence, note) values
+  (pg_temp.e('city-methodist-church-sanctuary'),      'footprint', pg_temp.fp(-87.3381, 41.60084, 43, 28), '1926-01-01', 'speculative', 'Schematic split of the footprint; trace from a Sanborn sheet.'),
+  (pg_temp.e('city-methodist-church-community-wing'), 'footprint', pg_temp.fp(-87.3381, 41.60054, 43, 28), '1926-01-01', 'speculative', 'Schematic split of the footprint; trace from a Sanborn sheet.'),
+  (pg_temp.e('palace-theater-auditorium'),            'footprint', pg_temp.fp(-87.33752, 41.5976, 18, 52), '1925-01-01', 'speculative', 'Schematic.'),
+  (pg_temp.e('palace-theater-lobby'),                 'footprint', pg_temp.fp(-87.33733, 41.5976, 7, 20), '1925-01-01', 'speculative', 'Schematic.');
+
+insert into public.relations (subject_id, predicate, object_id, confidence) values
+  (pg_temp.e('city-methodist-church-sanctuary'), 'part_of', pg_temp.e('city-methodist-church'), 'probable'),
+  (pg_temp.e('city-methodist-church-community-wing'), 'part_of', pg_temp.e('city-methodist-church'), 'probable'),
+  (pg_temp.e('palace-theater-auditorium'), 'part_of', pg_temp.e('palace-theater'), 'probable'),
+  (pg_temp.e('palace-theater-lobby'), 'part_of', pg_temp.e('palace-theater'), 'probable');
+
+insert into public.relations (subject_id, predicate, object_id, valid_from, valid_to, confidence) values
+  (pg_temp.e('city-methodist-congregation'), 'occupies', pg_temp.e('city-methodist-church-sanctuary'), '1926-01-01', '1975-01-01', 'probable'),
+  (pg_temp.e('city-methodist-congregation'), 'occupies', pg_temp.e('city-methodist-church-community-wing'), '1926-01-01', '1975-01-01', 'probable');
+
+insert into public.entity_attributes (entity_id, key, value) values
+  (pg_temp.e('city-methodist-church-sanctuary'), 'floor', '1'),
+  (pg_temp.e('city-methodist-church-community-wing'), 'floor', '1'),
+  (pg_temp.e('palace-theater-auditorium'), 'floor', '1'),
+  (pg_temp.e('palace-theater-lobby'), 'floor', '1');
 
 -- Event / media point (Chanute had no structure to attach to)
 insert into public.entity_geometries (entity_id, role, geom, valid_from, confidence, note) values

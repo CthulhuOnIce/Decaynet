@@ -1,7 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { entityBySlug, loadTags, requireEditor } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, required, slugify, str, temporalFromForm } from '$lib/server/forms';
-import type { RelationRow } from '$lib/types';
+import type { RelationRow, Space } from '$lib/types';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
 
 /** Component tables that share the temporal header and can be edited generically. */
@@ -16,7 +16,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const entity = await entityBySlug(sb, params.slug);
 	const id = entity.id;
 
-	const [names, states, attributes, addresses, relations, geoms, sources, event, media, entityTags, tags] = await Promise.all([
+	const [names, states, attributes, addresses, relations, geoms, sources, event, media, entityTags, tags, spaces] = await Promise.all([
 		sb.from('entity_names').select('*').eq('entity_id', id).order('valid_from', { nullsFirst: true }),
 		sb.from('entity_states').select('*, lifecycle_statuses(label, color)').eq('entity_id', id).order('valid_from', { nullsFirst: true }),
 		sb.from('entity_attributes').select('*, attribute_keys(label, unit)').eq('entity_id', id).order('key'),
@@ -27,7 +27,10 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		sb.from('event_details').select('*').eq('entity_id', id).maybeSingle(),
 		sb.from('media_items').select('*').eq('entity_id', id).maybeSingle(),
 		sb.from('entity_tags').select('*').eq('entity_id', id).order('valid_from', { nullsFirst: true }),
-		loadTags(sb)
+		loadTags(sb),
+		['building', 'site'].includes(entity.kind)
+			? sb.rpc('building_spaces', { p_building: id, p_at: null })
+			: Promise.resolve({ data: [] })
 	]);
 
 	return {
@@ -42,6 +45,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		event: event.data,
 		media: media.data,
 		entityTags: entityTags.data ?? [],
+		spaces: (spaces.data ?? []) as Space[],
 		tags
 	};
 };
@@ -230,6 +234,34 @@ export const actions: Actions = {
 		}
 		if (!tagId) throw new FormError('Choose a tag, or name a new one.');
 		check(await sb.from('entity_tags').insert({ entity_id: entityId, tag_id: tagId, ...temporalFromForm(fd) }));
+	}),
+
+	/** Draw a space (storefront, suite, hall) inside this building's footprint. */
+	addSpace: action(async ({ fd, entityId, event }) => {
+		const geo = str(fd, 'geojson_text') ?? str(fd, 'geojson');
+		if (!geo) throw new FormError('Draw the space as a polygon inside the footprint.');
+		let geom: { type?: string; geometry?: unknown };
+		try {
+			geom = JSON.parse(geo);
+		} catch {
+			throw new FormError('That GeoJSON could not be parsed.');
+		}
+		if (geom.type === 'Feature') geom = geom.geometry as typeof geom;
+		const life = fuzzyPair(fd, 'valid_from', 'valid_to');
+		const floor = str(fd, 'floor');
+		check(
+			await event.locals.supabase.rpc('add_space', {
+				p_building: entityId,
+				p_name: required(fd, 'space_name', 'Space name'),
+				p_geojson: geom,
+				p_floor: floor == null ? null : Number(floor),
+				p_unit_label: str(fd, 'unit_label'),
+				p_from: life.from,
+				p_from_precision: life.fromPrecision,
+				p_to: life.to,
+				p_to_precision: life.toPrecision
+			})
+		);
 	}),
 
 	/** Every component shares the temporal header, so one action edits them all. */

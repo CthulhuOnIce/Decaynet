@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Entity, TagRow, Vocabulary } from '$lib/types';
+import type { Entity, Permission, SiteSettings, TagRow, Vocabulary } from '$lib/types';
 
 export async function entityBySlug(supabase: SupabaseClient, slug: string): Promise<Entity> {
 	const { data, error: err } = await supabase.from('entities').select('*').eq('slug', slug).maybeSingle();
@@ -43,6 +43,20 @@ export async function requireEditor(locals: App.Locals) {
 	const { user } = await locals.safeGetSession();
 	if (!user) error(401, 'Sign in to contribute.');
 	return user;
+}
+
+/** Server-side gate; RLS enforces the same rule in the database. */
+export async function requirePermission(locals: App.Locals, permission: Permission) {
+	const user = await requireEditor(locals);
+	const { data } = await locals.supabase.rpc('has_permission', { p_permission: permission });
+	if (!data) error(403, `You don't have the “${permission.replace('_', ' ')}” permission.`);
+	return user;
+}
+
+export async function loadSettings(supabase: SupabaseClient): Promise<SiteSettings> {
+	const { data, error: err } = await supabase.from('site_settings').select('*').single();
+	if (err) error(500, `Could not load site settings: ${err.message}`);
+	return data as SiteSettings;
 }
 
 /** Public URL for an object in the media bucket. */

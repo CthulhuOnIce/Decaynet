@@ -19,6 +19,8 @@ export const actions: Actions = {
 	},
 	signup: async ({ request, locals, url }) => {
 		const fd = await request.formData();
+		const { data: settings } = await locals.supabase.from('site_settings').select('allow_signups').single();
+		if (settings && !settings.allow_signups) return fail(403, { mode: 'signup', email: '', error: 'New sign-ups are closed.' });
 		const email = String(fd.get('email') ?? '').trim();
 		const displayName = String(fd.get('display_name') ?? '').trim();
 		const { data, error } = await locals.supabase.auth.signUp({

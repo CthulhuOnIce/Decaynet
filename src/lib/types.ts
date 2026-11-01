@@ -14,7 +14,9 @@ export interface Profile {
 	id: string;
 	display_name: string;
 	bio: string | null;
-	role: 'reader' | 'contributor' | 'moderator' | 'admin';
+	role: string;
+	suspended?: boolean;
+	website?: string | null;
 }
 
 export interface EntityKind {
@@ -126,7 +128,12 @@ export interface SourceRow {
 export interface MapLayer {
 	id: string;
 	title: string;
-	tile_url: string;
+	kind: 'xyz' | 'image';
+	image_path: string | null;
+	/** [top-left, top-right, bottom-right, bottom-left] as [lon, lat] */
+	corners: [number, number][] | null;
+	notes: string | null;
+	tile_url: string | null;
 	tile_size: number;
 	attribution: string | null;
 	depicts_from: string | null;
@@ -312,4 +319,57 @@ export interface EntityTag {
 	valid_to: string | null;
 	valid_to_precision: Precision;
 	fact_id: string | null;
+}
+
+export type Permission =
+	| 'edit_content'
+	| 'upload_media'
+	| 'create_tags'
+	| 'review_tips'
+	| 'manage_layers'
+	| 'bulk_edit'
+	| 'moderate'
+	| 'manage_users'
+	| 'manage_settings';
+
+export interface SiteSettings {
+	site_name: string;
+	tagline: string;
+	region_name: string;
+	about: string;
+	map_center_lon: number;
+	map_center_lat: number;
+	map_zoom: number;
+	default_year: number;
+	min_year: number;
+	basemap_url: string;
+	basemap_attribution: string;
+	basemap_mode: 'fade' | 'always' | 'hidden';
+	allow_signups: boolean;
+	default_role: string;
+	tips_enabled: boolean;
+	tips_intro: string;
+	tips_allow_images: boolean;
+	tips_max_images: number;
+	tips_max_image_mb: number;
+	tips_ip_mode: 'off' | 'hash' | 'full';
+	tips_captcha_provider: 'none' | 'turnstile' | 'hcaptcha';
+	tips_captcha_site_key: string | null;
+	tips_rate_limit_per_hour: number;
+	updated_at: string;
+}
+
+export interface Space {
+	id: string;
+	slug: string;
+	name: string;
+	floor: number | null;
+	unit_label: string | null;
+	geojson: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
+	tenants: string | null;
+	present: boolean;
+	exists_from: string | null;
+	exists_from_precision: Precision;
+	exists_to: string | null;
+	exists_to_precision: Precision;
 }

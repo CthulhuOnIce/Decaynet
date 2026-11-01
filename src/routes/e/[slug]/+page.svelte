@@ -42,7 +42,12 @@
 		return vals.length ? vals.map(([k, v]) => `${k}: ${v}`).join(', ') : '';
 	};
 	const mainMedia = $derived(data.media ? mediaSrc(data.media.storage_path, data.media.external_url) : null);
-	const canEdit = $derived(!!data.user);
+	const canEdit = $derived(!!data.user && (data.perms ?? []).includes('edit_content'));
+	// Footprint (grey) + spaces (highlighted) for the floor-plan minimap
+	const floorPlan = $derived<GeoJSON.Feature[]>([
+		...data.geomFeatures.filter((f) => f.geometry?.type !== 'Point').map((f) => ({ ...f, properties: { current: false } })),
+		...data.spaces.filter((s) => s.geojson && s.present).map((s) => ({ type: 'Feature' as const, geometry: s.geojson!, properties: { current: true } }))
+	]);
 </script>
 
 <svelte:head><title>{e.name} · Decaynet</title></svelte:head>
@@ -121,6 +126,36 @@
 					This article is a stub. The structured facts below are all we know so far.
 					{#if canEdit}<a href="/e/{e.slug}/edit">Write the first draft →</a>{:else}<a href="/login">Sign in to write it →</a>{/if}
 				</div>
+			{/if}
+
+			{#if data.spaces.length || ['building', 'site'].includes(e.kind)}
+				<h2 id="spaces">Spaces & tenants in {data.year}</h2>
+				{#if data.spaces.length}
+					<div class="spaces">
+						<MiniMap features={floorPlan} height={240} />
+						<table>
+							<thead><tr><th>Space</th><th>Floor</th><th>Tenant in {data.year}</th></tr></thead>
+							<tbody>
+								{#each data.spaces as sp (sp.id)}
+									<tr class:gone={!sp.present}>
+										<td><a href="/e/{sp.slug}?y={data.year}">{sp.name}</a>{#if sp.unit_label} <span class="muted small">#{sp.unit_label}</span>{/if}</td>
+										<td class="mono">{sp.floor ?? '–'}</td>
+										<td>
+											{#if !sp.present}<span class="muted">not yet / no longer</span>
+											{:else if sp.tenants}{sp.tenants}
+											{:else}<span class="muted">vacant / unknown</span>{/if}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{:else}
+					<p class="muted small">
+						No spaces mapped inside this {e.kind} yet.
+						{#if canEdit}<a href="/e/{e.slug}/facts#spaces">Divide the footprint into storefronts, suites or halls →</a>{/if}
+					</p>
+				{/if}
 			{/if}
 
 			<h2 id="timeline">Timeline</h2>
@@ -292,6 +327,20 @@
 		max-height: 70vh;
 		border-radius: var(--radius);
 		border: 1px solid var(--line);
+	}
+	.spaces {
+		display: grid;
+		grid-template-columns: 260px 1fr;
+		gap: 16px;
+		align-items: start;
+	}
+	@media (max-width: 700px) {
+		.spaces {
+			grid-template-columns: 1fr;
+		}
+	}
+	tr.gone {
+		opacity: 0.5;
 	}
 	.groups {
 		display: grid;

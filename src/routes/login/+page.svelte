@@ -15,7 +15,9 @@
 	<div class="row tabs">
 		<button class:primary={mode === 'signin'} onclick={() => (mode = 'signin')}>Password</button>
 		<button class:primary={mode === 'magic'} onclick={() => (mode = 'magic')}>Email link</button>
-		<button class:primary={mode === 'signup'} onclick={() => (mode = 'signup')}>Create account</button>
+		{#if data.settings.allow_signups}
+			<button class:primary={mode === 'signup'} onclick={() => (mode = 'signup')}>Create account</button>
+		{/if}
 	</div>
 
 	{#if form?.error}<p class="notice error">{form.error}</p>{/if}

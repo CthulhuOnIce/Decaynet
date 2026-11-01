@@ -1,6 +1,7 @@
 <script lang="ts">
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import { onDestroy, onMount } from 'svelte';
+	import { page } from '$app/state';
 	import type { GeoJSONSource, Map as MLMap } from 'maplibre-gl';
 	import { GARY_CENTER, baseStyle, boundsOf } from '$lib/map/style';
 
@@ -10,14 +11,27 @@
 		name = 'geojson',
 		mode: initialMode = 'point',
 		context = [],
-		height = 360
+		height = 360,
+		snap = true
 	}: {
 		name?: string;
 		mode?: Mode;
 		/** existing shapes drawn for reference */
 		context?: GeoJSON.Feature[];
 		height?: number;
+		/** snap clicks to nearby vertices of the context shapes (shared walls, street corners) */
+		snap?: boolean;
 	} = $props();
+
+	function contextVertices(): [number, number][] {
+		const out: [number, number][] = [];
+		const walk = (c: unknown): void => {
+			if (Array.isArray(c) && typeof c[0] === 'number') out.push([c[0] as number, c[1] as number]);
+			else if (Array.isArray(c)) c.forEach(walk);
+		};
+		for (const f of context) if (f.geometry && 'coordinates' in f.geometry) walk(f.geometry.coordinates);
+		return out;
+	}
 
 	let mode = $state<Mode>('point');
 	$effect.pre(() => {
@@ -44,7 +58,7 @@
 
 	onMount(async () => {
 		const maplibregl = (await import('maplibre-gl')).default;
-		map = new maplibregl.Map({ container: el, style: baseStyle(), center: GARY_CENTER, zoom: 14, attributionControl: { compact: true } });
+		map = new maplibregl.Map({ container: el, style: baseStyle(page.data.settings), center: GARY_CENTER, zoom: 14, attributionControl: { compact: true } });
 		map.doubleClickZoom.disable();
 		map.getCanvas().style.cursor = 'crosshair';
 		map.on('load', () => {
@@ -61,7 +75,18 @@
 			const b = context.length ? boundsOf({ type: 'FeatureCollection', features: context }) : null;
 			if (b) m.fitBounds(b, { padding: 60, maxZoom: 17, duration: 0 });
 			m.on('click', (e) => {
-				const c: [number, number] = [+e.lngLat.lng.toFixed(7), +e.lngLat.lat.toFixed(7)];
+				let c: [number, number] = [+e.lngLat.lng.toFixed(7), +e.lngLat.lat.toFixed(7)];
+				if (snap) {
+					let best = 10; // px
+					for (const v of [...contextVertices(), ...pts]) {
+						const p = m.project(v);
+						const d = Math.hypot(p.x - e.point.x, p.y - e.point.y);
+						if (d < best) {
+							best = d;
+							c = v;
+						}
+					}
+				}
 				pts = mode === 'point' ? [c] : [...pts, c];
 			});
 			ready = true;
@@ -83,6 +108,7 @@
 		{/each}
 		<span class="muted small">
 			{mode === 'point' ? 'Click to place.' : `Click to add vertices (${pts.length}).`}
+			{snap && context.length ? ' Snaps to nearby corners.' : ''}
 		</span>
 		<span class="spacer"></span>
 		<button type="button" class="ghost" onclick={() => (pts = pts.slice(0, -1))} disabled={!pts.length}>Undo</button>

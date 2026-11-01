@@ -60,6 +60,30 @@ Topic         › Urban decay  › Abandonment
 * Contributors can create new sub-traits inline while tagging; moderators curate the tree.
 * The map has an **Only things tagged…** filter ("show every movie theater in 1955").
 
+### Buildings, spaces and tenants
+
+Buildings have real polygon **footprints**. Inside a footprint you draw **spaces** (storefronts, suites, halls, floors) as their own polygons. `add_space()` rejects any space that extends more than 2 m outside the footprint. Tenants (businesses, congregations, residents) **occupy a space** over time:
+
+```
+Hotel Gary (building, footprint polygon)
+ └─ Broadway storefront (space, floor 1, unit 101)
+      ├─ occupied by Barbershop A   1930–1940
+      └─ occupied by Church B       1980–1995
+```
+
+Zoom past ~16 on the map and spaces appear inside their buildings, labelled with whoever occupied them in the chosen year (or "vacant"). A tag filter such as *Food & drink* also lights up the spaces its tenants occupied.
+
+### When the whole layout was different
+
+The modern street grid is a poor guide to 1906 or 1950: the shoreline moved as the mill was filled into the lake, the Grand Calumet River was re-channelled, the Toll Road and urban renewal erased blocks, and streets were vacated and re-platted. The model handles this as follows:
+
+* **Everything has dated geometry.** Streets, parcels, shorelines (`water`) and terrain (`landform`) can each have several shapes over time, so the 1910 shoreline and the 1960 shoreline are both stored.
+* **Lost things become ghosts** (dashed) after their lifespan ends, so you can still see the old grid.
+* **Basemap modes** (*fade with time*, *always*, *hidden*) let you drop today's map entirely when it misleads.
+* **Workbench area tool:** draw around a cleared block or a highway corridor, pick the year, preview what's inside, and end it all at once (with a citation). Nothing is deleted; it just becomes history.
+* **Overlays** (Sanborn sheets, plats, aerials) supply the historical layout to trace from.
+* Planned: named *layout epochs* and a street-segment model (see [ROADMAP.md](ROADMAP.md)).
+
 ### Systems (RPCs)
 
 | Function | Returns |
@@ -73,6 +97,9 @@ Topic         › Urban decay  › Abandonment
 | `search_entities(q)` | Fuzzy (trigram) search across current **and historic** names. "Genesis Towers" finds Hotel Gary. |
 | `tags_at(id, at)` / `entities_tagged(tag, at)` | Tag lookups including implied ancestors / descendant traits. |
 | `save_article(...)` / `set_article_status(...)` | Atomic revision + status-transition writes. |
+| `building_spaces(id, at)` / `tenants_at(space, at)` / `add_space(...)` | Spaces inside a building, their tenants on a date, validated creation. |
+| `entities_in_area(geojson, at)` / `retire_area(...)` / `import_features(...)` | Workbench bulk tools. |
+| `has_permission(p)` / `my_permissions()` | The single permission check behind every RLS policy. |
 
 Views: `facts` (all components behind one header), `entity_health` (derived maintenance issues), `entity_cards`, `tag_index`, `tag_tree`, `recent_activity`.
 
@@ -91,14 +118,45 @@ Views: `facts` (all components behind one header), `entity_health` (derived main
 | `/browse`, `/search`, `/timeline`, `/tags`, `/tags/[slug]` | Discovery. |
 | `/changes` | Recent changes across prose and facts. |
 | `/maintenance` | Article-status breakdown and auto-detected work queues: not mapped, unsourced, no photos, thin article, orphan… |
-| `/sources`, `/layers` | Citations; georeferenced map overlays (Sanborn sheets, aerials) as XYZ tiles with the period they depict. |
+| `/sources`, `/layers` | Citations; historical map overlays (XYZ tiles or pinned scans) with the period they depict. |
+| `/workbench` | **Editor tooling.** Georeference a scanned Sanborn sheet by dragging its corners (plus rotate/scale nudges); compare it with the data by blend, swipe or flicker (hold <kbd>F</kbd>); trace footprints and streets over it with vertex snapping; retire whole areas; import GeoJSON from GIS. |
+| `/tip` | Public, anonymous tip form (optional photos and map pin). |
+| `/tips` | Tip review queue: triage, notes, link or create pages, promote photos to the media library. |
+| `/account`, `/u/[id]` | Profile, email and password; public contribution history. |
+| `/admin/settings`, `/admin/users`, `/admin/roles` | Site settings, user roles and suspension, and the roles × permissions matrix. |
 
-### Permissions (RLS)
+### Accounts & permissions
 
-* Everyone can read.
-* Signed-in **contributors** can add and edit facts, pages, tags and media.
-* **Moderators** can delete anything, lock articles, mark articles *featured*, edit the vocabulary and manage overlays. Contributors can delete only rows they created.
-* **Admins** manage roles. The first account on a fresh install becomes admin.
+Permissions are rows, roles are rows, and admins edit the matrix at **/admin/roles**. Every RLS policy goes through `has_permission()`:
+
+| Permission | Contributor | Editor | Moderator | Admin |
+|---|:-:|:-:|:-:|:-:|
+| Edit content (pages, facts, articles, tag assignments) | ✓ | ✓ | ✓ | ✓ |
+| Upload media | ✓ | ✓ | ✓ | ✓ |
+| Create tags | ✓ | ✓ | ✓ | ✓ |
+| Review tips | | ✓ | ✓ | ✓ |
+| Manage overlays | | ✓ | ✓ | ✓ |
+| Bulk map tools (area change, import) | | ✓ | ✓ | ✓ |
+| Moderate (delete others' content, lock/feature) | | | ✓ | ✓ |
+| Manage users | | | | ✓ |
+| Manage site settings | | | | ✓ |
+
+Everyone can read, and *Reader* is a signed-in read-only role. You can add custom roles. The first account becomes admin, and the last admin can't be demoted or suspended. Suspended users keep read access only.
+
+### Site settings
+
+Everything you'd otherwise put in a config file lives in the `site_settings` row and is edited at **/admin/settings**: the site name and tagline, region, the map's default centre, zoom and year, the earliest year on the slider, the basemap tile URL, attribution and fade behaviour, open or closed sign-ups and the default role, and all the tip options. Secrets (captcha secret key, IP-hash salt) go in a table only the server can read; the UI shows whether they're set but never the values.
+
+### Anonymous tips
+
+Guests can send a tip at **/tip** without an account. It can include a subject, the page it's about, a rough date, contact details, a map pin and photos. The settings control:
+
+* **Images:** on or off, a maximum count and a maximum size. Large photos are downscaled in the browser first. Files go to a *private* `tips` bucket that only reviewers can read, through signed URLs.
+* **Source IP:** *off*, *salted hash* (default: enough for rate limiting, but nobody can read the IP), or *full* (stored and shown to reviewers).
+* **Captcha:** none, Cloudflare Turnstile or hCaptcha, verified on the server.
+* **Rate limit:** tips per IP per hour. There is also a honeypot field against bots.
+
+Tips are written only by the app server, using the service-role key, after those checks, so nobody can bypass them through the API. Reviewers with *Review tips* triage them at **/tips** (new → reviewing → accepted / rejected / spam). They can link a tip to a page or create one from it (the pin becomes a speculative location), and promote its photos into the media library as *depicts* the page.
 
 ---
 
@@ -109,7 +167,7 @@ Requires Node 20+ and Docker (for the Supabase local stack).
 ```bash
 npm install
 npx supabase start            # Postgres+PostGIS, Auth, Storage; applies migrations + seed
-cp .env.example .env          # paste the API URL and anon key printed by `supabase start`
+cp .env.example .env          # paste the API URL, anon key and service-role key from `supabase start`
 npm run dev                   # http://localhost:5173
 ```
 
@@ -121,7 +179,7 @@ Create an account at `/login`. Email confirmation is off locally, and the first 
 
 1. Create a Supabase project and run `npx supabase link` then `npx supabase db push`. Load `supabase/seed.sql` from the SQL editor if you want the starter data.
 2. In Auth settings, add `https://your-domain/auth/callback` to the redirect URLs.
-3. Set `PUBLIC_SUPABASE_URL` and `PUBLIC_SUPABASE_ANON_KEY` on your host. `adapter-auto` covers Vercel, Netlify and Cloudflare; swap in `@sveltejs/adapter-node` for a VPS.
+3. Set `PUBLIC_SUPABASE_URL` and `PUBLIC_SUPABASE_ANON_KEY` on your host, plus the server-only `SUPABASE_SERVICE_ROLE_KEY` (needed for tips and for showing emails in user admin). If you deploy with `adapter-node`, raise `BODY_SIZE_LIMIT` (for example `BODY_SIZE_LIMIT=25M`) so tips with photos and GeoJSON imports fit. `adapter-auto` covers Vercel, Netlify and Cloudflare; swap in `@sveltejs/adapter-node` for a VPS.
 4. The basemap uses the public OpenStreetMap tile server, which is fine for development. For production traffic, point `baseStyle()` in `src/lib/map/style.ts` at your own or a commercial tile provider, per the [OSM tile usage policy](https://operations.osmfoundation.org/policies/tiles/).
 
 ### Project layout
@@ -129,6 +187,7 @@ Create an account at `/login`. Email confirmation is off locally, and the first 
 ```
 supabase/migrations/   0001 foundation · 0002 components · 0003 articles · 0004 systems
                        0005 security/audit/storage · 0006 vocabulary · 0007 tags
+                       0008 permissions/settings · 0009 tips · 0010 spaces/layout tools
 supabase/seed.sql      starter Gary data
 src/lib/map/style.ts   MapLibre style + layers for snapshots, ghosts, moments
 src/lib/components/    TimeMachineMap, YearSlider, EntityPanel, Timeline, MiniMap,
@@ -143,14 +202,10 @@ src/routes/            pages + /api endpoints (snapshot, moments, entity, search
 
 The seed includes about 40 entities (Union Station, City Methodist, Hotel Gary/Genesis Towers, City Hall, the Palace, Emerson School, the Aquatorium, Gary Works, the 1919 steel strike, Mayor Hatcher, and others) to show how the model works.
 
-* **Coordinates are approximate.** They were placed by eye against the OSM basemap and are flagged `confidence = 'approximate'`. Broadway's pre-1920 extent is illustrative only.
+* **Coordinates are approximate.** They were placed by eye against the OSM basemap and are flagged `confidence = 'approximate'`. Building footprints are rectangles of plausible size, and the spaces inside City Methodist and the Palace are schematic splits. Broadway's pre-1920 extent and the Grand Calumet River course are placeholders.
 * **Dates come from commonly cited public histories.** Uncertain ones are marked `approximate` or `speculative` with a note. Several articles are deliberately marked *Needs sources*.
 * The Maintenance page will list everything that still needs a citation, a photo or a precise footprint. Primary sources such as the Calumet Regional Archives at IU Northwest, city directories, Sanborn maps and the Post-Tribune are the place to start.
 
-## Ideas for next steps
+## Roadmap
 
-* Bulk import from city directories (CSV: year, name, address → occupancy relations)
-* Georeferenced Sanborn and aerial overlay library
-* Vector-tile endpoint (`ST_AsMVT`) once the dataset outgrows GeoJSON snapshots
-* Side-by-side "then / now" compare mode, photo viewpoint cones on the map
-* Talk pages / comment threads per fact
+The long-horizon plan, open questions and decision log are in **[ROADMAP.md](ROADMAP.md)**.
