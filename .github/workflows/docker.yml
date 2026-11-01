@@ -2,7 +2,7 @@
 # docker-compose.yml (and Portainer stacks) can pull them:
 #   ghcr.io/<owner>/decaynet          (app)
 #   ghcr.io/<owner>/decaynet-migrate  (migration runner)
-# Tags: latest (main), sha-<short>, and vX.Y.Z / X.Y for version tags.
+# Tags: latest + main (pushes to main), sha-<short>, and X.Y.Z / X.Y for v* tags.
 name: Docker images
 
 on:
@@ -45,8 +45,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.name.outputs.image }}
+          # "latest" follows main explicitly ({{is_default_branch}} is false when the
+          # repo's default branch is something else, which left no :latest tag)
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch
             type=sha,prefix=sha-
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
