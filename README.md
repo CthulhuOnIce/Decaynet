@@ -159,7 +159,8 @@ Notes:
 
 - **`migrate` shows "Exited (0)"**: normal. Non-zero means the schema failed to apply; check its logs.
 - **`app` unhealthy**: open `http://<host>:3000/healthz`. `db` in the JSON shows the database error, often a wrong `ANON_KEY`/`JWT_SECRET` pair (regenerate all four together).
-- **Pull errors for `ghcr.io/…`**: the package is private (see *Forks* above) or the CI workflow hasn't published yet; build locally with `docker-compose.build.yml` meanwhile.
+- **`manifest unknown` when pulling**: the requested tag doesn't exist (yet). Check the tags at *GitHub → Packages → decaynet*, wait for the *Docker images* workflow to finish, or pin a tag that exists, e.g. `DECAYNET_IMAGE=ghcr.io/cthulhuonice/decaynet:sha-1c1e224` and `DECAYNET_MIGRATE_IMAGE=ghcr.io/cthulhuonice/decaynet-migrate:sha-1c1e224`.
+- **`unauthorized` / `denied` when pulling `ghcr.io/…`**: the package is private (see *Forks* above). Build locally with `docker-compose.build.yml` meanwhile.
 - **Docker Hub rate limits** when building: set `NODE_IMAGE=public.ecr.aws/docker/library/node:22-alpine` and `PG_IMAGE=public.ecr.aws/docker/library/postgres:17-alpine`. Supabase images already come from Supabase's `public.ecr.aws` mirror.
 - **TLS-intercepting proxy** when building: `docker build --secret id=ca,src=/path/to/ca.pem .`
 
