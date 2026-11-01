@@ -13,9 +13,8 @@ let client: SupabaseClient | null | undefined;
 export function serviceClient(): SupabaseClient | null {
 	if (client !== undefined) return client;
 	const key = priv.SUPABASE_SERVICE_ROLE_KEY;
-	client = key && pub.PUBLIC_SUPABASE_URL
-		? createClient(pub.PUBLIC_SUPABASE_URL, key, { auth: { persistSession: false, autoRefreshToken: false } })
-		: null;
+	const url = priv.SUPABASE_INTERNAL_URL || pub.PUBLIC_SUPABASE_URL;
+	client = key && url ? createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } }) : null;
 	return client;
 }
 

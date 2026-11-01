@@ -8,8 +8,8 @@ export const FONT = ['Noto Sans Medium'];
 
 /**
  * Modern OSM tiles, inverted into a dark, desaturated "present day" layer. The
- * time machine fades this layer out as you travel back so historical data and
- * overlays dominate.
+ * time machine fades this layer out as you travel back so the historical data
+ * dominates.
  */
 export function baseStyle(settings?: { basemap_url?: string; basemap_attribution?: string } | null): StyleSpecification {
 	return {

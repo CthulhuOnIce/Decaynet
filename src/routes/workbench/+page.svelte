@@ -2,24 +2,20 @@
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
 	import type { GeoJSONSource, ImageSource, Map as MLMap, Marker } from 'maplibre-gl';
 	import YearSlider from '$lib/components/YearSlider.svelte';
 	import EntityPicker from '$lib/components/EntityPicker.svelte';
 	import TemporalFields from '$lib/components/TemporalFields.svelte';
 	import { baseStyle, snapshotLayers } from '$lib/map/style';
-	import { mediaSrc } from '$lib/media';
 	import { can } from '$lib/perms';
-	import { browserClient } from '$lib/supabaseBrowser';
-	import { toFuzzyInput, yearToDate } from '$lib/time';
-	import type { MapLayer } from '$lib/types';
+	import { yearToDate } from '$lib/time';
 
 	let { data, form } = $props();
 
 	type Tool = 'overlay' | 'trace' | 'area' | 'import';
 	type Corners = [[number, number], [number, number], [number, number], [number, number]];
 
-	let tool = $state<Tool>(can('manage_layers') ? 'overlay' : 'trace');
+	let tool = $state<Tool>('overlay');
 	let year = $state(untrack(() => data.settings.default_year));
 	let ready = $state(false);
 	let mapEl: HTMLDivElement;
@@ -30,26 +26,25 @@
 	let lastSnap: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 	let refreshKey = $state(0);
 
-	// ---------------------------------------------------------------- overlay
-	let layerId = $state('');
+	// ---------------------------------------------------------------- session overlay
+	// Scans and tile layers are drawing aids for THIS session only. A scan is
+	// read straight from the editor's disk (object URL); nothing is uploaded or
+	// stored. Alignments can be exported to a small JSON file and re-loaded.
 	let opacity = $state(0.7);
 	let overlayHidden = $state(false); // flicker (hold F)
 	let compare = $state<'blend' | 'swipe'>('blend');
 	let swipe = $state(0.5);
-	const layer = $derived<MapLayer | null>(data.layers.find((l) => l.id === layerId) ?? null);
-
-	// Georeferencing a scanned image: drag four corners into place
-	let georef = $state<{ id?: string; image_path: string; url: string; corners: Corners; title: string; depicts_from: string; depicts_to: string; attribution: string; notes: string } | null>(null);
+	let scan = $state<{ name: string; url: string; corners: Corners; width: number; height: number } | null>(null);
+	let tileUrl = $state('');
+	let tileInput = $state('');
+	let aligning = $state(true); // show corner handles
+	let depictsYear = $state(''); // year the scan shows; pre-fills traced shapes
 	let markers: Marker[] = [];
-	let uploadBusy = $state(false);
-	let uploadError = $state<string | null>(null);
+	let scanError = $state<string | null>(null);
 
 	const activeSource = $derived.by(() => {
-		if (georef) return { kind: 'image' as const, url: georef.url, corners: georef.corners };
-		if (!layer) return null;
-		if (layer.kind === 'image' && layer.image_path && layer.corners)
-			return { kind: 'image' as const, url: mediaSrc(layer.image_path)!, corners: layer.corners as Corners };
-		if (layer.tile_url) return { kind: 'xyz' as const, url: layer.tile_url, layer };
+		if (scan) return { kind: 'image' as const, url: scan.url, corners: scan.corners };
+		if (tileUrl) return { kind: 'xyz' as const, url: tileUrl };
 		return null;
 	});
 
@@ -59,15 +54,7 @@
 		const src = activeSource;
 		if (!src) return;
 		if (src.kind === 'image') m.addSource('overlay', { type: 'image', url: src.url, coordinates: src.corners });
-		else
-			m.addSource('overlay', {
-				type: 'raster',
-				tiles: [src.url],
-				tileSize: src.layer.tile_size,
-				minzoom: src.layer.min_zoom,
-				maxzoom: src.layer.max_zoom,
-				...(src.layer.bounds ? { bounds: src.layer.bounds } : {})
-			});
+		else m.addSource('overlay', { type: 'raster', tiles: [src.url], tileSize: 256 });
 		m.addLayer({ id: 'overlay', type: 'raster', source: 'overlay', paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0 } }, before);
 	}
 
@@ -80,6 +67,7 @@
 			else top.once('load', () => addOverlayTo(top!));
 		} else {
 			if (top?.getLayer('overlay')) top.removeLayer('overlay');
+			if (top?.getSource('overlay')) top.removeSource('overlay');
 			addOverlayTo(map, 'snapshot-district-fill');
 		}
 		applyOpacity();
@@ -104,39 +92,37 @@
 	}
 
 	function setCorners(c: Corners) {
-		if (!georef) return;
-		georef.corners = c;
-		const src = map?.getSource('overlay') as ImageSource | undefined;
-		src?.setCoordinates(c);
+		if (!scan) return;
+		scan.corners = c;
+		(map?.getSource('overlay') as ImageSource | undefined)?.setCoordinates(c);
 		(top?.getSource('overlay') as ImageSource | undefined)?.setCoordinates(c);
 	}
 
 	function placeMarkers() {
 		markers.forEach((m) => m.remove());
 		markers = [];
-		if (!georef || !map || !maplibre) return;
+		if (!scan || !aligning || !map || !maplibre) return;
 		const mk = (cls: string, title: string) => {
 			const el = document.createElement('div');
 			el.className = `handle ${cls}`;
 			el.title = title;
 			return el;
 		};
-		georef.corners.forEach((c, i) => {
+		scan.corners.forEach((c, i) => {
 			const m = new maplibre!.Marker({ element: mk('corner', ['top-left', 'top-right', 'bottom-right', 'bottom-left'][i]), draggable: true })
 				.setLngLat(c)
 				.addTo(map!);
 			m.on('drag', () => {
 				const ll = m.getLngLat();
-				const next = georef!.corners.map((x) => [...x]) as Corners;
+				const next = scan!.corners.map((x) => [...x]) as Corners;
 				next[i] = [ll.lng, ll.lat];
 				setCorners(next);
-				moveCenterMarker();
+				markers[4]?.setLngLat(centroid(next));
 			});
 			markers.push(m);
 		});
-		// Centre handle moves the whole sheet
 		const centre = new maplibre.Marker({ element: mk('move', 'Drag to move the whole sheet'), draggable: true })
-			.setLngLat(centroid(georef.corners))
+			.setLngLat(centroid(scan.corners))
 			.addTo(map);
 		let last = centre.getLngLat();
 		centre.on('dragstart', () => (last = centre.getLngLat()));
@@ -145,21 +131,20 @@
 			const dx = ll.lng - last.lng;
 			const dy = ll.lat - last.lat;
 			last = ll;
-			const next = georef!.corners.map(([x, y]) => [x + dx, y + dy]) as Corners;
+			const next = scan!.corners.map(([x, y]) => [x + dx, y + dy]) as Corners;
 			setCorners(next);
 			next.forEach((c, i) => markers[i].setLngLat(c));
 		});
 		markers.push(centre);
 	}
 	const centroid = (c: Corners): [number, number] => [c.reduce((a, p) => a + p[0], 0) / 4, c.reduce((a, p) => a + p[1], 0) / 4];
-	const moveCenterMarker = () => georef && markers[4]?.setLngLat(centroid(georef.corners));
 
 	/** Rotate / scale the sheet about its centre (fine adjustments). */
 	function transform(rotateDeg: number, scale: number) {
-		if (!georef || !map) return;
-		const c = map.project(centroid(georef.corners));
+		if (!scan || !map) return;
+		const c = map.project(centroid(scan.corners));
 		const a = (rotateDeg * Math.PI) / 180;
-		const next = georef.corners.map((ll) => {
+		const next = scan.corners.map((ll) => {
 			const p = map!.project(ll);
 			const x = (p.x - c.x) * scale;
 			const y = (p.y - c.y) * scale;
@@ -170,23 +155,19 @@
 		placeMarkers();
 	}
 
-	async function uploadScan(e: Event) {
+	async function openScan(e: Event) {
 		const file = (e.currentTarget as HTMLInputElement).files?.[0];
 		if (!file || !map) return;
-		uploadBusy = true;
-		uploadError = null;
+		scanError = null;
 		try {
-			const ext = file.name.split('.').pop()?.toLowerCase() ?? 'jpg';
-			const path = `overlays/${crypto.randomUUID()}.${ext}`;
-			const { error } = await browserClient().storage.from('media').upload(path, file, { contentType: file.type });
-			if (error) throw error;
-			const url = mediaSrc(path)!;
+			if (scan) URL.revokeObjectURL(scan.url);
+			const url = URL.createObjectURL(file);
 			const img = new Image();
 			img.src = url;
 			await img.decode();
 			// Start at ~60% of the view, preserving the scan's aspect ratio on screen
 			const { clientWidth: W, clientHeight: H } = map.getContainer();
-			const w = Math.min(W * 0.6, ((H * 0.6) * img.width) / img.height);
+			const w = Math.min(W * 0.6, (H * 0.6 * img.width) / img.height);
 			const h = (w * img.height) / img.width;
 			const x0 = (W - w) / 2;
 			const y0 = (H - h) / 2;
@@ -194,58 +175,78 @@
 				const p = map!.unproject([x, y]);
 				return [p.lng, p.lat];
 			};
-			layerId = '';
-			georef = {
-				image_path: path,
+			tileUrl = '';
+			aligning = true;
+			scan = {
+				name: file.name,
 				url,
-				corners: [ll(x0, y0), ll(x0 + w, y0), ll(x0 + w, y0 + h), ll(x0, y0 + h)],
-				title: file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' '),
-				depicts_from: String(year),
-				depicts_to: '',
-				attribution: '',
-				notes: ''
+				width: img.width,
+				height: img.height,
+				corners: [ll(x0, y0), ll(x0 + w, y0), ll(x0 + w, y0 + h), ll(x0, y0 + h)]
 			};
+			const y = file.name.match(/(1[89]\d\d|20\d\d)/);
+			if (y) {
+				depictsYear = y[1];
+				year = Number(y[1]);
+			}
 		} catch (err) {
-			uploadError = (err as Error).message;
-		} finally {
-			uploadBusy = false;
+			scanError = `Couldn't open that image: ${(err as Error).message}`;
 		}
 	}
 
-	function editAlignment() {
-		if (!layer || layer.kind !== 'image' || !layer.image_path || !layer.corners) return;
-		georef = {
-			id: layer.id,
-			image_path: layer.image_path,
-			url: mediaSrc(layer.image_path)!,
-			corners: layer.corners.map((c) => [...c]) as Corners,
-			title: layer.title,
-			depicts_from: toFuzzyInput(layer.depicts_from, 'year'),
-			depicts_to: toFuzzyInput(layer.depicts_to, 'year'),
-			attribution: layer.attribution ?? '',
-			notes: layer.notes ?? ''
-		};
+	function closeScan() {
+		if (scan) URL.revokeObjectURL(scan.url);
+		scan = null;
+		markers.forEach((m) => m.remove());
+		markers = [];
 	}
 
-	function chooseLayer(id: string) {
-		layerId = id;
-		georef = null;
-		const l = data.layers.find((x) => x.id === id);
-		if (l) {
-			opacity = l.default_opacity;
-			if (l.depicts_from) year = Number(l.depicts_from.slice(0, 4));
-			if (l.kind === 'image' && l.corners && map) {
-				const xs = l.corners.map((c) => c[0]);
-				const ys = l.corners.map((c) => c[1]);
-				map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: 40 });
-			} else if (l.bounds && map) map.fitBounds([[l.bounds[0], l.bounds[1]], [l.bounds[2], l.bounds[3]]], { padding: 40 });
+	/** Save the alignment to a small file so the same scan can be re-aligned instantly next time. */
+	function exportAlignment() {
+		if (!scan) return;
+		const blob = new Blob(
+			[JSON.stringify({ decaynet_alignment: 1, file: scan.name, width: scan.width, height: scan.height, depicts: depictsYear || null, corners: scan.corners }, null, 2)],
+			{ type: 'application/json' }
+		);
+		const a = document.createElement('a');
+		a.href = URL.createObjectURL(blob);
+		a.download = `${scan.name.replace(/\.[^.]+$/, '')}.alignment.json`;
+		a.click();
+		URL.revokeObjectURL(a.href);
+	}
+
+	async function importAlignment(e: Event) {
+		const file = (e.currentTarget as HTMLInputElement).files?.[0];
+		if (!file || !scan) return;
+		try {
+			const j = JSON.parse(await file.text());
+			if (!Array.isArray(j.corners) || j.corners.length !== 4) throw new Error('No corners in that file.');
+			setCorners(j.corners as Corners);
+			if (j.depicts) depictsYear = String(j.depicts);
+			placeMarkers();
+			const xs = j.corners.map((c: number[]) => c[0]);
+			const ys = j.corners.map((c: number[]) => c[1]);
+			map?.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: 40 });
+		} catch (err) {
+			scanError = (err as Error).message;
 		}
+	}
+
+	function useTiles() {
+		const u = tileInput.trim();
+		if (!/^https:\/\/.+\{z\}.+\{x\}.+\{y\}/.test(u)) {
+			scanError = 'Tile URLs look like https://…/{z}/{x}/{y}.png';
+			return;
+		}
+		closeScan();
+		scanError = null;
+		tileUrl = u;
 	}
 
 	// ---------------------------------------------------------------- drawing (trace + area)
 	let drawMode = $state<'polygon' | 'line' | 'point'>('polygon');
 	let pts = $state<[number, number][]>([]);
-	const drawing = $derived((tool === 'trace' || tool === 'area') && !georef);
+	const drawing = $derived(tool === 'trace' || tool === 'area');
 	const effectiveMode = $derived(tool === 'area' ? 'polygon' : drawMode);
 	const geometry = $derived.by((): GeoJSON.Geometry | null => {
 		if (effectiveMode === 'point') return pts.length ? { type: 'Point', coordinates: pts[pts.length - 1] } : null;
@@ -344,7 +345,10 @@
 			style: baseStyle(data.settings),
 			center: [data.settings.map_center_lon, data.settings.map_center_lat],
 			zoom: Math.max(15, data.settings.map_zoom),
-			attributionControl: { compact: true },
+			attributionControl: {
+				compact: true,
+				customAttribution: `<a href="${data.settings.source_code_url}" target="_blank" rel="noopener">Source (AGPL)</a>`
+			},
 			maxZoom: 21
 		});
 		const mm = map;
@@ -388,6 +392,7 @@
 	onDestroy(() => {
 		clearTimeout(fetchTimer);
 		markers.forEach((m) => m.remove());
+		if (scan) URL.revokeObjectURL(scan.url);
 		top?.remove();
 		map?.remove();
 	});
@@ -399,7 +404,7 @@
 		fetchTimer = setTimeout(refresh, 100);
 	});
 	$effect(() => {
-		void [activeSource?.url, layerId, compare, !!georef];
+		void [activeSource?.url, compare];
 		if (!ready) return;
 		if (compare === 'swipe') ensureTop();
 		untrack(applyOverlay);
@@ -409,8 +414,12 @@
 		untrack(applyOpacity);
 	});
 	$effect(() => {
-		void [georef?.image_path, georef?.id, ready];
+		void [scan?.url, aligning, ready];
 		untrack(placeMarkers);
+	});
+	// Hide handles while drawing so clicks land on the map
+	$effect(() => {
+		if (tool === 'trace' || tool === 'area') aligning = false;
 	});
 	$effect(() => {
 		void [geometry, pts.length];
@@ -457,7 +466,7 @@
 	}
 
 	const TOOLS: { id: Tool; label: string; ok: boolean }[] = $derived([
-		{ id: 'overlay', label: 'Overlays', ok: can('manage_layers') || data.layers.length > 0 },
+		{ id: 'overlay', label: 'Scan', ok: true },
 		{ id: 'trace', label: 'Trace', ok: can('edit_content') },
 		{ id: 'area', label: 'Area change', ok: can('bulk_edit') },
 		{ id: 'import', label: 'Import', ok: can('bulk_edit') }
@@ -482,19 +491,29 @@
 			<p class="notice ok small">{msg.ok} {#if 'slug' in msg && msg.slug}<a href="/e/{msg.slug}">Open page →</a>{/if}</p>
 		{/if}
 
-		<!-- ======================= OVERLAYS ======================= -->
+		<!-- ======================= SCAN (session only) ======================= -->
 		{#if tool === 'overlay'}
-			<p class="hint">Lay a Sanborn sheet, plat or aerial over today's map and the wiki's data, then trace what you see.</p>
-			<div class="field">
-				<label for="ov">Overlay</label>
-				<select id="ov" value={layerId} onchange={(e) => chooseLayer(e.currentTarget.value)}>
-					<option value="">none</option>
-					{#each data.layers as l (l.id)}
-						<option value={l.id}>{l.title} ({l.depicts_from?.slice(0, 4) ?? '?'}) {l.kind === 'image' ? '· scan' : '· tiles'}</option>
-					{/each}
-				</select>
-			</div>
-			{#if activeSource}
+			<p class="hint">
+				Lay a Sanborn sheet, plat, aerial or any scanned map over the data to line things up and trace from it.
+				<strong>Scans stay in your browser for this session only</strong>: nothing is uploaded or published.
+			</p>
+			{#if scanError}<p class="notice error small">{scanError}</p>{/if}
+
+			{#if !scan && !tileUrl}
+				<h3>Open a scan</h3>
+				<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onchange={openScan} />
+				<p class="hint">It appears with four corner handles. Drag each corner onto the matching intersection.</p>
+				<h3>…or a tile layer</h3>
+				<p class="hint">Already georeferenced in Map Warper, Allmaps or similar? Paste its XYZ URL.</p>
+				<div class="row">
+					<input bind:value={tileInput} placeholder={'https://…/{z}/{x}/{y}.png'} style="flex: 1" />
+					<button onclick={useTiles}>Use</button>
+				</div>
+			{:else}
+				<div class="loaded">
+					<strong>{scan ? scan.name : 'Tile layer'}</strong>
+					<button class="ghost" onclick={() => { closeScan(); tileUrl = ''; }}>Close</button>
+				</div>
 				<div class="field">
 					<label for="op">Opacity {Math.round(opacity * 100)}%</label>
 					<input id="op" type="range" min="0" max="1" step="0.05" bind:value={opacity} disabled={compare === 'swipe'} />
@@ -503,67 +522,41 @@
 					<button class:on={compare === 'blend'} onclick={() => (compare = 'blend')}>Blend</button>
 					<button class:on={compare === 'swipe'} onclick={() => (compare = 'swipe')}>Swipe</button>
 				</div>
-				<p class="hint">Hold <kbd>F</kbd> to flicker the overlay off and back on.</p>
-				{#if layer?.kind === 'image' && !georef && can('manage_layers')}
-					<button onclick={editAlignment}>Adjust alignment</button>
-				{/if}
-			{/if}
+				<p class="hint">Hold <kbd>F</kbd> to flicker the scan off and back on.</p>
+				<div class="field">
+					<label for="dy">Scan shows the year</label>
+					<input id="dy" bind:value={depictsYear} placeholder="1925" oninput={() => /^\d{4}$/.test(depictsYear) && (year = Number(depictsYear))} />
+					<p class="hint">Moves the time slider and pre-fills dates on traced shapes.</p>
+				</div>
 
-			{#if can('manage_layers')}
-				<hr />
-				{#if !georef}
-					<h3>Georeference a scan</h3>
-					<p class="hint">Upload a scanned map (JPG/PNG). It appears on the map with four corner handles. Drag each corner to the matching street corner, then save.</p>
-					<input type="file" accept="image/png,image/jpeg,image/webp" onchange={uploadScan} disabled={uploadBusy} />
-					{#if uploadBusy}<p class="muted small">Uploading…</p>{/if}
-					{#if uploadError}<p class="notice error small">{uploadError}</p>{/if}
-					<p class="hint">Already georeferenced elsewhere (Map Warper, Allmaps)? <a href="/layers">Add its tile URL →</a></p>
-				{:else}
-					<h3>{georef.id ? 'Adjust alignment' : 'Place the scan'}</h3>
-					<p class="hint">Drag the <span class="sw corner"></span> corners onto matching intersections; drag <span class="sw move"></span> to move the whole sheet. Lower the opacity to see streets underneath.</p>
-					<div class="row nudges">
-						<button title="Rotate left" onclick={() => transform(-1, 1)}>⟲ 1°</button>
-						<button title="Rotate right" onclick={() => transform(1, 1)}>⟳ 1°</button>
-						<button title="Shrink" onclick={() => transform(0, 0.98)}>− 2%</button>
-						<button title="Grow" onclick={() => transform(0, 1.02)}>+ 2%</button>
+				{#if scan}
+					<hr />
+					<div class="spread">
+						<h3>Alignment</h3>
+						<label class="check"><input type="checkbox" bind:checked={aligning} /> show handles</label>
 					</div>
-					<form
-						method="post"
-						action="?/saveOverlay"
-						class="stack"
-						use:enhance={() =>
-							async ({ result, update }) => {
-								await update({ reset: false });
-								if (result.type === 'success') {
-									await invalidateAll();
-									const id = result.data?.layerId as string | undefined;
-									georef = null;
-									if (id) layerId = id;
-								}
-							}}
-					>
-						<input type="hidden" name="tool" value="overlay" />
-						<input type="hidden" name="id" value={georef.id ?? ''} />
-						<input type="hidden" name="image_path" value={georef.image_path} />
-						<input type="hidden" name="corners" value={JSON.stringify(georef.corners)} />
-						<input type="hidden" name="opacity" value={opacity} />
-						<div><label for="gt">Title</label><input id="gt" name="title" bind:value={georef.title} required /></div>
-						<div class="fields">
-							<div><label for="gf">Depicts from</label><input id="gf" name="depicts_from" bind:value={georef.depicts_from} placeholder="1925" /></div>
-							<div><label for="gto">until</label><input id="gto" name="depicts_to" bind:value={georef.depicts_to} placeholder="1925" /></div>
+					{#if aligning}
+						<p class="hint">Drag the <span class="sw corner"></span> corners onto matching intersections; drag <span class="sw move"></span> to move the sheet. Lower the opacity to see streets beneath.</p>
+						<div class="row nudges">
+							<button title="Rotate left" onclick={() => transform(-1, 1)}>⟲ 1°</button>
+							<button title="Rotate right" onclick={() => transform(1, 1)}>⟳ 1°</button>
+							<button title="Rotate left a little" onclick={() => transform(-0.2, 1)}>⟲ .2°</button>
+							<button title="Rotate right a little" onclick={() => transform(0.2, 1)}>⟳ .2°</button>
+							<button title="Shrink" onclick={() => transform(0, 0.98)}>− 2%</button>
+							<button title="Grow" onclick={() => transform(0, 1.02)}>+ 2%</button>
 						</div>
-						<div><label for="ga">Attribution</label><input id="ga" name="attribution" bind:value={georef.attribution} placeholder="Library of Congress, Sanborn Maps" /></div>
-						<div>
-							<label for="gs">Source</label>
-							<select id="gs" name="source_id"><option value="">(none)</option>{#each data.sources as s (s.id)}<option value={s.id}>{s.title}</option>{/each}</select>
-						</div>
-						<div><label for="gn">Notes</label><input id="gn" name="notes" bind:value={georef.notes} placeholder="Sheet 12; aligned on Broadway & 5th" /></div>
-						<div class="row">
-							<button class="primary">Save overlay</button>
-							<button type="button" class="ghost" onclick={() => (georef = null)}>Cancel</button>
-						</div>
-					</form>
+						<button class="primary" onclick={() => (aligning = false)}>Done aligning</button>
+					{/if}
+					<div class="row" style="margin-top: 10px">
+						<button class="ghost" onclick={exportAlignment} title="Download the corner positions as a small JSON file">Save alignment file</button>
+						<label class="btn ghost filebtn">
+							Load alignment
+							<input type="file" accept=".json,application/json" onchange={importAlignment} />
+						</label>
+					</div>
+					<p class="hint">Alignment files keep your work between sessions; the scan itself never leaves your computer.</p>
 				{/if}
+				<p class="hint">Next: switch to <button class="link" onclick={() => (tool = 'trace')}>Trace</button> to draw footprints and streets over it.</p>
 			{/if}
 		{/if}
 
@@ -602,7 +595,7 @@
 				<TemporalFields
 					sources={data.sources}
 					idPrefix="tr"
-					values={{ valid_from: layer?.depicts_from ?? `${year}-01-01`, valid_from_precision: 'year', confidence: 'probable' }}
+					values={{ valid_from: `${/^\d{4}$/.test(depictsYear) ? depictsYear : year}-01-01`, valid_from_precision: 'year', confidence: 'probable' }}
 					fromLabel="Seen from"
 					toLabel="Until"
 				/>
@@ -730,7 +723,8 @@
 				<span>⇔</span>
 			</div>
 		{/if}
-		{#if georef}<div class="banner">Aligning: drag the corners · lower the opacity to see streets beneath</div>{/if}
+		{#if scan && aligning}<div class="banner">Aligning: drag the corners · lower the opacity to see streets beneath</div>{/if}
+		{#if activeSource}<div class="session-badge" title="Not uploaded or saved; gone when you close the page">session-only scan</div>{/if}
 		<div class="dock">
 			<YearSlider bind:year min={Math.min(data.minYear, data.settings.min_year)} max={data.maxYear} />
 		</div>
@@ -869,6 +863,45 @@
 		font-size: 0.8rem;
 		font-weight: 600;
 		z-index: 3;
+	}
+	.session-badge {
+		position: absolute;
+		top: 10px;
+		left: 10px;
+		z-index: 3;
+		font-family: var(--mono);
+		font-size: 0.7rem;
+		padding: 2px 8px;
+		border-radius: 999px;
+		background: rgba(20, 17, 15, 0.85);
+		color: var(--amber);
+		border: 1px solid var(--amber);
+	}
+	.loaded {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 8px;
+		margin-bottom: 10px;
+		word-break: break-all;
+	}
+	.filebtn {
+		position: relative;
+		overflow: hidden;
+	}
+	.filebtn input {
+		position: absolute;
+		inset: 0;
+		opacity: 0;
+		cursor: pointer;
+	}
+	button.link {
+		background: none;
+		border: 0;
+		padding: 0;
+		color: var(--rust-2);
+		font: inherit;
+		cursor: pointer;
 	}
 	.dock {
 		position: absolute;

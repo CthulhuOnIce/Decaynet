@@ -1,9 +1,12 @@
 import { createServerClient } from '@supabase/ssr';
 import { env } from '$env/dynamic/public';
+import { env as priv } from '$env/dynamic/private';
+import { AUTH_COOKIE } from '$lib/supabaseConfig';
 import type { Handle } from '@sveltejs/kit';
 
 export const handle: Handle = async ({ event, resolve }) => {
-	const url = env.PUBLIC_SUPABASE_URL;
+	// The server may reach Supabase on a private address (Docker network); browsers use the public one.
+	const url = priv.SUPABASE_INTERNAL_URL || env.PUBLIC_SUPABASE_URL;
 	const key = env.PUBLIC_SUPABASE_ANON_KEY;
 	if (!url || !key) {
 		throw new Error(
@@ -12,6 +15,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	}
 
 	event.locals.supabase = createServerClient(url, key, {
+		cookieOptions: AUTH_COOKIE,
 		cookies: {
 			getAll: () => event.cookies.getAll(),
 			setAll: (cookiesToSet, headers) => {

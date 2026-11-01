@@ -1,11 +1,10 @@
 import { loadTags } from '$lib/server/db';
-import type { ChronologyRow, MapLayer } from '$lib/types';
+import type { ChronologyRow } from '$lib/types';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
-	const [extent, layers, chrono] = await Promise.all([
+	const [extent, chrono] = await Promise.all([
 		locals.supabase.rpc('timeline_extent'),
-		locals.supabase.from('map_layers').select('*').eq('enabled', true).order('depicts_from'),
 		locals.supabase.rpc('chronology', { p_from: '1800-01-01', p_limit: 5000 })
 	]);
 
@@ -24,7 +23,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		minYear,
 		maxYear,
 		density,
-		layers: (layers.data ?? []) as MapLayer[],
 		tags: (await loadTags(locals.supabase)).filter((t) => t.total_uses > 0)
 	};
 };

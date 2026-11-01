@@ -1,0 +1,11 @@
+.git
+node_modules
+.svelte-kit
+build
+.env
+.env.*
+!.env.example
+docs
+supabase/.temp
+supabase/.branches
+*.log

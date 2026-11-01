@@ -1,21 +1,17 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, required, slugify, str } from '$lib/server/forms';
-import type { MapLayer } from '$lib/types';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, parent }) => {
 	const { user, perms } = await parent();
 	if (!user) redirect(303, '/login?next=/workbench');
-	if (!perms.includes('edit_content') && !perms.includes('manage_layers') && !perms.includes('bulk_edit'))
-		redirect(303, '/');
-	const [layers, sources, extent] = await Promise.all([
-		locals.supabase.from('map_layers').select('*').order('depicts_from', { nullsFirst: false }),
+	if (!perms.includes('edit_content') && !perms.includes('bulk_edit')) redirect(303, '/');
+	const [sources, extent] = await Promise.all([
 		locals.supabase.from('sources').select('id, title').order('title'),
 		locals.supabase.rpc('timeline_extent')
 	]);
 	return {
-		layers: (layers.data ?? []) as MapLayer[],
 		sources: sources.data ?? [],
 		minYear: Math.min(extent.data?.min_year ?? 1890, 1890),
 		maxYear: extent.data?.max_year ?? new Date().getFullYear()
@@ -50,32 +46,6 @@ const check = (res: { error: { message: string; code?: string } | null }) => {
 };
 
 export const actions: Actions = {
-	/** Save (create or update) a scanned-image overlay pinned by four corners. */
-	saveOverlay: wrap(async (fd, locals) => {
-		await requirePermission(locals, 'manage_layers');
-		const corners = JSON.parse(required(fd, 'corners'));
-		if (!Array.isArray(corners) || corners.length !== 4) throw new FormError('Need four corners.');
-		const life = fuzzyPair(fd, 'depicts_from', 'depicts_to');
-		const row = {
-			title: required(fd, 'title', 'Title'),
-			kind: 'image',
-			image_path: required(fd, 'image_path'),
-			corners,
-			depicts_from: life.from,
-			depicts_to: life.to,
-			attribution: str(fd, 'attribution'),
-			notes: str(fd, 'notes'),
-			default_opacity: Number(str(fd, 'opacity') ?? 0.75),
-			source_id: str(fd, 'source_id')
-		};
-		const id = str(fd, 'id');
-		const res = id
-			? await locals.supabase.from('map_layers').update(row).eq('id', id).select('id').single()
-			: await locals.supabase.from('map_layers').insert(row).select('id').single();
-		check(res);
-		return { ok: id ? 'Overlay alignment saved.' : 'Overlay created.', layerId: res.data!.id as string };
-	}),
-
 	/** Save a traced shape as a new page, or as a dated shape on an existing page. */
 	trace: wrap(async (fd, locals) => {
 		await requirePermission(locals, 'edit_content');

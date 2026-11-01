@@ -125,25 +125,6 @@ export interface SourceRow {
 	notes: string | null;
 }
 
-export interface MapLayer {
-	id: string;
-	title: string;
-	kind: 'xyz' | 'image';
-	image_path: string | null;
-	/** [top-left, top-right, bottom-right, bottom-left] as [lon, lat] */
-	corners: [number, number][] | null;
-	notes: string | null;
-	tile_url: string | null;
-	tile_size: number;
-	attribution: string | null;
-	depicts_from: string | null;
-	depicts_to: string | null;
-	min_zoom: number;
-	max_zoom: number;
-	bounds: [number, number, number, number] | null;
-	default_opacity: number;
-	enabled: boolean;
-}
 
 export interface SnapshotRelation {
 	direction: 'in' | 'out';
@@ -326,7 +307,6 @@ export type Permission =
 	| 'upload_media'
 	| 'create_tags'
 	| 'review_tips'
-	| 'manage_layers'
 	| 'bulk_edit'
 	| 'moderate'
 	| 'manage_users'
@@ -356,6 +336,7 @@ export interface SiteSettings {
 	tips_captcha_provider: 'none' | 'turnstile' | 'hcaptcha';
 	tips_captcha_site_key: string | null;
 	tips_rate_limit_per_hour: number;
+	source_code_url: string;
 	updated_at: string;
 }
 

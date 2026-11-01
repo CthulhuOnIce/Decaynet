@@ -31,7 +31,15 @@
 			<div><label for="rn">Region</label><input id="rn" name="region_name" value={s.region_name} /></div>
 		</div>
 		<div class="field">
-			<label for="ab">About (Markdown)</label>
+			<label for="src">Source code URL</label>
+			<input id="src" name="source_code_url" type="url" value={s.source_code_url} required />
+			<p class="hint">
+				Decaynet is AGPL-3.0: visitors must be able to get the source of the version you run. If you change the code,
+				point this at your fork.
+			</p>
+		</div>
+		<div class="field">
+			<label for="ab">About (Markdown, shown at /about)</label>
 			<textarea id="ab" name="about" rows="4" style="min-height: 90px">{s.about}</textarea>
 		</div>
 	</section>

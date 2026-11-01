@@ -19,11 +19,12 @@
 	const tools = $derived(
 		[
 			can('review_tips') && { href: '/tips', label: 'Tips', badge: data.openTips },
-			(can('manage_layers') || can('bulk_edit') || can('edit_content')) && { href: '/workbench', label: 'Workbench' },
+			(can('bulk_edit') || can('edit_content')) && { href: '/workbench', label: 'Workbench' },
 			(can('manage_users') || can('manage_settings')) && { href: '/admin', label: 'Admin' }
 		].filter(Boolean) as { href: string; label: string; badge?: number }[]
 	);
 	let menuOpen = $state(false);
+	const fullBleed = $derived(page.url.pathname === '/' || page.url.pathname === '/workbench');
 
 	const isActive = (href: string) =>
 		href === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(href);
@@ -86,9 +87,20 @@
 	</div>
 </header>
 
-<main class:full={page.url.pathname === '/'}>
+<main class:full={fullBleed}>
 	{@render children()}
 </main>
+
+{#if !fullBleed}
+	<footer class="site-footer">
+		<span>{data.settings.site_name}</span>
+		<a href="/about">About</a>
+		{#if data.settings.tips_enabled}<a href="/tip">Send a tip</a>{/if}
+		<span class="spacer"></span>
+		<span>Free software under the <a href="https://www.gnu.org/licenses/agpl-3.0.html" rel="license noopener" target="_blank">GNU AGPL v3</a></span>
+		<a href={data.settings.source_code_url} rel="noopener" target="_blank">Source code</a>
+	</footer>
+{/if}
 
 <style>
 	.site-header {
@@ -210,6 +222,19 @@
 	}
 	.new {
 		padding: 5px 10px;
+	}
+	.site-footer {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 16px;
+		align-items: center;
+		padding: 18px 24px 26px;
+		border-top: 1px solid var(--line);
+		font-size: 0.8rem;
+		color: var(--muted);
+	}
+	.site-footer .spacer {
+		flex: 1;
 	}
 	main.full {
 		height: calc(100vh - var(--header-h));

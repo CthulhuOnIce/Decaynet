@@ -41,16 +41,20 @@
 				filter: ['==', ['geometry-type'], 'Polygon'],
 				paint: { 'fill-color': ['case', cur, '#c2562b', '#8c8173'], 'fill-opacity': ['case', cur, 0.35, 0.08] }
 			});
+			const notPoint: ExpressionSpecification = ['!=', ['geometry-type'], 'Point'];
 			map!.addLayer({
-				id: 'line',
+				id: 'line-old',
 				type: 'line',
 				source: 'geoms',
-				filter: ['!=', ['geometry-type'], 'Point'],
-				paint: {
-					'line-color': ['case', cur, '#e07a4f', '#8c8173'],
-					'line-width': ['case', cur, 3, 1.5],
-					'line-dasharray': [3, 1.5]
-				}
+				filter: ['all', notPoint, ['!', cur]],
+				paint: { 'line-color': '#8c8173', 'line-width': 1.5, 'line-dasharray': [3, 1.5] }
+			});
+			map!.addLayer({
+				id: 'line-cur',
+				type: 'line',
+				source: 'geoms',
+				filter: ['all', notPoint, cur],
+				paint: { 'line-color': '#e07a4f', 'line-width': 3 }
 			});
 			map!.addLayer({
 				id: 'pt',

@@ -7,7 +7,7 @@
 	import TagSelect from '$lib/components/TagSelect.svelte';
 	import EntityPanel from '$lib/components/EntityPanel.svelte';
 	import { formatFuzzy, yearToDate } from '$lib/time';
-	import type { EntitySnapshot, MapLayer, Picked } from '$lib/types';
+	import type { EntitySnapshot, Picked } from '$lib/types';
 
 	let { data } = $props();
 
@@ -35,17 +35,7 @@
 	let ghosts = $state(true);
 	let tag = $state<string>(params.get('tag') ?? '');
 	let showMoments = $state(true);
-	let overlayId = $state<string>('');
-	let overlayOpacity = $state(0.75);
 	let panelOpen = $state(true);
-
-	const overlay = $derived<MapLayer | null>(data.layers.find((l) => l.id === overlayId) ?? null);
-	const layerYears = (l: MapLayer) =>
-		[l.depicts_from?.slice(0, 4), l.depicts_to?.slice(0, 4)].filter(Boolean).join('–') || 'undated';
-	const layerFits = (l: MapLayer) => {
-		const at = yearToDate(year);
-		return (!l.depicts_from || l.depicts_from <= at) && (!l.depicts_to || l.depicts_to >= at);
-	};
 
 	// ---- selected entity, folded to the current year
 	let snap = $state<EntitySnapshot | null>(null);
@@ -131,8 +121,6 @@
 			{ghosts}
 			tag={tag || null}
 			moments={showMoments}
-			{overlay}
-			{overlayOpacity}
 			{selected}
 			{basemap}
 			center={startView?.center ?? [data.settings.map_center_lon, data.settings.map_center_lat]}
@@ -173,6 +161,7 @@
 						{/each}
 					</div>
 					<p class="hint">Hide it when the historical layout differs from today's streets.</p>
+					{#if data.user}<p class="hint"><a href="/workbench">Trace from a scanned map in the workbench →</a></p>{/if}
 				</div>
 
 				<div class="group">
@@ -181,23 +170,6 @@
 						<TagSelect tags={data.tags} by="slug" value={tag} placeholder="(anything)" name="tag" />
 					</div>
 					{#if tag}<p class="hint">Includes sub-traits, as of {year}. <a href="/tags/{tag}">Tag page →</a></p>{/if}
-				</div>
-
-				<div class="group">
-					<div class="eyebrow">Historical overlay</div>
-					{#if data.layers.length}
-						<select bind:value={overlayId} aria-label="Historical map overlay">
-							<option value="">None (modern basemap)</option>
-							{#each data.layers as l (l.id)}
-								<option value={l.id}>{layerFits(l) ? '● ' : ''}{l.title} ({layerYears(l)})</option>
-							{/each}
-						</select>
-						{#if overlay}
-							<input type="range" min="0" max="1" step="0.05" bind:value={overlayOpacity} aria-label="Overlay opacity" />
-						{/if}
-					{:else}
-						<p class="muted small">No overlays yet. <a href="/layers">Add a georeferenced Sanborn sheet or aerial</a>.</p>
-					{/if}
 				</div>
 
 				<div class="group legend">

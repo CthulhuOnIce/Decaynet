@@ -31,11 +31,13 @@ export const actions: Actions = {
 		try {
 			const basemap = str(fd, 'basemap_url') ?? '';
 			if (!/^https:\/\/.+\{z\}.+\{x\}.+\{y\}/.test(basemap)) throw new Error('Basemap URL must be https with {z}, {x}, {y}.');
+			if (!/^https?:\/\//.test(str(fd, 'source_code_url') ?? '')) throw new Error('Source code URL must be a link (AGPL requires offering the source).');
 			const update = {
 				site_name: str(fd, 'site_name') ?? 'Decaynet',
 				tagline: str(fd, 'tagline') ?? '',
 				region_name: str(fd, 'region_name') ?? '',
 				about: String(fd.get('about') ?? ''),
+				source_code_url: str(fd, 'source_code_url') ?? 'https://github.com/CthulhuOnIce/Decaynet',
 				map_center_lon: num(fd, 'map_center_lon'),
 				map_center_lat: num(fd, 'map_center_lat'),
 				map_zoom: num(fd, 'map_zoom'),

@@ -11,9 +11,8 @@
 		snapshotLayers
 	} from '$lib/map/style';
 	import { yearToDate } from '$lib/time';
-	import type { MapLayer, Picked } from '$lib/types';
+	import type { Picked } from '$lib/types';
 	import { page } from '$app/state';
-	import { mediaSrc } from '$lib/media';
 
 	let {
 		year,
@@ -24,8 +23,6 @@
 		moments = true,
 		tag = null,
 		basemap = 'fade',
-		overlay = null,
-		overlayOpacity = 0.75,
 		selected = null,
 		center = GARY_CENTER,
 		zoom = GARY_ZOOM,
@@ -43,8 +40,6 @@
 		tag?: string | null;
 		/** fade: modern map fades as you go back · always · hidden */
 		basemap?: 'fade' | 'always' | 'hidden';
-		overlay?: MapLayer | null;
-		overlayOpacity?: number;
 		selected?: string | null;
 		center?: [number, number];
 		zoom?: number;
@@ -129,34 +124,6 @@
 		map.setPaintProperty('basemap', 'raster-saturation', -1 + 0.35 * modern);
 	}
 
-	function applyOverlay() {
-		if (!map || !ready) return;
-		if (map.getLayer('overlay')) map.removeLayer('overlay');
-		if (map.getSource('overlay')) map.removeSource('overlay');
-		if (!overlay) return;
-		if (overlay.kind === 'image' && overlay.image_path && overlay.corners) {
-			map.addSource('overlay', {
-				type: 'image',
-				url: mediaSrc(overlay.image_path)!,
-				coordinates: overlay.corners as [[number, number], [number, number], [number, number], [number, number]]
-			});
-		} else if (overlay.tile_url) {
-			map.addSource('overlay', {
-				type: 'raster',
-				tiles: [overlay.tile_url],
-				tileSize: overlay.tile_size,
-				minzoom: overlay.min_zoom,
-				maxzoom: overlay.max_zoom,
-				attribution: overlay.attribution ?? undefined,
-				...(overlay.bounds ? { bounds: overlay.bounds } : {})
-			});
-		} else return;
-		map.addLayer(
-			{ id: 'overlay', type: 'raster', source: 'overlay', paint: { 'raster-opacity': overlayOpacity } },
-			'snapshot-district-fill'
-		);
-	}
-
 	export function flyTo(lon: number, lat: number, z = 16) {
 		map?.flyTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), z), speed: 1.4 });
 	}
@@ -168,7 +135,10 @@
 			style: baseStyle(page.data.settings),
 			center,
 			zoom,
-			attributionControl: { compact: true },
+			attributionControl: {
+				compact: true,
+				customAttribution: `<a href="${page.data.settings?.source_code_url}" target="_blank" rel="noopener">Source (AGPL)</a> · <a href="/about">About</a>`
+			},
 			maxZoom: 20
 		});
 		map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), 'top-right');
@@ -231,7 +201,6 @@
 
 			ready = true;
 			applyEra();
-			applyOverlay();
 			refresh();
 		});
 	});
@@ -256,14 +225,6 @@
 		applySelection();
 	});
 
-	$effect(() => {
-		void overlay;
-		applyOverlay();
-	});
-
-	$effect(() => {
-		if (ready && map?.getLayer('overlay')) map.setPaintProperty('overlay', 'raster-opacity', overlayOpacity);
-	});
 </script>
 
 <div class="map-wrap">

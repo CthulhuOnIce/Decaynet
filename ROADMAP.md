@@ -47,14 +47,14 @@ Pick any address in Gary and any year since 1906, and see:
 
 ## Phase 2: Editor tooling for cross-referencing ✅ (first pass)
 
-- [x] Workbench: scanned-overlay georeferencing (4-corner pinning, move / rotate / scale)
-- [x] Blend, swipe and flicker (hold F) comparison of overlay vs. data
-- [x] Trace footprints / streets over an overlay with vertex snapping
+- [x] Workbench: session-only scan overlays (opened from disk, never uploaded) aligned by 4-corner pinning + move / rotate / scale
+- [x] Alignment files (export / re-load corner positions as JSON) and session XYZ tile layers
+- [x] Blend, swipe and flicker (hold F) comparison of the scan vs. data
+- [x] Trace footprints / streets over a scan with vertex snapping
 - [x] Area change tool (end everything inside a polygon at a date, with preview)
 - [x] GeoJSON import with per-feature date properties
-- [ ] Control-point georeferencing (≥ 6 GCPs, polynomial / thin-plate warp) to replace 4-corner pinning ⚑ (server-side GDAL vs. client-side warp)
-- [ ] Auto-tile large scans into XYZ/COG on upload (Supabase Edge Function + GDAL, or an external worker)
-- [ ] Overlay library page with coverage footprints per year
+- [ ] Control-point georeferencing (≥ 6 GCPs, polynomial / thin-plate warp) to replace 4-corner pinning ⚑ (client-side warp in WebGL)
+- [ ] Faster handling of very large scans in the browser (tiling in a web worker)
 - [ ] Split / merge / reshape existing geometries; "end this shape and start a new one" in one step
 - [ ] Snap to overlay edges (edge detection) and to OSM building footprints
 - [ ] Bulk occupancy import from city directories (CSV: year, name, address → occupancy relations via address matching)
@@ -71,7 +71,7 @@ The street grid, shoreline and river were not always where they are today. What 
 - [x] Basemap modes: fade with time / always / hidden (for eras when today's streets are misleading)
 - [x] Area retirement for clearances (Toll Road, urban renewal) → ghosts
 - [x] `replaced` relation (old street → highway, old building → successor)
-- [ ] **Layout epochs** ⚑: named, dated region-wide states (e.g. "1906 plat", "pre-Toll Road", "post-renewal") that bundle overlays + retired areas, so editors can switch whole eras
+- [ ] **Layout epochs** ⚑: named, dated region-wide states (e.g. "1906 plat", "pre-Toll Road", "post-renewal") that bundle retired areas and traced geometry, so editors can switch whole eras
 - [ ] Street segment model (intersections as nodes, segments as edges) so renumbering and partial vacations are exact
 - [ ] Historical address renumbering tables (old number → new number by date) feeding the address resolver
 - [ ] Parcel lineage (split / merge history) linked to buildings
@@ -84,7 +84,7 @@ The street grid, shoreline and river were not always where they are today. What 
 - [x] Spaces (storefronts, suites, halls, floors) as polygons inside footprints, validated to fit
 - [x] Tenants occupy spaces over time; spaces render with tenant labels at high zoom
 - [ ] Floor switcher on the map (show floor N) and multi-storey stacking
-- [ ] Floor plans as overlays per building (scan → pin inside footprint)
+- [ ] Trace floor plans into spaces from scans (session overlay pinned inside the footprint)
 - [ ] Residential units / apartment rosters from census and directories
 - [ ] "Who was here" vertical timeline for a building (all spaces × all tenants, Gantt-style)
 
@@ -92,11 +92,11 @@ The street grid, shoreline and river were not always where they are today. What 
 
 - [ ] Verify and cite every seed fact; replace approximate seed coordinates with traced footprints
 - [ ] Inventory Sanborn fire-insurance map holdings for Gary (Library of Congress, IU libraries, ProQuest): years, volumes, sheets
-- [ ] Georeference downtown Sanborn sheets for each available edition
+- [ ] Trace downtown footprints from each available Sanborn edition (session overlays in the workbench)
 - [ ] Polk / city directories: transcribe Broadway and 5th Ave occupants by decade
 - [ ] Calumet Regional Archives (IU Northwest): photo collections, oral histories, finding aids → sources
 - [ ] Post-Tribune and Gary American indexes for demolitions, fires, openings, closings
-- [ ] Aerial imagery series (USDA / USGS historical aerials) as overlays
+- [ ] Trace from historical aerial series (USDA / USGS) in the workbench
 - [ ] Neighborhood coverage: Downtown → Midtown → Emerson → Glen Park → Tolleston → Miller → Aetna → Brunswick
 - [ ] Demolition and vacancy datasets from the city (where public)
 
@@ -127,7 +127,7 @@ The street grid, shoreline and river were not always where they are today. What 
 
 ## Open questions
 
-- ⚑ **Georeferencing engine**: is 4-corner pinning good enough for Sanborn sheets (mostly orthogonal), or do we need GCP warping early? Proposal: 4-corner now, GCP + GDAL worker in Phase 2.
+- ⚑ **Georeferencing engine**: is 4-corner pinning good enough for Sanborn sheets (mostly orthogonal), or do we need GCP warping early? Proposal: 4-corner now, client-side GCP warp later. Scans stay session-only either way.
 - ⚑ **Layout epochs**: explicit epoch table vs. emergent from dated geometries. Leaning towards a thin `epochs` table (name, date range, area polygon, overlays) used only for navigation and bulk tooling, while facts stay the source of truth.
 - ⚑ **Raw IPs on tips**: default is salted hash. If an admin enables full IPs, add an automatic purge after 90 days?
 - ⚑ **Moderation of anonymous media**: rights are unverified; require a reviewer to set a rights statement before publishing?
@@ -143,3 +143,5 @@ The street grid, shoreline and river were not always where they are today. What 
 | 2026-11-01 | Tips are inserted only by the server (service role) so captcha, rate limits and IP policy can't be bypassed. |
 | 2026-11-01 | Building → space → tenant; spaces must fit inside the footprint (2 m tolerance). |
 | 2026-11-01 | Dropped shadcn-svelte adoption; keep the hand-rolled design system. |
+| 2026-11-01 | Overlays (scans, tile layers) are session-only drawing aids in the workbench, not stored or published. `map_layers` dropped. |
+| 2026-11-01 | Licensed AGPL-3.0-or-later; ship as a Docker image. |

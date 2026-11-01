@@ -93,7 +93,7 @@
 							<div><label for="nn">…or create a page</label><input id="nn" name="name" value={t.about_text ?? t.subject ?? ''} /></div>
 							<div>
 								<label for="nk">Kind</label>
-								<select id="nk" name="kind">{#each data.vocab.kinds as k (k.id)}<option value={k.id}>{k.label}</option>{/each}</select>
+								<select id="nk" name="kind">{#each data.vocab.kinds as k (k.id)}<option value={k.id} selected={k.id === 'building'}>{k.label}</option>{/each}</select>
 							</div>
 						</div>
 						<div><button>Create page & accept</button></div>
