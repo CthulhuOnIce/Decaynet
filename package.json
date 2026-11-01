@@ -1,0 +1,35 @@
+{
+  "name": "decaynet",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A time-machine map and regional wiki for Gary, Indiana: streets, buildings, occupants, media and events tracked over time.",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "prepare": "svelte-kit sync || echo ''",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "db:start": "supabase start",
+    "db:reset": "supabase db reset",
+    "db:types": "supabase gen types typescript --local > src/lib/database.types.ts"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-auto": "^6.1.1",
+    "@sveltejs/kit": "^2.70.3",
+    "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "@types/sanitize-html": "^2.16.0",
+    "supabase": "^2.122.0",
+    "svelte": "^5.57.3",
+    "svelte-check": "^4.7.8",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.7"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.118.0",
+    "maplibre-gl": "^5.24.0",
+    "marked": "^18.1.2",
+    "sanitize-html": "^2.18.1"
+  }
+}
