@@ -59,50 +59,87 @@ Also included:
 
 ## Quick start with Docker
 
-The default `docker-compose.yml` is **self-contained**: it runs Decaynet *and* a self-hosted Supabase (Postgres 17 + PostGIS, Auth, REST and Storage behind the Kong API gateway). No cloud accounts are needed.
+The default `docker-compose.yml` is **self-contained**: it runs Decaynet *and* a self-hosted Supabase (Postgres 17 + PostGIS, Auth, REST and Storage behind the Kong API gateway). It uses prebuilt images (`ghcr.io/cthulhuonice/decaynet`, `…/decaynet-migrate`, published by CI from `main`) and needs **no bind mounts, no build step and no extra files**, so it works the same from the command line or as a **Portainer** stack.
+
+### 1. Generate secrets (once per site)
+
+Run either of these, or open [`docs/generate-secrets.html`](docs/generate-secrets.html) in a browser (works offline):
 
 ```bash
-git clone https://github.com/CthulhuOnIce/Decaynet && cd Decaynet
-cp .env.example .env
-node docker/generate-secrets.mjs >> .env        # database password, JWT secret, API keys
-# (no Node? docker run --rm -v "$PWD":/w node:22-alpine node /w/docker/generate-secrets.mjs >> .env)
-
-docker compose up -d                            # first run builds the images
+docker run --rm ghcr.io/cthulhuonice/decaynet:latest generate-secrets
+# or, from a checkout:  node docker/generate-secrets.mjs
 ```
 
-Open **http://localhost:3000** and choose **Sign in → Create account**. **The first account becomes admin**, and a banner walks you through setup (see [Starting your own region](#starting-your-own-region)). Set `SEED=1` in `.env` before the first start if you want the Gary, Indiana demo data instead of an empty site.
+The output is `POSTGRES_PASSWORD`, `JWT_SECRET`, `ANON_KEY` and `SERVICE_ROLE_KEY` lines. Keep them private: the service-role key bypasses all access rules. Keep a copy too, because changing them later means resetting the database volume.
 
-| Service | What it is | Port |
-|---|---|---|
-| `app` | Decaynet (SvelteKit, adapter-node) | `3000` |
-| `kong` | Supabase API gateway; browsers call it for sign-in and uploads | `8000` |
-| `db` | Postgres 17 + PostGIS (Supabase image), data in the `db-data` volume | `127.0.0.1:5432` |
-| `auth`, `rest`, `storage` | Supabase Auth (GoTrue), PostgREST, Storage (files in the `storage-data` volume) | internal |
-| `migrate` | One-shot: applies `supabase/migrations` (and the demo seed if `SEED=1`), then exits | |
+### 2a. Deploy with Portainer
 
-The app waits for the migrator, the migrator waits for the database, Auth and Storage, and re-running `docker compose up` is safe: applied migrations are skipped.
+1. **Stacks → Add stack**, name it e.g. `decaynet`.
+2. Choose either:
+   - **Repository:** URL `https://github.com/CthulhuOnIce/Decaynet`, reference `refs/heads/main`, compose path `docker-compose.yml`. Portainer can re-pull and redeploy on updates.
+   - **Web editor:** paste the contents of [`docker-compose.yml`](docker-compose.yml).
+3. **Environment variables → Advanced mode**, then paste the secrets plus:
+   ```
+   ORIGIN=https://history.example.org          # public URL of the site (app, port 3000)
+   SUPABASE_PUBLIC_URL=https://api.history.example.org   # public URL of Supabase (kong, port 8000)
+   SEED=0                                      # 1 = load the Gary, Indiana demo
+   ```
+   For a quick local try, `http://<server-ip>:3000` and `http://<server-ip>:8000` work too.
+4. **Deploy the stack.** On first boot Postgres initialises (up to a few minutes on small machines), then Auth and Storage start, `migrate` applies the schema and **exits with code 0** (that's expected; it reruns harmlessly on every redeploy), and finally `app` and `kong` go healthy.
+5. Open the site, **Sign in → Create account**. **The first account becomes admin.**
+
+### 2b. Deploy from the command line
+
+```bash
+mkdir decaynet && cd decaynet
+curl -O https://raw.githubusercontent.com/CthulhuOnIce/Decaynet/main/docker-compose.yml
+docker run --rm ghcr.io/cthulhuonice/decaynet:latest generate-secrets > .env
+docker compose up -d                            # http://localhost:3000
+```
+
+To build the images from a checkout instead of pulling them:
+`docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`.
+
+### What runs
+
+| Service | What it is | Port | Health |
+|---|---|---|---|
+| `app` | Decaynet (SvelteKit, adapter-node) | `3000` | `/healthz` (app + database) |
+| `kong` | Supabase API gateway; browsers call it for sign-in and uploads | `8000` | `kong health` |
+| `db` | Postgres 17 + PostGIS (Supabase image), `db-data` volume | `127.0.0.1:5432` | `pg_isready` |
+| `auth` / `storage` | Supabase Auth (GoTrue) / Storage (`storage-data` volume) | internal | HTTP probes |
+| `rest` | PostgREST | internal | none: the image has no shell, so it shows as plain "Up" |
+| `migrate` | One-shot schema migrator (+ demo seed when `SEED=1`) | | exits 0 when done |
+
+Every health check probes `127.0.0.1`, not `localhost`: inside containers `localhost` can resolve to IPv6 `::1`, where these services don't listen, which used to leave the stack stuck as *unhealthy*. Generous start periods cover slow first boots.
 
 ### Production checklist
 
-- **Hostnames:** put both public URLs behind HTTPS (e.g. `https://history.example.org` → `app:3000` and `https://api.history.example.org` → `kong:8000`), then set `ORIGIN` and `SUPABASE_PUBLIC_URL` in `.env`. Browsers talk to Supabase directly for sign-in and uploads, so it needs its own public URL.
-- **Email:** set `SMTP_*` and `MAILER_AUTOCONFIRM=false` to send confirmation emails, password resets and magic links. Without SMTP, new accounts are confirmed immediately.
-- **Real visitor IPs for tips:** behind a reverse proxy, set `ADDRESS_HEADER=X-Forwarded-For` and `XFF_DEPTH=1` on the `app` service.
-- **Backups:** `docker compose exec db pg_dump -U postgres postgres > backup.sql`, plus the `storage-data` volume (uploaded media).
-- **Secrets:** keep `.env` private. `SERVICE_ROLE_KEY` bypasses row-level security.
-- **Uploads:** `BODY_SIZE_LIMIT` defaults to `25M` in the image; Storage accepts files up to 50 MB.
+- **Hostnames:** put both public URLs behind HTTPS (a reverse proxy such as Traefik, Caddy or Nginx Proxy Manager: `history.example.org` → `app:3000`, `api.history.example.org` → `kong:8000`), then set `ORIGIN` and `SUPABASE_PUBLIC_URL`. Browsers talk to Supabase directly for sign-in and uploads, so it needs its own public URL.
+- **Real visitor IPs for tips:** behind a reverse proxy, set `ADDRESS_HEADER=X-Forwarded-For` (and `XFF_DEPTH` to the number of proxies, default 1).
+- **Email:** set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL` and `MAILER_AUTOCONFIRM=false` for confirmation emails, password resets and magic links. Without SMTP, new accounts are confirmed immediately.
+- **Backups:** `docker exec <db-container> pg_dump -U postgres postgres > backup.sql`, plus the `storage-data` volume (uploaded media).
+- **Pin versions:** set `DECAYNET_IMAGE` / `DECAYNET_MIGRATE_IMAGE` to a tag such as `ghcr.io/cthulhuonice/decaynet:0.2.0` (or `:sha-…`) instead of `latest`.
 - **Basemap:** the default modern basemap is the public OpenStreetMap tile server, which is fine for light use. For real traffic, set your own tile URL in Site settings ([OSM tile policy](https://operations.osmfoundation.org/policies/tiles/)).
-- **Image registries:** Supabase images come from Supabase's mirror on `public.ecr.aws`. If Docker Hub rate-limits the Node/Postgres base images, set `NODE_IMAGE=public.ecr.aws/docker/library/node:22-alpine` and `PG_IMAGE=public.ecr.aws/docker/library/postgres:17-alpine` in `.env`.
-- **TLS-intercepting proxy** (corporate networks): build with `docker build --secret id=ca,src=/path/to/ca.pem .`
+- **Forks:** CI publishes to `ghcr.io/<your-account>/decaynet`. New GHCR packages may start **private**; make them public under *GitHub → Packages → Package settings*, or log Portainer in to `ghcr.io` (*Registries*). Then point `DECAYNET_IMAGE` / `DECAYNET_MIGRATE_IMAGE` at them.
+
+### Troubleshooting
+
+- **`migrate` shows "Exited (0)"**: normal. Non-zero means the schema failed to apply; check its logs.
+- **`app` unhealthy**: open `http://<host>:3000/healthz`. `db` in the JSON shows the database error, often a wrong `ANON_KEY`/`JWT_SECRET` pair (regenerate all four together).
+- **Pull errors for `ghcr.io/…`**: the package is private (see *Forks* above) or the CI workflow hasn't published yet; build locally with `docker-compose.build.yml` meanwhile.
+- **Docker Hub rate limits** when building: set `NODE_IMAGE=public.ecr.aws/docker/library/node:22-alpine` and `PG_IMAGE=public.ecr.aws/docker/library/postgres:17-alpine`. Supabase images already come from Supabase's `public.ecr.aws` mirror.
+- **TLS-intercepting proxy** when building: `docker build --secret id=ca,src=/path/to/ca.pem .`
 
 ### Using Supabase Cloud (or another existing Supabase) instead
 
-`docker-compose.external.yml` runs only the app and the migrator against a Supabase you already have:
+`docker-compose.external.yml` runs only the app (and an optional migrator) against a Supabase you already have. It also works in Portainer the same way:
 
 1. In Supabase, copy the project URL, `anon` key and `service_role` key (Project Settings → API), plus the Postgres connection string (Project Settings → Database). Add `https://YOUR-SITE/auth/callback` to Authentication → URL Configuration.
-2. Fill in the **External Supabase** section of `.env` (`PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL`, `ORIGIN`).
+2. Set `PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL` and `ORIGIN`.
 3. Run:
    ```bash
-   SEED=0 docker compose -f docker-compose.external.yml --profile tools run --rm migrate
+   docker compose -f docker-compose.external.yml --profile tools run --rm migrate
    docker compose -f docker-compose.external.yml up -d app
    ```
 
@@ -455,13 +492,16 @@ Almost everything is configured in the app: **Admin → Site settings** (identit
 
 | Variable | Purpose |
 |---|---|
-| `POSTGRES_PASSWORD`, `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY` | Generated by `docker/generate-secrets.mjs`; required |
+| `POSTGRES_PASSWORD`, `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY` | Required. Generate with `generate-secrets` (see Quick start) |
 | `ORIGIN` | Public URL of the site (default `http://localhost:3000`) |
 | `SUPABASE_PUBLIC_URL` | Public URL of the Supabase gateway (default `http://localhost:8000`) |
 | `SEED` | `1` loads the Gary demo into an empty database |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL`, `SMTP_SENDER_NAME`, `MAILER_AUTOCONFIRM` | Email for auth |
 | `PORT`, `KONG_HTTP_PORT`, `POSTGRES_HOST_PORT` | Published ports (3000 / 8000 / 5432) |
-| `NODE_IMAGE`, `PG_IMAGE`, `SUPABASE_*_IMAGE` | Override base and Supabase images |
+| `DECAYNET_IMAGE`, `DECAYNET_MIGRATE_IMAGE` | App / migrator images (default `ghcr.io/cthulhuonice/…:latest`) |
+| `SUPABASE_POSTGRES_IMAGE`, `SUPABASE_AUTH_IMAGE`, `SUPABASE_REST_IMAGE`, `SUPABASE_STORAGE_IMAGE`, `SUPABASE_KONG_IMAGE` | Override Supabase images |
+| `ADDRESS_HEADER`, `XFF_DEPTH` | Real client IPs behind a reverse proxy |
+| `NODE_IMAGE`, `PG_IMAGE` | Base images when building with `docker-compose.build.yml` |
 | `JWT_EXP` | Access-token lifetime in seconds (default 3600) |
 
 **External Supabase (`docker-compose.external.yml`, or `npm run dev`)**
@@ -478,11 +518,13 @@ Almost everything is configured in the app: **Admin → Site settings** (identit
 
 ```
 Dockerfile                       app image (adapter-node) + migration runner image
-docker-compose.yml               all-in-one: app + self-hosted Supabase (db, auth, rest, storage, kong)
+docker-compose.yml               all-in-one: app + self-hosted Supabase (Portainer-ready, no mounts/builds)
+docker-compose.build.yml         override to build the app/migrator images from this checkout
 docker-compose.external.yml      app + migrator against an existing Supabase
+.github/workflows/docker.yml     builds and publishes the images to GHCR (amd64 + arm64)
+docs/generate-secrets.html       offline, in-browser secrets generator
 docker/migrate.sh                idempotent migration runner (Supabase-compatible history)
 docker/generate-secrets.mjs      generates the database password, JWT secret and API keys
-docker/supabase/                 Kong routes and first-boot SQL for the bundled Supabase
 supabase/migrations/             0001 foundation · 0002 components · 0003 articles · 0004 systems
                                  0005 security/audit/storage · 0006 vocabulary · 0007 tags
                                  0008 permissions/settings · 0009 tips · 0010 spaces/layout tools

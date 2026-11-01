@@ -1,43 +1,42 @@
 # Decaynet against an EXTERNAL Supabase (Supabase Cloud, your own self-hosted
 # Supabase, or `npx supabase start`). For the all-in-one stack with Supabase
 # included, use docker-compose.yml instead.
+# Portainer-friendly: no build steps or bind mounts; settings come from
+# environment variables (Portainer stack variables, or a .env file for the CLI).
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-#   cp .env.example .env            # fill in the "External Supabase" section
-#   docker compose -f docker-compose.external.yml --profile tools run --rm migrate
-#   docker compose -f docker-compose.external.yml up -d app   # http://localhost:3000
+#   docker compose -f docker-compose.external.yml run --rm migrate   # apply schema
+#   docker compose -f docker-compose.external.yml up -d app          # http://localhost:3000
 
 services:
   app:
-    build:
-      context: .
-      target: runtime
-      args:
-        NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
-    image: decaynet:latest
-    env_file: .env
+    image: ${DECAYNET_IMAGE:-ghcr.io/cthulhuonice/decaynet:latest}
+    restart: unless-stopped
     environment:
-      # Public URL of the site. Required by SvelteKit's form CSRF protection.
       ORIGIN: ${ORIGIN:-http://localhost:3000}
-      # Behind a reverse proxy, uncomment so tips see the visitor's real IP:
-      # ADDRESS_HEADER: X-Forwarded-For
-      # XFF_DEPTH: "1"
+      PUBLIC_SUPABASE_URL: ${PUBLIC_SUPABASE_URL:?Set PUBLIC_SUPABASE_URL}
+      PUBLIC_SUPABASE_ANON_KEY: ${PUBLIC_SUPABASE_ANON_KEY:?Set PUBLIC_SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_INTERNAL_URL: ${SUPABASE_INTERNAL_URL:-}
+      ADDRESS_HEADER: ${ADDRESS_HEADER:-}
+      XFF_DEPTH: ${XFF_DEPTH:-1}
     ports:
       - "${PORT:-3000}:3000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
   migrate:
+    image: ${DECAYNET_MIGRATE_IMAGE:-ghcr.io/cthulhuonice/decaynet-migrate:latest}
     profiles: ["tools"]
-    build:
-      context: .
-      target: migrate
-      args:
-        PG_IMAGE: ${PG_IMAGE:-postgres:17-alpine}
-    image: decaynet-migrate:latest
     environment:
       DATABASE_URL: ${DATABASE_URL:-}   # the runner explains if it is missing
       SEED: ${SEED:-0}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: "no"

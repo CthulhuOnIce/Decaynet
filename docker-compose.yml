@@ -2,28 +2,48 @@
 # (Postgres + PostGIS, Auth, REST, Storage behind the Kong API gateway).
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-#   cp .env.example .env
-#   node docker/generate-secrets.mjs >> .env      # or see README for the docker one-liner
-#   docker compose up -d                          # http://localhost:3000
+# Self-contained on purpose so it works as a Portainer stack (web editor or
+# Git repository): no bind mounts, no build steps, no .env file required.
+# Every setting comes from environment variables (Portainer: "Environment
+# variables" on the stack; CLI: a .env file next to this one).
 #
-# Supabase's API is published on :8000 because browsers talk to it directly
-# (logins, uploads). Using Supabase Cloud instead? See docker-compose.external.yml.
-
-name: decaynet
-
-x-supabase-images:
-  # Supabase's own registry mirror (avoids Docker Hub rate limits). Override in .env if needed.
-  db: &db-image ${SUPABASE_POSTGRES_IMAGE:-public.ecr.aws/supabase/postgres:17.11.0.006}
-  auth: &auth-image ${SUPABASE_AUTH_IMAGE:-public.ecr.aws/supabase/gotrue:v2.197.0}
-  rest: &rest-image ${SUPABASE_REST_IMAGE:-public.ecr.aws/supabase/postgrest:v16.5}
-  storage: &storage-image ${SUPABASE_STORAGE_IMAGE:-public.ecr.aws/supabase/storage-api:v1.84.19}
-  kong: &kong-image ${SUPABASE_KONG_IMAGE:-public.ecr.aws/supabase/kong:2.8.1}
+#   Required: POSTGRES_PASSWORD, JWT_SECRET, ANON_KEY, SERVICE_ROLE_KEY
+#   (generate with: docker run --rm ghcr.io/cthulhuonice/decaynet:latest generate-secrets)
+#
+#   CLI:        docker compose up -d                       → http://localhost:3000
+#   Build locally instead of pulling images:
+#               docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# Browsers talk to Supabase directly (sign-in, uploads), so its gateway is
+# published on :8000 alongside the app on :3000.
 
 services:
   # ------------------------------------------------------------------ Supabase
   db:
-    image: *db-image
+    image: ${SUPABASE_POSTGRES_IMAGE:-public.ecr.aws/supabase/postgres:17.11.0.006}
     restart: unless-stopped
+    # Write the first-boot SQL (role passwords, JWT settings) from inside the
+    # container, then hand over to the image's normal entrypoint.
+    entrypoint:
+      - bash
+      - -c
+      - |
+        set -e
+        mkdir -p /docker-entrypoint-initdb.d/init-scripts
+        cat > /docker-entrypoint-initdb.d/init-scripts/99-roles.sql <<'SQL'
+        \set pgpass `echo "$$POSTGRES_PASSWORD"`
+        ALTER USER authenticator WITH PASSWORD :'pgpass';
+        ALTER USER supabase_auth_admin WITH PASSWORD :'pgpass';
+        ALTER USER supabase_storage_admin WITH PASSWORD :'pgpass';
+        SQL
+        cat > /docker-entrypoint-initdb.d/init-scripts/99-jwt.sql <<'SQL'
+        \set jwt_secret `echo "$$JWT_SECRET"`
+        \set jwt_exp `echo "$$JWT_EXP"`
+        ALTER DATABASE postgres SET "app.settings.jwt_secret" TO :'jwt_secret';
+        ALTER DATABASE postgres SET "app.settings.jwt_exp" TO :'jwt_exp';
+        SQL
+        exec docker-entrypoint.sh "$$@"
+      - --
     command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "log_min_messages=fatal"]
     environment:
       POSTGRES_HOST: /var/run/postgresql
@@ -31,25 +51,26 @@ services:
       POSTGRES_PORT: 5432
       PGDATABASE: postgres
       POSTGRES_DB: postgres
-      PGPASSWORD: ${POSTGRES_PASSWORD:?Run docker/generate-secrets.mjs first (see README)}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD - run generate-secrets, see README}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      JWT_SECRET: ${JWT_SECRET:?Run docker/generate-secrets.mjs first (see README)}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET - run generate-secrets, see README}
       JWT_EXP: ${JWT_EXP:-3600}
     volumes:
       - db-data:/var/lib/postgresql/data
-      - ./docker/supabase/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:ro
-      - ./docker/supabase/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:ro
     ports:
-      # Postgres for backups / psql, on localhost only. Remove if you don't need it.
+      # Postgres for backups / psql, on the host's loopback only
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
-      interval: 5s
+      # 127.0.0.1, not "localhost": inside containers localhost may resolve to ::1,
+      # where nothing listens, and the check would never pass.
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "127.0.0.1"]
+      interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 10
+      start_period: 180s
 
   auth:
-    image: *auth-image
+    image: ${SUPABASE_AUTH_IMAGE:-public.ecr.aws/supabase/gotrue:v2.197.0}
     restart: unless-stopped
     depends_on:
       db: { condition: service_healthy }
@@ -68,7 +89,7 @@ services:
       GOTRUE_JWT_EXP: ${JWT_EXP:-3600}
       GOTRUE_JWT_SECRET: ${JWT_SECRET}
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
-      # Without SMTP, accounts are confirmed immediately. Configure SMTP below for
+      # Without SMTP, accounts are confirmed immediately. Configure SMTP for
       # confirmation emails, password resets and magic links.
       GOTRUE_MAILER_AUTOCONFIRM: ${MAILER_AUTOCONFIRM:-true}
       GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-admin@example.org}
@@ -82,13 +103,14 @@ services:
       GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
-      interval: 5s
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:9999/health"]
+      interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 10
+      start_period: 60s
 
   rest:
-    image: *rest-image
+    image: ${SUPABASE_REST_IMAGE:-public.ecr.aws/supabase/postgrest:v16.5}
     restart: unless-stopped
     command: ["postgrest"]
     depends_on:
@@ -101,16 +123,18 @@ services:
       PGRST_DB_USE_LEGACY_GUCS: "false"
       PGRST_APP_SETTINGS_JWT_SECRET: ${JWT_SECRET}
       PGRST_APP_SETTINGS_JWT_EXP: ${JWT_EXP:-3600}
+    # (The PostgREST image has no shell or HTTP client, so it has no healthcheck;
+    #  Docker shows it as plain "Up". Its health is covered by the app's /healthz.)
 
   storage:
-    image: *storage-image
+    image: ${SUPABASE_STORAGE_IMAGE:-public.ecr.aws/supabase/storage-api:v1.84.19}
     restart: unless-stopped
     depends_on:
       db: { condition: service_healthy }
       rest: { condition: service_started }
     environment:
-      ANON_KEY: ${ANON_KEY:?Run docker/generate-secrets.mjs first (see README)}
-      SERVICE_KEY: ${SERVICE_ROLE_KEY:?Run docker/generate-secrets.mjs first (see README)}
+      ANON_KEY: ${ANON_KEY:?Set ANON_KEY - run generate-secrets, see README}
+      SERVICE_KEY: ${SERVICE_ROLE_KEY:?Set SERVICE_ROLE_KEY - run generate-secrets, see README}
       POSTGREST_URL: http://rest:3000
       PGRST_JWT_SECRET: ${JWT_SECRET}
       AUTH_JWT_SECRET: ${JWT_SECRET}
@@ -125,18 +149,20 @@ services:
     volumes:
       - storage-data:/var/lib/storage
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/status"]
-      interval: 5s
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:5000/status"]
+      interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 10
+      start_period: 60s
 
   kong:
-    image: *kong-image
+    image: ${SUPABASE_KONG_IMAGE:-public.ecr.aws/supabase/kong:2.8.1}
     restart: unless-stopped
     depends_on:
       auth: { condition: service_healthy }
       storage: { condition: service_healthy }
-    entrypoint: bash -c 'eval "echo \"$$(cat ~/temp.yml)\"" > ~/kong.yml && /docker-entrypoint.sh kong docker-start'
+    # The gateway's routes are below (KONG_YML); keys are filled in by Compose.
+    entrypoint: ["bash", "-c", "printf '%s\\n' \"$$KONG_YML\" > /home/kong/kong.yml && exec /docker-entrypoint.sh kong docker-start"]
     environment:
       KONG_DATABASE: "off"
       KONG_DECLARATIVE_CONFIG: /home/kong/kong.yml
@@ -144,21 +170,70 @@ services:
       KONG_PLUGINS: request-transformer,cors,key-auth,acl
       KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
       KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
-      SUPABASE_ANON_KEY: ${ANON_KEY}
-      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
-    volumes:
-      - ./docker/supabase/kong.yml:/home/kong/temp.yml:ro
+      KONG_YML: |
+        _format_version: '2.1'
+        _transform: true
+        consumers:
+          - username: anon
+            keyauth_credentials:
+              - key: ${ANON_KEY}
+          - username: service_role
+            keyauth_credentials:
+              - key: ${SERVICE_ROLE_KEY}
+        acls:
+          - consumer: anon
+            group: anon
+          - consumer: service_role
+            group: admin
+        services:
+          - name: auth-v1-open
+            url: http://auth:9999/verify
+            routes: [{ name: auth-v1-open, strip_path: true, paths: [/auth/v1/verify] }]
+            plugins: [{ name: cors }]
+          - name: auth-v1-open-callback
+            url: http://auth:9999/callback
+            routes: [{ name: auth-v1-open-callback, strip_path: true, paths: [/auth/v1/callback] }]
+            plugins: [{ name: cors }]
+          - name: auth-v1-open-authorize
+            url: http://auth:9999/authorize
+            routes: [{ name: auth-v1-open-authorize, strip_path: true, paths: [/auth/v1/authorize] }]
+            plugins: [{ name: cors }]
+          - name: auth-v1
+            url: http://auth:9999/
+            routes: [{ name: auth-v1-all, strip_path: true, paths: [/auth/v1/] }]
+            plugins:
+              - name: cors
+              - name: key-auth
+                config: { hide_credentials: false }
+              - name: acl
+                config: { hide_groups_header: true, allow: [admin, anon] }
+          - name: rest-v1
+            url: http://rest:3000/
+            routes: [{ name: rest-v1-all, strip_path: true, paths: [/rest/v1/] }]
+            plugins:
+              - name: cors
+              - name: key-auth
+                config: { hide_credentials: true }
+              - name: acl
+                config: { hide_groups_header: true, allow: [admin, anon] }
+          - name: storage-v1
+            url: http://storage:5000/
+            routes: [{ name: storage-v1-all, strip_path: true, paths: [/storage/v1/] }]
+            plugins: [{ name: cors }]
     ports:
       - "${KONG_HTTP_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
   # ------------------------------------------------------------------ Decaynet
   migrate:
-    build:
-      context: .
-      target: migrate
-      args:
-        PG_IMAGE: ${PG_IMAGE:-postgres:17-alpine}
-    image: decaynet-migrate:latest
+    # One-shot: applies the schema (and the demo data if SEED=1), then exits 0.
+    # Shows as "Exited (0)" afterwards; that's expected.
+    image: ${DECAYNET_MIGRATE_IMAGE:-ghcr.io/cthulhuonice/decaynet-migrate:latest}
     depends_on:
       db: { condition: service_healthy }
       auth: { condition: service_healthy }
@@ -169,27 +244,28 @@ services:
     restart: "no"
 
   app:
-    build:
-      context: .
-      target: runtime
-      args:
-        NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
-    image: decaynet:latest
+    image: ${DECAYNET_IMAGE:-ghcr.io/cthulhuonice/decaynet:latest}
     restart: unless-stopped
     depends_on:
       migrate: { condition: service_completed_successfully }
-      kong: { condition: service_started }
+      kong: { condition: service_healthy }
     environment:
       ORIGIN: ${ORIGIN:-http://localhost:3000}
       PUBLIC_SUPABASE_URL: ${SUPABASE_PUBLIC_URL:-http://localhost:8000}
       PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
       SUPABASE_INTERNAL_URL: http://kong:8000
-      # Behind a reverse proxy, uncomment so tips see the visitor's real IP:
-      # ADDRESS_HEADER: X-Forwarded-For
-      # XFF_DEPTH: "1"
+      # Behind a reverse proxy, set so tips see the visitor's real IP:
+      ADDRESS_HEADER: ${ADDRESS_HEADER:-}
+      XFF_DEPTH: ${XFF_DEPTH:-1}
     ports:
       - "${PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
 volumes:
   db-data:

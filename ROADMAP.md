@@ -168,4 +168,5 @@ The street grid, shoreline and river were not always where they are today. What 
 | 2026-11-01 | External data (OHM, Wikidata) is fetched live in the app and always previewed; imports fill gaps, never overwrite, and can be undone. No bundled data dumps. |
 | 2026-11-01 | Region-agnostic: no city in code or schema; Gary is an optional demo seed. Region, units, address format, language, bounds and vocabulary are site settings. |
 | 2026-11-01 | Private pages are enforced in the database (RLS on entities and every per-entity table), not in the UI; personalised API responses are never publicly cacheable. |
+| 2026-11-01 | Compose stack is Portainer-ready: no bind mounts or build steps; images published to GHCR by CI; health checks probe 127.0.0.1 with start periods. |
 | 2026-11-01 | `docker compose up` bundles a self-hosted Supabase (db, auth, rest, storage, kong); an external-Supabase compose file remains for Supabase Cloud. |

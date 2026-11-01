@@ -53,8 +53,13 @@ WORKDIR /app
 COPY --from=build --chown=node:node /app/build ./build
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package.json LICENSE ./
+# `docker run --rm <image> generate-secrets` prints fresh stack secrets (.env lines)
+COPY docker/generate-secrets.mjs /usr/local/lib/decaynet/generate-secrets.mjs
+RUN printf '#!/bin/sh\nexec node /usr/local/lib/decaynet/generate-secrets.mjs "$@"\n' > /usr/local/bin/generate-secrets \
+ && chmod +x /usr/local/bin/generate-secrets
 USER node
 EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+# 127.0.0.1 (not localhost, which may resolve to ::1 where nothing listens)
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
   CMD wget -qO- "http://127.0.0.1:${PORT}/healthz" >/dev/null || exit 1
 CMD ["node", "build"]
