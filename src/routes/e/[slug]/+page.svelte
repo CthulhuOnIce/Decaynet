@@ -24,6 +24,7 @@
 		goto(`?y=${y}`, { keepFocus: true, noScroll: true, replaceState: true });
 	}
 
+	const akas = $derived(snap.other_names.filter((n) => n.name.toLowerCase() !== e.name.toLowerCase()));
 	const sourceIndex = $derived(Object.fromEntries(data.sources.map((s, i) => [s.id, i + 1])));
 
 	// Group relations by their reading ("occupied by", "is on", ...), skipping media (gallery shows those)
@@ -62,10 +63,10 @@
 			<ConfidenceMark confidence={e.lifespan_confidence} />
 		</div>
 		<h1>{e.name}</h1>
-		{#if snap.other_names.length}
+		{#if akas.length}
 			<p class="aka muted">
 				Also recorded as
-				{#each snap.other_names.filter((n) => n.name !== e.name) as n, i (i)}
+				{#each akas as n, i (i)}
 					{i ? ' · ' : ''}<strong>{n.name}</strong>
 					<span class="date">{formatRange(n.valid_from, n.valid_from_precision, n.valid_to, n.valid_to_precision)}</span>
 				{/each}

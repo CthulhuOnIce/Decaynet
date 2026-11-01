@@ -21,6 +21,7 @@ Built with **SvelteKit 2 / Svelte 5**, **Supabase** (Postgres 17 + PostGIS, Auth
   - [Tracing from a scanned map (workbench)](#tracing-from-a-scanned-map-workbench)
   - [When a whole area's layout changed](#when-a-whole-areas-layout-changed)
   - [Importing GIS data](#importing-gis-data)
+  - [Starter pages from OpenHistoricalMap & Wikidata](#starter-pages-from-openhistoricalmap--wikidata)
   - [Anonymous tips](#anonymous-tips)
   - [Administration](#administration)
   - [Keeping quality up](#keeping-quality-up)
@@ -41,6 +42,7 @@ Built with **SvelteKit 2 / Svelte 5**, **Supabase** (Postgres 17 + PostGIS, Auth
 | ![A building page](docs/images/entity-page.png) | **A wiki page for everything**, with prose, a dated timeline of every fact, connections, tags, spaces and tenants, photos, footnoted sources and a "snapshot as of year X" box. |
 | ![Tenants inside buildings](docs/images/map-spaces.png) | **Real building footprints** with **spaces inside them** (storefronts, suites, halls). Tenants occupy spaces over time, and at high zoom the map labels each space with who was there that year. |
 | ![The workbench](docs/images/workbench-trace.png) | **Editor workbench.** Pin a scanned Sanborn sheet over the map for the session, compare it with the data, and trace footprints and streets from it. Also bulk tools for area changes and GeoJSON import. |
+| ![Import preview](docs/images/import-preview.png) | **Live import from OpenHistoricalMap and Wikidata.** Pick an area, fetch, and review a preview of every page that would be created or filled in before anything is written. |
 | ![The tip form](docs/images/tip-form.png) | **Anonymous tips.** Guests can send what they know, with optional photos and a map pin. Optional captcha, IP policy and rate limiting; editors review tips in a queue. |
 
 Also included:
@@ -250,6 +252,36 @@ The modern grid is a poor guide to the past. The lakefront was filled for the mi
 
 Bulk tools (area change and import) need the *Bulk map tools* permission.
 
+### Starter pages from OpenHistoricalMap & Wikidata
+
+Rather than copying data across by hand, **Import** (needs *Bulk map tools*) pulls features **live** from
+[OpenHistoricalMap](https://www.openhistoricalmap.org) and [Wikidata](https://www.wikidata.org) for an area you choose.
+OpenHistoricalMap supplies dated footprints, streets, rail and water through its public Overpass API. Wikidata supplies names, inception and demolition dates, NRHP numbers, architects, styles and aliases through its SPARQL service. Both are CC0.
+
+![Import preview: new pages and updates, on the map and in the list](docs/images/import-preview.png)
+
+1. **Pick an area:** *Use visible map area*, or *Draw a box* by clicking two corners. Keep it to a few blocks or a neighborhood (about 10 km across at most).
+2. **Choose sources and categories:** buildings (optionally including unnamed footprints), streets, railways, water, businesses, and neighborhoods/landmarks; Wikidata, optionally linking Commons images.
+3. **Fetch preview.** The server queries both services, then:
+   - **pairs them up:** an OHM feature tagged `wikidata=Q…`, a Wikidata point inside an OHM footprint, or a similar name close by. An unnamed OHM footprint can get its name from Wikidata this way.
+   - **groups** street segments that share a name into one street;
+   - **matches** each result against existing pages, by previous import ID, Wikidata ID, overlapping footprint, or a similar name nearby of a compatible kind.
+4. **Review.** Every row shows exactly what would happen:
+   - **new** (green): the page that would be created, with its dates, shape, names, attributes and tags;
+   - **update** (amber): only the *gaps* it would fill on an existing page (missing dates, a shape if the page has none, new names, attributes it lacks, tags, links). Existing facts are **never overwritten**;
+   - **up to date** (grey): already imported, nothing to add.
+
+   You can rename, change the kind, switch a row between create, update and skip, opt into adding a second shape, filter, and click ⌖ to see a feature on the map.
+
+   ![Updates only fill gaps](docs/images/import-preview-updates.png)
+5. **Apply.** After a confirmation, everything is written in one transaction. Each fact is cited to an auto-created source ("OpenHistoricalMap, retrieved DATE" / "Wikidata, retrieved DATE"), and each page keeps a link to its OHM element or Wikidata item, so the next import recognises it instead of duplicating it.
+6. **Undo** (moderators): *Recent imports* can delete the pages an import created. Additions it made to existing pages stay, and show up in the change log.
+
+Notes:
+- An OHM `end_date` sets the end of the page's lifespan, which turns it into a ghost on the map. It does **not** add a "demolished" condition, because the source doesn't say how something ended.
+- OHM's public Overpass server allows only a couple of queries at a time per IP. The app retries politely, and re-previewing the same area within 10 minutes reuses the fetched data (matching is always re-run).
+- Both services ask for a descriptive User-Agent; the app sends your site name and source URL.
+
 ### Anonymous tips
 
 | Guest | Reviewer |
@@ -369,6 +401,7 @@ Key RPCs:
 | `search_entities(q)` | Fuzzy search across current and historic names |
 | `building_spaces(id, at)` / `add_space(...)` | Spaces and tenants of a building / validated space creation |
 | `entities_in_area(...)` / `retire_area(...)` / `import_features(...)` | Workbench bulk tools |
+| `match_import_candidates(...)` / `apply_import(...)` / `undo_import(...)` | OHM / Wikidata import: match, apply a reviewed plan, undo |
 | `save_article(...)` / `set_article_status(...)` | Atomic revision + status transitions |
 
 ---
@@ -400,13 +433,14 @@ docker/migrate.sh                idempotent migration runner (Supabase-compatibl
 supabase/migrations/             0001 foundation · 0002 components · 0003 articles · 0004 systems
                                  0005 security/audit/storage · 0006 vocabulary · 0007 tags
                                  0008 permissions/settings · 0009 tips · 0010 spaces/layout tools
-                                 0011 session-only overlays + source link
+                                 0011 session-only overlays + source link · 0012 external ids & import
 supabase/seed.sql                Gary demo data
 src/lib/map/style.ts             MapLibre layers for snapshots, ghosts, spaces, moments
 src/lib/components/              TimeMachineMap, YearSlider, EntityPanel, Timeline, MiniMap,
                                  GeometryPicker, EntityPicker, TemporalFields, TagSelect, TagChips…
 src/lib/server/                  db helpers, forms, markdown, service client, tips (captcha/IP)
-src/routes/                      pages, /api endpoints, /workbench, /tip(s), /admin
+src/lib/server/importers/        OpenHistoricalMap (Overpass) + Wikidata (SPARQL) fetch, combine, match, plan
+src/routes/                      pages, /api endpoints, /workbench, /import, /tip(s), /admin
 docs/images/                     screenshots used in this README
 ROADMAP.md                       long-horizon tracker
 ```
@@ -445,4 +479,4 @@ This program is free software: you can redistribute it and/or modify it under th
 
 **If you run Decaynet for others over a network, AGPL §13 requires you to offer them the source of the version you run.** The site footer, the About page and the map attribution link to the **Source code URL** in *Admin → Site settings*. If you modify the code, point that URL at your fork.
 
-Content contributed to a Decaynet site (articles, facts, media) is separate from the software and is governed by that site's own terms. Map data © OpenStreetMap contributors (ODbL) where the modern basemap is shown.
+Content contributed to a Decaynet site (articles, facts, media) is separate from the software and is governed by that site's own terms. Map data © OpenStreetMap contributors (ODbL) where the modern basemap is shown. Imported OpenHistoricalMap and Wikidata data is CC0. Linked Wikimedia Commons images keep their own licenses.

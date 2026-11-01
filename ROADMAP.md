@@ -62,6 +62,18 @@ Pick any address in Gary and any year since 1906, and see:
 - [ ] Export: GeoJSON / CSV per year or per area; full data dump for researchers
 - [ ] Undo for bulk operations (change-log based revert)
 
+## Phase 2b: External sources
+
+- [x] Live import from OpenHistoricalMap (Overpass) and Wikidata (SPARQL) for a chosen area
+- [x] Pairing OHM features with Wikidata items (wikidata tag, point-in-footprint, name + distance)
+- [x] Matching against existing pages (external ids, Wikidata id, footprint overlap, compatible-kind name match)
+- [x] Full preview with per-row actions; gap-filling merges that never overwrite; citations per import; undo
+- [ ] Re-sync: re-preview previously imported areas and show what changed upstream
+- [ ] OpenStreetMap (present-day) import for current footprints and addresses
+- [ ] Wikidata: people and organizations connected to imported places (architects, occupants, owners) as linked pages
+- [ ] Chronicling America / newspaper search links for imported places
+- [ ] Write-back helpers: export new dated footprints in OHM-ready form for contributors who also map there
+
 ## Phase 3: Layout through time
 
 The street grid, shoreline and river were not always where they are today. What exists so far, and what's next:
@@ -145,3 +157,4 @@ The street grid, shoreline and river were not always where they are today. What 
 | 2026-11-01 | Dropped shadcn-svelte adoption; keep the hand-rolled design system. |
 | 2026-11-01 | Overlays (scans, tile layers) are session-only drawing aids in the workbench, not stored or published. `map_layers` dropped. |
 | 2026-11-01 | Licensed AGPL-3.0-or-later; ship as a Docker image. |
+| 2026-11-01 | External data (OHM, Wikidata) is fetched live in the app and always previewed; imports fill gaps, never overwrite, and can be undone. No bundled data dumps. |

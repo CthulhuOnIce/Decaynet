@@ -20,6 +20,7 @@
 		[
 			can('review_tips') && { href: '/tips', label: 'Tips', badge: data.openTips },
 			(can('bulk_edit') || can('edit_content')) && { href: '/workbench', label: 'Workbench' },
+			can('bulk_edit') && { href: '/import', label: 'Import' },
 			(can('manage_users') || can('manage_settings')) && { href: '/admin', label: 'Admin' }
 		].filter(Boolean) as { href: string; label: string; badge?: number }[]
 	);
