@@ -20,7 +20,7 @@
 	}
 </script>
 
-<svelte:head><title>Add media · Decaynet</title></svelte:head>
+<svelte:head><title>Add media · {data.settings.site_name}</title></svelte:head>
 
 <div class="page narrow">
 	<h1>Add media</h1>
@@ -80,7 +80,7 @@
 		<div class="fields">
 			<div style="grid-column: span 2">
 				<label for="title">Title</label>
-				<input id="title" name="title" bind:value={title} required placeholder="Broadway looking north from 7th Ave" />
+				<input id="title" name="title" bind:value={title} required placeholder="Main Street looking north from 7th Ave" />
 			</div>
 			<div>
 				<label for="mt">Type</label>

@@ -29,7 +29,7 @@
 	}
 </script>
 
-<svelte:head><title>Editing {data.entity.name} · Decaynet</title></svelte:head>
+<svelte:head><title>Editing {data.entity.name} · {data.settings.site_name}</title></svelte:head>
 
 <div class="page narrow">
 	<div class="eyebrow">Editing article</div>

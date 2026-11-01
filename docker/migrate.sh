@@ -52,4 +52,6 @@ if [ "${SEED:-0}" = "1" ]; then
     echo "→ Seed skipped: database already has $count entities."
   fi
 fi
+# Make PostgREST pick up new tables and functions immediately
+$PSQL -c "NOTIFY pgrst, 'reload schema'" >/dev/null 2>&1 || true
 echo "✓ Done."

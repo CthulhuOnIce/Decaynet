@@ -24,7 +24,7 @@
 	};
 </script>
 
-<svelte:head><title>Browse · Decaynet</title></svelte:head>
+<svelte:head><title>Browse · {data.settings.site_name}</title></svelte:head>
 
 <div class="page">
 	<div class="spread">

@@ -3,7 +3,7 @@
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import { enhance } from '$app/forms';
 	import type { GeoJSONSource, Map as MLMap } from 'maplibre-gl';
-	import { baseStyle, snapshotLayers } from '$lib/map/style';
+	import { baseStyle, mapView, snapshotLayers } from '$lib/map/style';
 	import { can } from '$lib/perms';
 	import { yearToDate } from '$lib/time';
 	import type { ImportOptions, PlanAction, PlanItem, PreviewResult } from '$lib/importTypes';
@@ -173,8 +173,7 @@
 		map = new maplibregl.Map({
 			container: mapEl,
 			style: baseStyle(data.settings),
-			center: [data.settings.map_center_lon, data.settings.map_center_lat],
-			zoom: Math.max(14, data.settings.map_zoom),
+			...mapView(data.settings),
 			attributionControl: { compact: true, customAttribution: 'Previews: © OpenHistoricalMap contributors (CC0), Wikidata (CC0)' }
 		});
 		map.addControl(new maplibregl.NavigationControl(), 'top-right');

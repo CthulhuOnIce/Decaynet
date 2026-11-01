@@ -5,7 +5,7 @@ import { cached } from './cache';
 import { buildOverpassQuery, fetchOhm, normalizeOhm } from './ohm';
 import { fetchWikidataBox, fetchWikidataItems, normalizeWikidata } from './wikidata';
 
-export const MAX_SPAN_DEG = 0.12; // ≈ 10 km × 13 km at Gary's latitude
+export const MAX_SPAN_DEG = 0.12; // ≈ 13 km north–south; less east–west away from the equator
 
 // ----------------------------------------------------------------------------- geometry helpers
 
@@ -142,8 +142,17 @@ const shapeLabel = (c: Candidate) => {
 	return d === 2 ? 'footprint' : d === 1 ? 'line' : d === 0 ? 'point' : 'no location';
 };
 
-function planItem(c: Candidate, m: MatchInfo | null): PlanItem {
-	const changes: string[] = [];
+/** Sources sometimes contradict themselves; never let that block an import. */
+function sanitize(c: Candidate): Candidate {
+	if (c.exists_from && c.exists_to && c.exists_to < c.exists_from) {
+		return { ...c, exists_to: null, issues: [...(c.issues ?? []), `⚠ end ${c.exists_to.slice(0, 4)} is before start ${c.exists_from.slice(0, 4)}: end ignored`] };
+	}
+	return c;
+}
+
+function planItem(raw: Candidate, m: MatchInfo | null): PlanItem {
+	const c = sanitize(raw);
+	const changes: string[] = [...(c.issues ?? [])];
 	const src = c.origin === 'both' ? 'OHM + Wikidata' : c.origin === 'ohm' ? 'OHM' : 'Wikidata';
 	if (!m) {
 		changes.push(`new ${c.kind} from ${src}`);
@@ -169,19 +178,21 @@ function planItem(c: Candidate, m: MatchInfo | null): PlanItem {
 	const newExt = c.ext.filter((e) => !m.ext.includes(`${e.source}:${e.id}`));
 	if (newExt.length) changes.push(`+ link ${newExt.map((e) => (e.source === 'ohm' ? 'OHM ' : '') + e.id).slice(0, 2).join(', ')}${newExt.length > 2 ? '…' : ''}`);
 	if (c.image_url) changes.push('+ Commons image link');
-	const meaningful = changes.filter((x) => !x.startsWith('+ link')).length > 0;
+	const meaningful = changes.filter((x) => !x.startsWith('+ link') && !x.startsWith('⚠')).length > 0;
 	return { key: c.key, candidate: c, match: m, action: meaningful ? 'merge' : 'skip', changes: changes.length ? changes : ['already up to date'], addShape };
 }
 
 // ----------------------------------------------------------------------------- entry point
 
-export async function buildPreview(sb: SupabaseClient, opts: ImportOptions, userAgent: string): Promise<PreviewResult> {
+export async function buildPreview(sb: SupabaseClient, opts: ImportOptions, userAgent: string, lang = 'en'): Promise<PreviewResult> {
 	const [w, s, e, n] = opts.bbox;
 	if (![w, s, e, n].every(Number.isFinite) || e <= w || n <= s) throw new Error('Pick an area on the map first.');
 	if (e - w > MAX_SPAN_DEG || n - s > MAX_SPAN_DEG)
 		throw new Error('That area is too large for one import. Zoom in to a neighborhood or a few blocks at a time.');
 
 	const warnings: string[] = [];
+	const { data: hk } = await sb.from('attribute_keys').select('unit').eq('id', 'height').maybeSingle();
+	const heightUnit: string | null = hk?.unit ?? 'm';
 	let ohm: Candidate[] = [];
 	let wd: Candidate[] = [];
 
@@ -193,13 +204,13 @@ export async function buildPreview(sb: SupabaseClient, opts: ImportOptions, user
 				fetchOhm({ ...opts.ohm, unnamedBuildings: true }, opts.bbox, userAgent)
 			).then(({ elements, remark }) => {
 				if (remark) warnings.push(`OpenHistoricalMap: ${remark}`);
-				ohm = normalizeOhm(elements);
+				ohm = normalizeOhm(elements, lang, heightUnit);
 			}).catch((err) => void warnings.push(`OpenHistoricalMap fetch failed: ${(err as Error).message}`))
 		);
 	}
 	if (opts.wikidata.enabled) {
 		tasks.push(
-			cached(`wd:${opts.bbox.join(',')}`, () => fetchWikidataBox(opts.bbox, userAgent))
+			cached(`wd:${lang}:${opts.bbox.join(',')}`, () => fetchWikidataBox(opts.bbox, userAgent, lang))
 				.then((rows) => void (wd = normalizeWikidata(rows, opts.wikidata)))
 				.catch((err) => void warnings.push(`Wikidata fetch failed: ${(err as Error).message}`))
 		);
@@ -212,7 +223,7 @@ export async function buildPreview(sb: SupabaseClient, opts: ImportOptions, user
 		const missing = [...new Set(ohm.map((c) => c.wikidata).filter((q): q is string => !!q && !have.has(q)))].slice(0, 200);
 		if (missing.length) {
 			try {
-				wd.push(...normalizeWikidata(await fetchWikidataItems(missing, userAgent), opts.wikidata));
+				wd.push(...normalizeWikidata(await fetchWikidataItems(missing, userAgent, lang), opts.wikidata));
 			} catch (err) {
 				warnings.push(`Wikidata enrichment failed: ${(err as Error).message}`);
 			}
@@ -265,7 +276,7 @@ export function toApplyPayload(items: PlanItem[], bbox: number[], kinds: Set<str
 	const out = items
 		.filter((i) => i.action === 'create' || i.action === 'merge')
 		.map((i) => {
-			const c = i.candidate;
+			const c = sanitize(i.candidate);
 			if (!kinds.has(c.kind)) throw new Error(`Unknown kind “${c.kind}” for ${c.name}`);
 			if (i.action === 'merge' && !i.match?.entity_id) throw new Error(`Nothing to merge “${c.name}” into`);
 			const includeShape = i.action === 'create' ? !!c.geometry : i.addShape && !!c.geometry;
@@ -297,7 +308,8 @@ export function toApplyPayload(items: PlanItem[], bbox: number[], kinds: Set<str
 				attributes: c.attributes,
 				tags: c.tags,
 				ext: c.ext,
-				image_url: c.image_url
+				image_url: c.image_url,
+				event_type: c.event_type ?? null
 			};
 		});
 	return { sources: [...sources], bbox, items: out };

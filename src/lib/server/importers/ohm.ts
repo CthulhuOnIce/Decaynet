@@ -160,8 +160,9 @@ function tagSlugs(t: Record<string, string>): string[] {
 	return [...out];
 }
 
-function nameOf(t: Record<string, string>): string | null {
+function nameOf(t: Record<string, string>, lang: string): string | null {
 	if (t.name) return t.name;
+	if (t[`name:${lang}`]) return t[`name:${lang}`];
 	if (t['name:en']) return t['name:en'];
 	if (t['addr:housenumber'] && t['addr:street']) return `${t['addr:housenumber']} ${t['addr:street']}`;
 	return null;
@@ -174,7 +175,11 @@ const SHOP_LABEL = (t: Record<string, string>) => {
 
 // ----------------------------------------------------------------------------- normalize
 
-export function normalizeOhm(elements: OverpassElement[]): Candidate[] {
+/** OSM heights are metres; store them in whatever unit this site's "height" attribute uses. */
+const toHeightUnit = (metres: number, unit: string | null) =>
+	/^(ft|feet|foot)$/i.test(unit ?? '') ? Math.round(metres * 3.28084) : Math.round(metres * 10) / 10;
+
+export function normalizeOhm(elements: OverpassElement[], lang = 'en', heightUnit: string | null = 'm'): Candidate[] {
 	const out: Candidate[] = [];
 	for (const el of elements) {
 		const t = el.tags ?? {};
@@ -183,7 +188,7 @@ export function normalizeOhm(elements: OverpassElement[]): Candidate[] {
 		if (!cls || !geometry) continue;
 		const from = parseOsmDate(t['start_date:edtf'] ?? t.start_date);
 		const to = parseOsmDate(t['end_date:edtf'] ?? t.end_date);
-		const name = nameOf(t);
+		const name = nameOf(t, lang);
 		const label = SHOP_LABEL(t);
 		const unnamed = !name;
 		const fallback =
@@ -193,13 +198,15 @@ export function normalizeOhm(elements: OverpassElement[]): Candidate[] {
 					? `Unnamed ${label && label !== 'building' ? label + ' ' : ''}building`
 					: `Unnamed ${cls.kind}`;
 		const names: Candidate['names'] = [];
+		const localized = t[`name:${lang}`];
+		if (localized && name && localized !== name) names.push({ name: localized, name_type: 'alternate', source: 'ohm' });
 		for (const [k, type] of [['old_name', 'historic'], ['alt_name', 'alternate'], ['official_name', 'official'], ['loc_name', 'common']] as const)
 			for (const v of (t[k] ?? '').split(';').map((x) => x.trim()).filter(Boolean)) names.push({ name: v, name_type: type, source: 'ohm' });
 
 		const attributes: Candidate['attributes'] = [];
 		if (t['building:levels'] && Number.isFinite(+t['building:levels'])) attributes.push({ key: 'floors', value: +t['building:levels'], source: 'ohm' });
 		if (t.architect) attributes.push({ key: 'architect', value: t.architect, source: 'ohm' });
-		if (t.height && Number.isFinite(parseFloat(t.height))) attributes.push({ key: 'height', value: Math.round(parseFloat(t.height) * 3.28084), source: 'ohm' });
+		if (t.height && Number.isFinite(parseFloat(t.height))) attributes.push({ key: 'height', value: toHeightUnit(parseFloat(t.height), heightUnit), source: 'ohm' });
 		if (t['building:material']) attributes.push({ key: 'material', value: t['building:material'], source: 'ohm' });
 		if (t.ref && (cls.kind === 'infrastructure' || cls.kind === 'street')) attributes.push({ key: 'route_designation', value: t.ref, source: 'ohm' });
 		if (t.website) attributes.push({ key: 'website', value: t.website, source: 'ohm' });

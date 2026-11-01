@@ -9,7 +9,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	]);
 
 	const { data: settings } = await locals.supabase.from('site_settings').select('min_year').single();
-	const minYear: number = Math.min(extent.data?.min_year ?? 1890, settings?.min_year ?? 1890);
+	const minYear: number = Math.min(extent.data?.min_year ?? 1800, settings?.min_year ?? 1800);
 	const maxYear: number = extent.data?.max_year ?? new Date().getFullYear();
 
 	// Histogram of "things happening" per year for the slider

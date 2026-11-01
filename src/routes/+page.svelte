@@ -11,7 +11,7 @@
 
 	let { data } = $props();
 
-	// ---- state, seeded from a shareable URL: /?y=1955&sel=<uuid>&c=-87.33,41.60,15
+	// ---- state, seeded from a shareable URL: /?y=1955&sel=<uuid>&c=<lon>,<lat>,<zoom>
 	const params = page.url.searchParams;
 	let year = $state(
 		untrack(() => Math.max(data.minYear, Math.min(data.maxYear, Number(params.get('y')) || data.settings.default_year)))

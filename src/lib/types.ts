@@ -337,6 +337,12 @@ export interface SiteSettings {
 	tips_captcha_site_key: string | null;
 	tips_rate_limit_per_hour: number;
 	source_code_url: string;
+	units: 'metric' | 'imperial';
+	address_format: 'number_street' | 'street_number';
+	content_language: string;
+	/** [west, south, east, north] or null for the whole world */
+	map_bounds: [number, number, number, number] | null;
+	setup_complete: boolean;
 	updated_at: string;
 }
 

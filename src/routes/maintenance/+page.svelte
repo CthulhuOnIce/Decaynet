@@ -7,7 +7,7 @@
 	const statusOf = (id: string | null) => data.vocab.articleStatuses.find((s) => s.id === id);
 </script>
 
-<svelte:head><title>Maintenance · Decaynet</title></svelte:head>
+<svelte:head><title>Maintenance · {data.settings.site_name}</title></svelte:head>
 
 <div class="page">
 	<h1>Maintenance</h1>

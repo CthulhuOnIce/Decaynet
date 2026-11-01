@@ -1,6 +1,6 @@
 # Decaynet
 
-**A time-machine map and community wiki for Gary, Indiana and the Calumet Region.**
+**A time-machine map and community wiki for any place's history.** It was built for Gary, Indiana and the Calumet Region (the demo data), but you can run one for Detroit, a whole country, or the world.
 Drag a slider from 1890 to today and watch streets get laid out, buildings rise, change hands, empty out, burn and disappear. Every place, person, business, photo and event is a wiki page, and every fact on it has a date, a confidence level and a source.
 
 ![The time-machine map in 1955, with City Methodist Church selected](docs/images/map-1955.png)
@@ -14,6 +14,7 @@ Built with **SvelteKit 2 / Svelte 5**, **Supabase** (Postgres 17 + PostGIS, Auth
 - [What it does](#what-it-does)
 - [Quick start with Docker](#quick-start-with-docker)
 - [Local development](#local-development)
+- [Starting your own region](#starting-your-own-region)
 - [Guides](#guides)
   - [Reading the map](#reading-the-map)
   - [Adding and editing pages](#adding-and-editing-pages)
@@ -57,68 +58,54 @@ Also included:
 
 ## Quick start with Docker
 
-Decaynet is one container (the SvelteKit app) plus a Supabase project. Supabase provides Postgres + PostGIS, Auth and Storage. You can use **Supabase Cloud**, **self-hosted Supabase**, or the **Supabase CLI** on your machine.
-
-### 1. Get a Supabase project
-
-<details open>
-<summary><b>Option A: Supabase Cloud</b></summary>
-
-1. Create a project at [supabase.com](https://supabase.com).
-2. From **Project Settings → API**, copy the project URL, the `anon` key and the `service_role` key.
-3. From **Project Settings → Database**, copy the connection string (use the *session* pooler or direct connection).
-4. In **Authentication → URL Configuration**, add `https://YOUR-SITE/auth/callback` to the redirect URLs.
-
-</details>
-
-<details>
-<summary><b>Option B: Supabase on your machine (CLI)</b></summary>
+The default `docker-compose.yml` is **self-contained**: it runs Decaynet *and* a self-hosted Supabase (Postgres 17 + PostGIS, Auth, REST and Storage behind the Kong API gateway). No cloud accounts are needed.
 
 ```bash
-npm install            # installs the Supabase CLI locally
-npx supabase start     # Postgres+PostGIS, Auth, Storage in Docker; applies migrations + demo data
-npx supabase status    # prints the URL and keys
-```
-
-Use `http://host.docker.internal:54321` as `SUPABASE_INTERNAL_URL` so the container can reach it, and
-`postgresql://postgres:postgres@host.docker.internal:54322/postgres` as `DATABASE_URL`.
-
-</details>
-
-### 2. Configure
-
-```bash
+git clone https://github.com/CthulhuOnIce/Decaynet && cd Decaynet
 cp .env.example .env
+node docker/generate-secrets.mjs >> .env        # database password, JWT secret, API keys
+# (no Node? docker run --rm -v "$PWD":/w node:22-alpine node /w/docker/generate-secrets.mjs >> .env)
+
+docker compose up -d                            # first run builds the images
 ```
 
-Fill in `PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ORIGIN` (the public URL of your site) and `DATABASE_URL`. See the [configuration reference](#configuration-reference).
+Open **http://localhost:3000** and choose **Sign in → Create account**. **The first account becomes admin**, and a banner walks you through setup (see [Starting your own region](#starting-your-own-region)). Set `SEED=1` in `.env` before the first start if you want the Gary, Indiana demo data instead of an empty site.
 
-### 3. Create the schema, then start the app
+| Service | What it is | Port |
+|---|---|---|
+| `app` | Decaynet (SvelteKit, adapter-node) | `3000` |
+| `kong` | Supabase API gateway; browsers call it for sign-in and uploads | `8000` |
+| `db` | Postgres 17 + PostGIS (Supabase image), data in the `db-data` volume | `127.0.0.1:5432` |
+| `auth`, `rest`, `storage` | Supabase Auth (GoTrue), PostgREST, Storage (files in the `storage-data` volume) | internal |
+| `migrate` | One-shot: applies `supabase/migrations` (and the demo seed if `SEED=1`), then exits | |
 
-```bash
-# Apply database migrations (SEED=1 also loads the Gary demo data into an empty database)
-SEED=1 docker compose --profile tools run --rm migrate
+The app waits for the migrator, the migrator waits for the database, Auth and Storage, and re-running `docker compose up` is safe: applied migrations are skipped.
 
-# Build and start the app on http://localhost:3000
-docker compose up -d app
-```
+### Production checklist
 
-The migration runner is idempotent and records versions in the same table the Supabase CLI uses, so `supabase db push` and the container can be mixed. It only works against a **Supabase** database, because it needs the `auth` and `storage` schemas.
+- **Hostnames:** put both public URLs behind HTTPS (e.g. `https://history.example.org` → `app:3000` and `https://api.history.example.org` → `kong:8000`), then set `ORIGIN` and `SUPABASE_PUBLIC_URL` in `.env`. Browsers talk to Supabase directly for sign-in and uploads, so it needs its own public URL.
+- **Email:** set `SMTP_*` and `MAILER_AUTOCONFIRM=false` to send confirmation emails, password resets and magic links. Without SMTP, new accounts are confirmed immediately.
+- **Real visitor IPs for tips:** behind a reverse proxy, set `ADDRESS_HEADER=X-Forwarded-For` and `XFF_DEPTH=1` on the `app` service.
+- **Backups:** `docker compose exec db pg_dump -U postgres postgres > backup.sql`, plus the `storage-data` volume (uploaded media).
+- **Secrets:** keep `.env` private. `SERVICE_ROLE_KEY` bypasses row-level security.
+- **Uploads:** `BODY_SIZE_LIMIT` defaults to `25M` in the image; Storage accepts files up to 50 MB.
+- **Basemap:** the default modern basemap is the public OpenStreetMap tile server, which is fine for light use. For real traffic, set your own tile URL in Site settings ([OSM tile policy](https://operations.osmfoundation.org/policies/tiles/)).
+- **Image registries:** Supabase images come from Supabase's mirror on `public.ecr.aws`. If Docker Hub rate-limits the Node/Postgres base images, set `NODE_IMAGE=public.ecr.aws/docker/library/node:22-alpine` and `PG_IMAGE=public.ecr.aws/docker/library/postgres:17-alpine` in `.env`.
+- **TLS-intercepting proxy** (corporate networks): build with `docker build --secret id=ca,src=/path/to/ca.pem .`
 
-### 4. Create the first account
+### Using Supabase Cloud (or another existing Supabase) instead
 
-Open the site and choose **Sign in → Create account**. **The first account becomes admin.** Then open **Admin → Site settings** to name the site, centre the map and configure tips.
+`docker-compose.external.yml` runs only the app and the migrator against a Supabase you already have:
 
-### Production notes
+1. In Supabase, copy the project URL, `anon` key and `service_role` key (Project Settings → API), plus the Postgres connection string (Project Settings → Database). Add `https://YOUR-SITE/auth/callback` to Authentication → URL Configuration.
+2. Fill in the **External Supabase** section of `.env` (`PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL`, `ORIGIN`).
+3. Run:
+   ```bash
+   SEED=0 docker compose -f docker-compose.external.yml --profile tools run --rm migrate
+   docker compose -f docker-compose.external.yml up -d app
+   ```
 
-- **Reverse proxy / HTTPS:** set `ORIGIN=https://your-domain`. To give tips the visitor's real IP, set `ADDRESS_HEADER=X-Forwarded-For` and `XFF_DEPTH=1` (commented out in `docker-compose.yml`).
-- **Uploads:** the image sets `BODY_SIZE_LIMIT=25M` so tips with photos and GeoJSON imports fit. Raise it if you import large files.
-- **Health check:** `GET /healthz` reports app and database status, and the image's `HEALTHCHECK` uses it.
-- **Basemap:** the default modern basemap is the public OpenStreetMap tile server, which is fine for light use. For real traffic, set your own tile URL in Site settings, per the [OSM tile policy](https://operations.osmfoundation.org/policies/tiles/).
-- **Docker Hub rate limits:** build from a mirror with `--build-arg NODE_IMAGE=public.ecr.aws/docker/library/node:22-alpine --build-arg PG_IMAGE=public.ecr.aws/docker/library/postgres:17-alpine`.
-- **TLS-intercepting proxy** (corporate networks): pass its CA to the build with `docker build --secret id=ca,src=/path/to/ca.pem .`
-
----
+The migration runner records versions in the same table the Supabase CLI uses, so `supabase db push` and the container can be mixed.
 
 ## Local development
 
@@ -126,7 +113,8 @@ Requires Node 20+ and Docker (for the local Supabase stack).
 
 ```bash
 npm install
-npx supabase start          # database, auth, storage + migrations + demo data
+npx supabase start          # database, auth, storage + migrations + Gary demo data
+                            # (npx supabase db reset --no-seed for an empty site)
 cp .env.example .env        # paste URL, anon key and service-role key from `npx supabase status`
 npm run dev                 # http://localhost:5173
 ```
@@ -140,6 +128,38 @@ npm run dev                 # http://localhost:5173
 | `npm run db:types` | Generate TypeScript types from the database |
 
 ---
+
+## Starting your own region
+
+Nothing about Gary is built into the code or the schema; Gary is only the optional demo seed. To run a **Detroit Decaynet**, a country-wide one, or a **global** one:
+
+1. **Start empty.** Leave `SEED=0` (the default), or run `npx supabase db reset --no-seed` in development.
+2. **Create the first account.** It becomes admin, and a setup banner appears.
+3. **Admin → Site settings → Region & map:**
+
+   ![Setting up a Detroit site](docs/images/admin-region.png)
+
+   - **Find a place** (e.g. "Detroit, Michigan"), pan or zoom, then **Use this view as the default**.
+   - **Limit panning to this view** to keep visitors in your region, or choose **No limit** / **Whole world** for a global site.
+   - Set the **default year** and the **earliest year on the slider** (a global site might use 1500; a city founded in 1701 might use 1700).
+   - **Units** (metric / imperial), **address format** (`123 Main Street` or `Hauptstraße 123`) and **content language** (used for Wikidata and OpenHistoricalMap names and for place search).
+   - **Site name, tagline, region and About text** appear in the header, page titles and About page.
+4. **Admin → Vocabulary** (moderators): rename or add the words your region needs.
+   - kinds of page, conditions and their colours, relationship and event types;
+   - attributes and their **units and currencies** (e.g. height in m, cost in EUR, a heritage-register number);
+   - article statuses and tag facets.
+
+   Entries the code relies on are marked • and can be relabelled but not deleted.
+
+   ![Vocabulary editor](docs/images/admin-vocabulary.png)
+5. **Seed pages** for your area with [Import from OpenHistoricalMap & Wikidata](#starter-pages-from-openhistoricalmap--wikidata). Both cover the whole world. A downtown Detroit import, for example, proposed 967 pages: landmark buildings with architects, heights, styles and National Register numbers, plus streets, rail, events and businesses.
+
+   ![Importing downtown Detroit](docs/images/import-detroit.png)
+6. **Add your own eras and topics** on the Tags page (e.g. *Era › Arsenal of Democracy*), then start writing.
+
+![A Detroit site, freshly set up and imported](docs/images/map-detroit.png)
+
+At country or world scale, the map only fetches what's in view (plus a margin) as you pan, so it stays fast however much has been mapped.
 
 ## Guides
 
@@ -386,7 +406,7 @@ source_id, source_detail, note     -- citation + "p. 42"
 
 - **Fuzzy windows:** "active until 1975" at year precision stays true for all of 1975. When facts overlap, the one that started most recently wins.
 - **Nothing is overwritten.** A renaming adds a name row, a fire adds a condition row, and a move adds a geometry row.
-- **Two clocks:** *valid time* (when it was true in Gary) lives on the facts; *record time* (when someone wrote it down) lives in `change_log` and `article_revisions`.
+- **Two clocks:** *valid time* (when it was true on the ground) lives on the facts; *record time* (when someone wrote it down) lives in `change_log` and `article_revisions`.
 - **Building → space → tenant:** spaces are entities `part_of` a building, with polygons inside its footprint; tenants `occupy` spaces.
 - **Tags** form a tree inside facets; tagging a sub-trait implies its ancestors, and tag assignments are dated.
 - **Permissions:** every RLS policy calls `has_permission()`, which reads the roles × permissions tables.
@@ -408,33 +428,46 @@ Key RPCs:
 
 ## Configuration reference
 
-Environment variables (everything else is in **Admin → Site settings**):
+Almost everything is configured in the app: **Admin → Site settings** (identity, region, map, units, address format, language, sign-ups, tips, captcha) and **Admin → Vocabulary**. Environment variables cover only infrastructure:
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `PUBLIC_SUPABASE_URL` | yes | Supabase URL as **browsers** reach it |
-| `PUBLIC_SUPABASE_ANON_KEY` | yes | Supabase anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | for tips | Server-only. Needed to accept tips and to show emails in user admin. Never expose it |
-| `SUPABASE_INTERNAL_URL` | no | How the **server** reaches Supabase, if different (e.g. `http://host.docker.internal:54321` or a Docker service name) |
-| `ORIGIN` | Docker/prod | Public URL of the site (SvelteKit form CSRF check) |
-| `ADDRESS_HEADER`, `XFF_DEPTH` | behind a proxy | Real client IPs for tips (`X-Forwarded-For`, `1`) |
-| `BODY_SIZE_LIMIT` | no | Max request body (image default `25M`) |
-| `PORT`, `HOST` | no | Listen address (image default `0.0.0.0:3000`) |
-| `DATABASE_URL` | migrate | Postgres connection string for the migration runner |
-| `SEED` | migrate | `1` loads the demo data into an empty database |
+**All-in-one stack (`docker-compose.yml`)**
 
----
+| Variable | Purpose |
+|---|---|
+| `POSTGRES_PASSWORD`, `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY` | Generated by `docker/generate-secrets.mjs`; required |
+| `ORIGIN` | Public URL of the site (default `http://localhost:3000`) |
+| `SUPABASE_PUBLIC_URL` | Public URL of the Supabase gateway (default `http://localhost:8000`) |
+| `SEED` | `1` loads the Gary demo into an empty database |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL`, `SMTP_SENDER_NAME`, `MAILER_AUTOCONFIRM` | Email for auth |
+| `PORT`, `KONG_HTTP_PORT`, `POSTGRES_HOST_PORT` | Published ports (3000 / 8000 / 5432) |
+| `NODE_IMAGE`, `PG_IMAGE`, `SUPABASE_*_IMAGE` | Override base and Supabase images |
+| `JWT_EXP` | Access-token lifetime in seconds (default 3600) |
+
+**External Supabase (`docker-compose.external.yml`, or `npm run dev`)**
+
+| Variable | Purpose |
+|---|---|
+| `PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY` | Supabase URL and anon key as browsers reach them |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only. Needed for anonymous tips and for emails in user admin |
+| `SUPABASE_INTERNAL_URL` | How the server reaches Supabase, if different from the public URL |
+| `ORIGIN`, `ADDRESS_HEADER`, `XFF_DEPTH`, `BODY_SIZE_LIMIT`, `PORT`, `HOST` | Standard SvelteKit adapter-node settings |
+| `DATABASE_URL`, `SEED` | For the migration runner |
 
 ## Project layout
 
 ```
-Dockerfile, docker-compose.yml   app image (adapter-node) + migration runner
+Dockerfile                       app image (adapter-node) + migration runner image
+docker-compose.yml               all-in-one: app + self-hosted Supabase (db, auth, rest, storage, kong)
+docker-compose.external.yml      app + migrator against an existing Supabase
 docker/migrate.sh                idempotent migration runner (Supabase-compatible history)
+docker/generate-secrets.mjs      generates the database password, JWT secret and API keys
+docker/supabase/                 Kong routes and first-boot SQL for the bundled Supabase
 supabase/migrations/             0001 foundation · 0002 components · 0003 articles · 0004 systems
                                  0005 security/audit/storage · 0006 vocabulary · 0007 tags
                                  0008 permissions/settings · 0009 tips · 0010 spaces/layout tools
                                  0011 session-only overlays + source link · 0012 external ids & import
-supabase/seed.sql                Gary demo data
+                                 0013 region-agnostic settings (units, address format, language, bounds)
+supabase/seed.sql                optional Gary, Indiana demo (settings, pages, eras)
 src/lib/map/style.ts             MapLibre layers for snapshots, ghosts, spaces, moments
 src/lib/components/              TimeMachineMap, YearSlider, EntityPanel, Timeline, MiniMap,
                                  GeometryPicker, EntityPicker, TemporalFields, TagSelect, TagChips…
@@ -449,7 +482,7 @@ ROADMAP.md                       long-horizon tracker
 
 ## About the demo data
 
-The seed has about 45 pages to show how the model works: Union Station, City Methodist, Hotel Gary / Genesis Towers, City Hall, the Palace, Emerson School, the Aquatorium, Gary Works, the 1919 steel strike, Mayor Hatcher and others.
+The demo is **optional**: an install without it starts as an empty, neutral site. With it (`SEED=1`), the site is configured for Gary, Indiana and has about 45 pages to show how the model works: Union Station, City Methodist, Hotel Gary / Genesis Towers, City Hall, the Palace, Emerson School, the Aquatorium, Gary Works, the 1919 steel strike, Mayor Hatcher and others.
 
 - **Coordinates and shapes are approximate placeholders.** Building footprints are rectangles of plausible size, the spaces inside City Methodist and the Palace are schematic, and the lake shoreline and Grand Calumet River course are rough. All of them are flagged *approximate* or *speculative*.
 - **Dates come from commonly cited public histories**, and uncertain ones are flagged. Several articles are deliberately marked *Needs sources*.

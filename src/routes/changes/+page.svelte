@@ -27,7 +27,7 @@
 	};
 </script>
 
-<svelte:head><title>Recent changes · Decaynet</title></svelte:head>
+<svelte:head><title>Recent changes · {data.settings.site_name}</title></svelte:head>
 
 <div class="page">
 	<div class="spread">

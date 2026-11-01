@@ -3,9 +3,8 @@
 	import { onDestroy, onMount } from 'svelte';
 	import type { GeoJSONSource, Map as MLMap, MapGeoJSONFeature, Popup } from 'maplibre-gl';
 	import {
-		GARY_CENTER,
-		GARY_ZOOM,
 		baseStyle,
+		mapView,
 		interactiveLayers,
 		momentLayers,
 		snapshotLayers
@@ -24,8 +23,8 @@
 		tag = null,
 		basemap = 'fade',
 		selected = null,
-		center = GARY_CENTER,
-		zoom = GARY_ZOOM,
+		center = undefined,
+		zoom = undefined,
 		onselect,
 		onmoments,
 		onview
@@ -41,6 +40,7 @@
 		/** fade: modern map fades as you go back · always · hidden */
 		basemap?: 'fade' | 'always' | 'hidden';
 		selected?: string | null;
+		/** defaults to Site settings */
 		center?: [number, number];
 		zoom?: number;
 		onselect?: (p: Picked | null) => void;
@@ -59,6 +59,21 @@
 	let inflight: AbortController | undefined;
 	let debounce: ReturnType<typeof setTimeout> | undefined;
 	let lastSelected: string | null = null;
+	let fetchedBox: number[] = [];
+
+	/** Current view expanded by half its size on each side, rounded so cache keys repeat. */
+	function paddedBounds(): number[] {
+		const b = map!.getBounds();
+		const w = b.getWest(), s = b.getSouth(), e = b.getEast(), n = b.getNorth();
+		const dx = (e - w) / 2, dy = (n - s) / 2;
+		const r = (v: number) => Math.round(v * 1000) / 1000;
+		return [r(Math.max(-180, w - dx)), r(Math.max(-85, s - dy)), r(Math.min(180, e + dx)), r(Math.min(85, n + dy))];
+	}
+	const covered = () => {
+		if (!map || fetchedBox.length !== 4) return false;
+		const b = map.getBounds();
+		return b.getWest() >= fetchedBox[0] && b.getSouth() >= fetchedBox[1] && b.getEast() <= fetchedBox[2] && b.getNorth() <= fetchedBox[3];
+	};
 
 	async function getJSON(url: string, signal: AbortSignal) {
 		if (cache.has(url)) return cache.get(url);
@@ -78,11 +93,14 @@
 		const q = new URLSearchParams({ at, ghosts: ghosts ? '1' : '0' });
 		if (kinds.length) q.set('kinds', [...kinds].sort().join(','));
 		if (tag) q.set('tag', tag);
+		// Only fetch what's around the view (padded), so country- or world-scale sites stay fast
+		fetchedBox = paddedBounds();
+		q.set('bbox', fetchedBox.join(','));
 		loading = true;
 		try {
 			const [snap, mom] = await Promise.all([
 				getJSON(`/api/snapshot?${q}`, ctrl.signal),
-				moments ? getJSON(`/api/moments?at=${at}&years=5`, ctrl.signal) : null
+				moments ? getJSON(`/api/moments?at=${at}&years=5&bbox=${fetchedBox.join(',')}`, ctrl.signal) : null
 			]);
 			if (ctrl.signal.aborted) return;
 			(map.getSource('snapshot') as GeoJSONSource).setData(snap as GeoJSON.FeatureCollection);
@@ -130,11 +148,13 @@
 
 	onMount(async () => {
 		const maplibregl = (await import('maplibre-gl')).default;
+		const view = mapView(page.data.settings);
 		map = new maplibregl.Map({
 			container,
 			style: baseStyle(page.data.settings),
-			center,
-			zoom,
+			center: center ?? view.center,
+			zoom: zoom ?? view.zoom,
+			maxBounds: view.maxBounds,
 			attributionControl: {
 				compact: true,
 				customAttribution: `<a href="${page.data.settings?.source_code_url}" target="_blank" rel="noopener">Source (AGPL)</a> · <a href="/about">About</a>`
@@ -142,7 +162,7 @@
 			maxZoom: 20
 		});
 		map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), 'top-right');
-		map.addControl(new maplibregl.ScaleControl({ unit: 'imperial' }), 'bottom-right');
+		map.addControl(new maplibregl.ScaleControl({ unit: page.data.settings?.units === 'imperial' ? 'imperial' : 'metric' }), 'bottom-right');
 		popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10 });
 
 		map.on('load', () => {
@@ -195,6 +215,10 @@
 			});
 			map.on('mouseout', () => popup?.remove());
 			map.on('moveend', () => {
+				if (!covered()) {
+					clearTimeout(debounce);
+					debounce = setTimeout(refresh, 150);
+				}
 				const c = map!.getCenter();
 				onview?.({ center: [+c.lng.toFixed(5), +c.lat.toFixed(5)], zoom: +map!.getZoom().toFixed(2) });
 			});

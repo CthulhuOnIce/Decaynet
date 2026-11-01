@@ -15,7 +15,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	// Both services ask for a descriptive User-Agent with a contact point
 	const ua = `${settings.site_name.replace(/[^\w .-]/g, '')}/1.0 (Decaynet; ${settings.source_code_url})`;
 	try {
-		return json(await buildPreview(locals.supabase, opts, ua));
+		return json(await buildPreview(locals.supabase, opts, ua, settings.content_language));
 	} catch (e) {
 		error(400, (e as Error).message);
 	}

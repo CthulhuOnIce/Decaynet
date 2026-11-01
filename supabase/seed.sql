@@ -1,5 +1,7 @@
 -- =============================================================================
--- Decaynet seed: a starter set of Gary, Indiana entities.
+-- Decaynet DEMO seed: a starter set of Gary, Indiana entities.
+-- Optional. Skip it (SEED=0, or `supabase db reset --no-seed`) to start a
+-- different region from a blank, neutral site.
 --
 -- ⚠ Coordinates are APPROXIMATE placeholders on an idealized street grid and
 --   are flagged confidence = 'approximate'. Dates are drawn from commonly cited
@@ -29,6 +31,28 @@ language sql immutable as $$
 $$;
 create function pg_temp.box(w float8, s float8, e float8, n float8) returns extensions.geometry
 language sql immutable as $$ select extensions.st_makeenvelope(w, s, e, n, 4326) $$;
+
+-- -----------------------------------------------------------------------------
+-- Site settings for the Gary demo (a fresh install without the seed starts
+-- neutral and is configured in Admin → Site settings)
+-- -----------------------------------------------------------------------------
+update public.site_settings set
+  site_name = 'Decaynet',
+  tagline = 'Gary, Indiana through time',
+  region_name = 'Gary, Indiana',
+  map_center_lon = -87.3378, map_center_lat = 41.6012, map_zoom = 14,
+  default_year = 1955, min_year = 1890,
+  units = 'imperial', address_format = 'number_street', content_language = 'en',
+  map_bounds = array[-87.55, 41.50, -87.15, 41.70],
+  setup_complete = true
+where id;
+
+-- Region-specific eras (the tag tree's "Era" facet starts empty on a fresh install)
+insert into public.tags (facet, slug, label) values
+  ('era', 'company-town', 'Company town (1906–1920s)'),
+  ('era', 'boom-years', 'Boom years (1920s–1950s)'),
+  ('era', 'decline', 'Decline (1960s–1990s)')
+on conflict (slug) do nothing;
 
 -- -----------------------------------------------------------------------------
 -- Sources

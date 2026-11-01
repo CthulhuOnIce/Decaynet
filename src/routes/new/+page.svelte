@@ -20,7 +20,7 @@
 	const k = $derived(data.vocab.kinds.find((x) => x.id === kind));
 </script>
 
-<svelte:head><title>New page · Decaynet</title></svelte:head>
+<svelte:head><title>New page · {data.settings.site_name}</title></svelte:head>
 
 <div class="page narrow">
 	<h1>New page</h1>
@@ -43,7 +43,7 @@
 		<div class="fields">
 			<div style="grid-column: span 2">
 				<label for="name">Name</label>
-				<input id="name" name="name" bind:value={name} required placeholder="Palace Theater" />
+				<input id="name" name="name" bind:value={name} required placeholder="Majestic Theatre" />
 			</div>
 			<div>
 				<label for="slug">Slug (URL)</label>

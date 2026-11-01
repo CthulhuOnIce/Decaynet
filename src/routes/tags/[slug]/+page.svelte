@@ -6,7 +6,7 @@
 	const t = $derived(data.tag);
 </script>
 
-<svelte:head><title>{t.label} · Tags · Decaynet</title></svelte:head>
+<svelte:head><title>{t.label} · Tags · {data.settings.site_name}</title></svelte:head>
 
 <div class="page narrow">
 	<div class="eyebrow">
@@ -28,7 +28,7 @@
 		<input id="y" name="y" type="number" min="1700" max="2100" value={data.year ?? ''} style="width: 100px" />
 		<button>Filter</button>
 		{#if data.year}<a href="?">all time</a>{/if}
-		<a class="btn primary" href="/?y={data.year ?? 1955}&tag={t.slug}">Show on map</a>
+		<a class="btn primary" href="/?y={data.year ?? data.settings.default_year}&tag={t.slug}">Show on map</a>
 	</form>
 
 	<ul class="plain-list">

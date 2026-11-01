@@ -6,11 +6,11 @@
 	});
 </script>
 
-<svelte:head><title>Sign in · Decaynet</title></svelte:head>
+<svelte:head><title>Sign in · {data.settings.site_name}</title></svelte:head>
 
 <div class="page narrow auth">
 	<h1>{mode === 'signup' ? 'Join the archive' : 'Sign in'}</h1>
-	<p class="muted">Anyone can read. Contributors add places, dates, photos and stories about Gary.</p>
+	<p class="muted">Anyone can read. Contributors add places, dates, photos and stories about {data.settings.region_name || 'the places on this map'}.</p>
 
 	<div class="row tabs">
 		<button class:primary={mode === 'signin'} onclick={() => (mode = 'signin')}>Password</button>

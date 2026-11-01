@@ -51,7 +51,7 @@
 	]);
 </script>
 
-<svelte:head><title>{e.name} · Decaynet</title></svelte:head>
+<svelte:head><title>{e.name} · {data.settings.site_name}</title></svelte:head>
 
 <div class="page">
 	<header class="head">
@@ -230,7 +230,7 @@
 				</div>
 				<input
 					type="range"
-					min={Math.min(1890, Number(e.exists_from?.slice(0, 4) ?? 1890))}
+					min={Math.min(data.settings.min_year, Number(e.exists_from?.slice(0, 4) ?? data.settings.min_year))}
 					max={new Date().getFullYear()}
 					bind:value={yearInput}
 					onchange={() => travel(yearInput)}

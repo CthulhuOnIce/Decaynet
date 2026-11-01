@@ -23,6 +23,13 @@ const num = (fd: FormData, k: string) => {
 	return v;
 };
 const bool = (fd: FormData, k: string) => fd.get(k) === 'on';
+function parseBounds(v: string | null): number[] | null {
+	if (!v) return null;
+	const b = v.split(',').map((x) => Number(x.trim()));
+	if (b.length !== 4 || !b.every(Number.isFinite) || b[2] <= b[0] || b[3] <= b[1])
+		throw new Error('Pan limit must be west,south,east,north (or empty).');
+	return b;
+}
 
 export const actions: Actions = {
 	save: async ({ request, locals }) => {
@@ -38,6 +45,11 @@ export const actions: Actions = {
 				region_name: str(fd, 'region_name') ?? '',
 				about: String(fd.get('about') ?? ''),
 				source_code_url: str(fd, 'source_code_url') ?? 'https://github.com/CthulhuOnIce/Decaynet',
+				units: str(fd, 'units') === 'imperial' ? 'imperial' : 'metric',
+				address_format: str(fd, 'address_format') === 'street_number' ? 'street_number' : 'number_street',
+				content_language: (str(fd, 'content_language') ?? 'en').trim(),
+				map_bounds: parseBounds(str(fd, 'map_bounds')),
+				setup_complete: true,
 				map_center_lon: num(fd, 'map_center_lon'),
 				map_center_lat: num(fd, 'map_center_lat'),
 				map_zoom: num(fd, 'map_zoom'),

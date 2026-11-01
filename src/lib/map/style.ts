@@ -1,7 +1,24 @@
 import type { ExpressionSpecification, LayerSpecification, StyleSpecification } from 'maplibre-gl';
 
-export const GARY_CENTER: [number, number] = [-87.3366, 41.6005];
-export const GARY_ZOOM = 13.6;
+import type { SiteSettings } from '$lib/types';
+
+/** Fallback view when a site hasn't been configured yet: the whole world. */
+export const WORLD_CENTER: [number, number] = [0, 20];
+export const WORLD_ZOOM = 2;
+
+type ViewSettings = Pick<SiteSettings, 'map_center_lon' | 'map_center_lat' | 'map_zoom' | 'map_bounds'> | null | undefined;
+
+/** Initial camera + optional pan limits for every map, from Site settings. */
+export function mapView(s: ViewSettings, minZoom?: number) {
+	const center: [number, number] = s ? [s.map_center_lon, s.map_center_lat] : WORLD_CENTER;
+	const zoom = Math.max(s?.map_zoom ?? WORLD_ZOOM, minZoom ?? 0);
+	const b = s?.map_bounds;
+	const maxBounds =
+		b && b.length === 4 && b.every(Number.isFinite)
+			? ([[b[0], b[1]], [b[2], b[3]]] as [[number, number], [number, number]])
+			: undefined;
+	return { center, zoom, maxBounds };
+}
 
 const GLYPHS = 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf';
 export const FONT = ['Noto Sans Medium'];

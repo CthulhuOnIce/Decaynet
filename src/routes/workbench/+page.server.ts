@@ -13,7 +13,7 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 	]);
 	return {
 		sources: sources.data ?? [],
-		minYear: Math.min(extent.data?.min_year ?? 1890, 1890),
+		minYear: extent.data?.min_year ?? 1800,
 		maxYear: extent.data?.max_year ?? new Date().getFullYear()
 	};
 };

@@ -3,7 +3,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { page } from '$app/state';
 	import type { ExpressionSpecification, GeoJSONSource, Map as MLMap } from 'maplibre-gl';
-	import { GARY_CENTER, baseStyle, boundsOf } from '$lib/map/style';
+	import { baseStyle, boundsOf, mapView } from '$lib/map/style';
 
 	/** Features carry `current: boolean` (valid at the selected year) and `label`. */
 	let { features, height = 260 }: { features: GeoJSON.Feature[]; height?: number } = $props();
@@ -26,8 +26,8 @@
 		map = new maplibregl.Map({
 			container: el,
 			style: baseStyle(page.data.settings),
-			center: GARY_CENTER,
-			zoom: 12,
+			center: mapView(page.data.settings).center,
+			zoom: mapView(page.data.settings).zoom,
 			attributionControl: { compact: true },
 			cooperativeGestures: true
 		});

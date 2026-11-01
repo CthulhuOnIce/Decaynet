@@ -121,7 +121,9 @@ The street grid, shoreline and river were not always where they are today. What 
 - [ ] Embeddable map widget for other sites
 - [ ] Mobile layout pass, offline-friendly field mode for photographers
 - [ ] Accessibility audit (keyboard map navigation, screen-reader summaries of map state)
-- [ ] i18n scaffolding (Spanish first)
+- [ ] i18n scaffolding for the UI itself (content language is already a setting)
+- [ ] Locale-aware date formatting (month names, day/month order)
+- [ ] BCE / pre-1000 CE dates for global sites
 
 ## Phase 7: Scale & operations
 
@@ -133,7 +135,10 @@ The street grid, shoreline and river were not always where they are today. What 
 - [ ] CI: svelte-check, migration replay against PostGIS, Playwright smoke tests
 - [ ] Generated Supabase types (`npm run db:types`) wired into server code
 - [ ] Rate limiting on public API endpoints
-- [ ] Federation with other regions (multi-region settings, region switcher) ⚑
+- [x] Region-agnostic configuration (any city, country or the whole world)
+- [x] Bundled self-hosted Supabase in docker compose
+- [ ] Optional Supabase Studio / Mailpit services (profiles) in the bundled stack
+- [ ] Federation between Decaynet sites (shared external ids, cross-site search) ⚑
 
 ---
 
@@ -158,3 +163,5 @@ The street grid, shoreline and river were not always where they are today. What 
 | 2026-11-01 | Overlays (scans, tile layers) are session-only drawing aids in the workbench, not stored or published. `map_layers` dropped. |
 | 2026-11-01 | Licensed AGPL-3.0-or-later; ship as a Docker image. |
 | 2026-11-01 | External data (OHM, Wikidata) is fetched live in the app and always previewed; imports fill gaps, never overwrite, and can be undone. No bundled data dumps. |
+| 2026-11-01 | Region-agnostic: no city in code or schema; Gary is an optional demo seed. Region, units, address format, language, bounds and vocabulary are site settings. |
+| 2026-11-01 | `docker compose up` bundles a self-hosted Supabase (db, auth, rest, storage, kong); an external-Supabase compose file remains for Supabase Cloud. |

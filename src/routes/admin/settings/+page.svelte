@@ -1,12 +1,21 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import ViewPicker from '$lib/components/ViewPicker.svelte';
 
 	let { data, form } = $props();
 	const s = $derived(data.settings);
 	const msg = (k: string) => (form?.section === k ? form : null);
 	let captcha = $state('none');
+	let lon = $state(0);
+	let lat = $state(20);
+	let zoom = $state(2);
+	let bounds = $state('');
 	$effect.pre(() => {
 		captcha = s.tips_captcha_provider;
+		lon = s.map_center_lon;
+		lat = s.map_center_lat;
+		zoom = s.map_zoom;
+		bounds = s.map_bounds?.join(',') ?? '';
 	});
 </script>
 
@@ -45,13 +54,40 @@
 	</section>
 
 	<section class="card">
-		<h2>Map</h2>
+		<h2>Region & map</h2>
+		<p class="hint">
+			Decaynet works for any place: a neighborhood, a city like Detroit, a whole country, or the world. Find your area, then
+			set the default view and (optionally) stop the map from panning away from it.
+		</p>
+		<ViewPicker bind:lon bind:lat bind:zoom bind:bounds />
 		<div class="fields">
-			<div><label for="lon">Center longitude</label><input id="lon" name="map_center_lon" type="number" step="any" value={s.map_center_lon} /></div>
-			<div><label for="lat">Center latitude</label><input id="lat" name="map_center_lat" type="number" step="any" value={s.map_center_lat} /></div>
-			<div><label for="z">Zoom</label><input id="z" name="map_zoom" type="number" step="0.1" value={s.map_zoom} /></div>
+			<div><label for="lon">Center longitude</label><input id="lon" name="map_center_lon" type="number" step="any" bind:value={lon} /></div>
+			<div><label for="lat">Center latitude</label><input id="lat" name="map_center_lat" type="number" step="any" bind:value={lat} /></div>
+			<div><label for="z">Zoom</label><input id="z" name="map_zoom" type="number" step="0.1" min="0" max="20" bind:value={zoom} /></div>
+			<div style="grid-column: span 2"><label for="mb">Pan limit (west,south,east,north)</label><input id="mb" name="map_bounds" bind:value={bounds} placeholder="none: whole world" /></div>
+		</div>
+		<div class="fields">
 			<div><label for="dy">Default year</label><input id="dy" name="default_year" type="number" value={s.default_year} /></div>
 			<div><label for="my">Earliest year on slider</label><input id="my" name="min_year" type="number" value={s.min_year} /></div>
+			<div>
+				<label for="un">Units</label>
+				<select id="un" name="units">
+					<option value="metric" selected={s.units === 'metric'}>Metric (m, km)</option>
+					<option value="imperial" selected={s.units === 'imperial'}>Imperial (ft, mi)</option>
+				</select>
+			</div>
+			<div>
+				<label for="af">Address format</label>
+				<select id="af" name="address_format">
+					<option value="number_street" selected={s.address_format === 'number_street'}>123 Main Street</option>
+					<option value="street_number" selected={s.address_format === 'street_number'}>Hauptstraße 123</option>
+				</select>
+			</div>
+			<div>
+				<label for="cl">Content language</label>
+				<input id="cl" name="content_language" value={s.content_language} pattern="[a-z]{'{2,3}'}(-[A-Za-z]{'{2,4}'})?" />
+				<p class="hint">ISO code (en, de, fr, pl…). Used for Wikidata/OHM imports and place search.</p>
+			</div>
 		</div>
 		<div class="fields">
 			<div style="grid-column: span 2">

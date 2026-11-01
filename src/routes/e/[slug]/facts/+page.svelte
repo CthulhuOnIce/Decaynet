@@ -43,7 +43,7 @@
 		formatRange(f.valid_from, f.valid_from_precision ?? 'year', f.valid_to, f.valid_to_precision ?? 'year') || 'always / undated';
 </script>
 
-<svelte:head><title>Facts: {e.name} · Decaynet</title></svelte:head>
+<svelte:head><title>Facts: {e.name} · {data.settings.site_name}</title></svelte:head>
 
 {#snippet status(section: string)}
 	{@const m = msg(section)}
@@ -230,12 +230,12 @@
 		<form method="post" action="?/addAddress" use:enhance>
 			<input type="hidden" name="section" value="addresses" />
 			<div class="fields">
-				<div><label for="a-num">Number</label><input id="a-num" name="house_number" placeholder="577" /></div>
-				<div style="grid-column: span 2"><label for="a-street">Street</label><EntityPicker id="a-street" name="street_id" kinds={['street']} placeholder="Washington Street" /></div>
+				<div><label for="a-num">Number</label><input id="a-num" name="house_number" placeholder="123" /></div>
+				<div style="grid-column: span 2"><label for="a-street">Street</label><EntityPicker id="a-street" name="street_id" kinds={['street']} placeholder="Main Street" /></div>
 				<div><label for="a-unit">Unit</label><input id="a-unit" name="unit" /></div>
 				<div><label for="a-zip">ZIP</label><input id="a-zip" name="postal_code" /></div>
 			</div>
-			<div class="field"><label for="a-raw">As written in the source</label><input id="a-raw" name="raw_address" placeholder="577 Washington St." /></div>
+			<div class="field"><label for="a-raw">As written in the source</label><input id="a-raw" name="raw_address" placeholder="123 Main St." /></div>
 			<TemporalFields sources={data.sources} idPrefix="a" />
 			<button>Add address</button>
 		</form>

@@ -6,7 +6,8 @@
 		[
 			can('manage_settings') && { href: '/admin/settings', label: 'Site settings' },
 			can('manage_users') && { href: '/admin/users', label: 'Users' },
-			can('manage_settings') && { href: '/admin/roles', label: 'Roles & permissions' }
+			can('manage_settings') && { href: '/admin/roles', label: 'Roles & permissions' },
+			can('moderate') && { href: '/admin/vocabulary', label: 'Vocabulary' }
 		].filter(Boolean) as { href: string; label: string }[]
 	);
 </script>

@@ -6,7 +6,7 @@
 	const s = $derived(data.source);
 </script>
 
-<svelte:head><title>{s.title} · Sources · Decaynet</title></svelte:head>
+<svelte:head><title>{s.title} · Sources · {data.settings.site_name}</title></svelte:head>
 
 <div class="page narrow">
 	<div class="eyebrow">Source · {s.kind.replace('_', ' ')}</div>

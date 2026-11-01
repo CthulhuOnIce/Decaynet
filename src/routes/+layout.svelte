@@ -21,7 +21,7 @@
 			can('review_tips') && { href: '/tips', label: 'Tips', badge: data.openTips },
 			(can('bulk_edit') || can('edit_content')) && { href: '/workbench', label: 'Workbench' },
 			can('bulk_edit') && { href: '/import', label: 'Import' },
-			(can('manage_users') || can('manage_settings')) && { href: '/admin', label: 'Admin' }
+			(can('manage_users') || can('manage_settings') || can('moderate')) && { href: '/admin', label: 'Admin' }
 		].filter(Boolean) as { href: string; label: string; badge?: number }[]
 	);
 	let menuOpen = $state(false);
@@ -87,6 +87,15 @@
 		{/if}
 	</div>
 </header>
+
+{#if !data.settings.setup_complete && can('manage_settings') && !page.url.pathname.startsWith('/admin')}
+	<div class="setup">
+		<strong>Welcome to your new {data.settings.site_name}.</strong>
+		Set the site name, region, map area and timeline in <a href="/admin/settings">Site settings</a>, adjust the
+		<a href="/admin/vocabulary">vocabulary</a> if your region needs it, then seed pages from
+		<a href="/import">OpenHistoricalMap &amp; Wikidata</a>.
+	</div>
+{/if}
 
 <main class:full={fullBleed}>
 	{@render children()}
@@ -223,6 +232,12 @@
 	}
 	.new {
 		padding: 5px 10px;
+	}
+	.setup {
+		padding: 10px 20px;
+		background: rgba(224, 162, 58, 0.14);
+		border-bottom: 1px solid rgba(224, 162, 58, 0.4);
+		font-size: 0.88rem;
 	}
 	.site-footer {
 		display: flex;

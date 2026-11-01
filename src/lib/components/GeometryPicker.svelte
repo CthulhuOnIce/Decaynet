@@ -3,7 +3,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { page } from '$app/state';
 	import type { GeoJSONSource, Map as MLMap } from 'maplibre-gl';
-	import { GARY_CENTER, baseStyle, boundsOf } from '$lib/map/style';
+	import { baseStyle, boundsOf, mapView } from '$lib/map/style';
 
 	type Mode = 'point' | 'line' | 'polygon';
 
@@ -58,7 +58,7 @@
 
 	onMount(async () => {
 		const maplibregl = (await import('maplibre-gl')).default;
-		map = new maplibregl.Map({ container: el, style: baseStyle(page.data.settings), center: GARY_CENTER, zoom: 14, attributionControl: { compact: true } });
+		map = new maplibregl.Map({ container: el, style: baseStyle(page.data.settings), ...mapView(page.data.settings, 3), attributionControl: { compact: true } });
 		map.doubleClickZoom.disable();
 		map.getCanvas().style.cursor = 'crosshair';
 		map.on('load', () => {

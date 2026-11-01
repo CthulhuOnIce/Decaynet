@@ -93,14 +93,14 @@
 				<input id="website_url" name="website_url" tabindex="-1" autocomplete="off" />
 			</div>
 
-			<div><label for="subject">Subject <span class="muted">(optional)</span></label><input id="subject" name="subject" placeholder="The Palace's last show" /></div>
+			<div><label for="subject">Subject <span class="muted">(optional)</span></label><input id="subject" name="subject" placeholder="The theatre's last show" /></div>
 
 			<div class="fields">
 				<div>
 					<label for="about">About an existing page <span class="muted">(optional)</span></label>
 					<EntityPicker id="about" name="about_entity_id" value={data.about} placeholder="Search places, people, businesses…" />
 				</div>
-				<div><label for="about_text">…or describe the place / person / business</label><input id="about_text" name="about_text" placeholder="Corner store at 15th & Grant" /></div>
+				<div><label for="about_text">…or describe the place / person / business</label><input id="about_text" name="about_text" placeholder="Corner store at 5th & Main" /></div>
 			</div>
 
 			<div>

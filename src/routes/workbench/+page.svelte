@@ -6,7 +6,7 @@
 	import YearSlider from '$lib/components/YearSlider.svelte';
 	import EntityPicker from '$lib/components/EntityPicker.svelte';
 	import TemporalFields from '$lib/components/TemporalFields.svelte';
-	import { baseStyle, snapshotLayers } from '$lib/map/style';
+	import { baseStyle, mapView, snapshotLayers } from '$lib/map/style';
 	import { can } from '$lib/perms';
 	import { yearToDate } from '$lib/time';
 
@@ -343,8 +343,7 @@
 		map = new maplibre.Map({
 			container: mapEl,
 			style: baseStyle(data.settings),
-			center: [data.settings.map_center_lon, data.settings.map_center_lat],
-			zoom: Math.max(15, data.settings.map_zoom),
+			...mapView(data.settings),
 			attributionControl: {
 				compact: true,
 				customAttribution: `<a href="${data.settings.source_code_url}" target="_blank" rel="noopener">Source (AGPL)</a>`
@@ -651,7 +650,7 @@
 								<select id="asrc" name="source_id"><option value="">(uncited)</option>{#each data.sources as s (s.id)}<option value={s.id}>{s.title}</option>{/each}</select>
 							</div>
 						</div>
-						<div><label for="anote">Note</label><input id="anote" name="note" placeholder="Cleared for the Indiana Toll Road" /></div>
+						<div><label for="anote">Note</label><input id="anote" name="note" placeholder="Cleared for the expressway" /></div>
 						<button class="primary">End {previewIds.length} in {year}</button>
 					{/if}
 				</form>

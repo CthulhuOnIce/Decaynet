@@ -8,7 +8,7 @@
 	);
 </script>
 
-<svelte:head><title>Tags · Decaynet</title></svelte:head>
+<svelte:head><title>Tags · {data.settings.site_name}</title></svelte:head>
 
 <div class="page">
 	<h1>Tags & traits</h1>

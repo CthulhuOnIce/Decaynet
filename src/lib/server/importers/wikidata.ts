@@ -3,6 +3,8 @@ import { parseWikidataTime } from './dates';
 
 export const WIKIDATA_SPARQL = 'https://query.wikidata.org/sparql';
 
+// Class (P31) labels stay English: the kind/tag heuristics below read them.
+// Item names, descriptions, aliases, architects and styles use the site's language.
 const SELECT = `
 SELECT ?item ?itemLabel ?itemDescription ?coord
        (GROUP_CONCAT(DISTINCT ?instLabel; separator="|") AS ?classes)
@@ -19,17 +21,23 @@ WHERE {
   OPTIONAL { ?item p:P576/psv:P576 [ wikibase:timeValue ?end ; wikibase:timePrecision ?endP ] }
   OPTIONAL { ?item wdt:P18 ?img }
   OPTIONAL { ?item wdt:P649 ?nrhp }
-  OPTIONAL { ?item wdt:P84 ?arch . ?arch rdfs:label ?archLabel . FILTER(LANG(?archLabel) = "en") }
-  OPTIONAL { ?item wdt:P149 ?st . ?st rdfs:label ?styleLabel . FILTER(LANG(?styleLabel) = "en") }
+  OPTIONAL { ?item wdt:P84 ?arch . ?arch rdfs:label ?archLabel . FILTER(LANG(?archLabel) IN (%LANGS%)) }
+  OPTIONAL { ?item wdt:P149 ?st . ?st rdfs:label ?styleLabel . FILTER(LANG(?styleLabel) IN (%LANGS%)) }
   OPTIONAL { ?item wdt:P1101 ?floors }
   OPTIONAL { ?item wdt:P856 ?web }
-  OPTIONAL { ?item skos:altLabel ?alias . FILTER(LANG(?alias) = "en") }
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+  OPTIONAL { ?item skos:altLabel ?alias . FILTER(LANG(?alias) = "%LANG%") }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "%LANG%,en". }
 }
 GROUP BY ?item ?itemLabel ?itemDescription ?coord
 LIMIT 2000`;
 
 type Binding = Record<string, { value: string } | undefined>;
+
+const safeLang = (l: string) => (/^[a-z]{2,3}(-[a-z]{2,4})?$/i.test(l) ? l.toLowerCase() : 'en');
+const select = (scope: string, lang: string) => {
+	const l = safeLang(lang);
+	return SELECT.replace('%SCOPE%', scope).replaceAll('%LANG%', l).replaceAll('%LANGS%', `"${l}", "en"`);
+};
 
 async function sparql(query: string, userAgent: string): Promise<Binding[]> {
 	const res = await fetch(WIKIDATA_SPARQL, {
@@ -48,21 +56,21 @@ async function sparql(query: string, userAgent: string): Promise<Binding[]> {
 }
 
 /** Items with coordinates inside the box. */
-export function fetchWikidataBox(bbox: ImportOptions['bbox'], userAgent: string) {
+export function fetchWikidataBox(bbox: ImportOptions['bbox'], userAgent: string, lang = 'en') {
 	const [w, s, e, n] = bbox;
 	const scope = `SERVICE wikibase:box {
     ?item wdt:P625 ?coord .
     bd:serviceParam wikibase:cornerSouthWest "Point(${w} ${s})"^^geo:wktLiteral .
     bd:serviceParam wikibase:cornerNorthEast "Point(${e} ${n})"^^geo:wktLiteral .
   }`;
-	return sparql(SELECT.replace('%SCOPE%', scope), userAgent);
+	return sparql(select(scope, lang), userAgent);
 }
 
 /** Specific items (e.g. ones an OHM feature points at with a wikidata=* tag). */
-export function fetchWikidataItems(qids: string[], userAgent: string) {
+export function fetchWikidataItems(qids: string[], userAgent: string, lang = 'en') {
 	if (!qids.length) return Promise.resolve([] as Binding[]);
 	const scope = `VALUES ?item { ${qids.map((q) => `wd:${q}`).join(' ')} } OPTIONAL { ?item wdt:P625 ?coord }`;
-	return sparql(SELECT.replace('%SCOPE%', scope), userAgent);
+	return sparql(select(scope, lang), userAgent);
 }
 
 // ----------------------------------------------------------------------------- classification
@@ -137,6 +145,17 @@ export function normalizeWikidata(rows: Binding[], opts: { images: boolean }): C
 			.slice(0, 6)
 			.map((a) => ({ name: a, name_type: 'alternate', source: 'wikidata' as const }));
 		const point = pointOf(val(r, 'coord'));
+		const cl = classes.join(' | ').toLowerCase();
+		const event_type =
+			kind !== 'event' ? null
+			: /riot|unrest|uprising|rebellion|insurrection/.test(cl) ? 'riot'
+			: /strike|labor|labour/.test(cl) ? 'labor'
+			: /protest|demonstration|march/.test(cl) ? 'protest'
+			: /fire\b|conflagration/.test(cl) ? 'fire'
+			: /flood|storm|tornado|disaster|explosion/.test(cl) ? 'disaster'
+			: /election/.test(cl) ? 'election'
+			: /race|grand prix|sport|festival|parade|fair\b/.test(cl) ? 'other'
+			: 'other';
 		out.push({
 			key: `wikidata:${qid}`,
 			origin: 'wikidata',
@@ -160,6 +179,7 @@ export function normalizeWikidata(rows: Binding[], opts: { images: boolean }): C
 			wikidata: qid,
 			image_url: opts.images ? (val(r, 'image') ?? null) : null,
 			classes,
+			event_type,
 			raw: Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v?.value ?? ''])) as Record<string, string>
 		});
 	}

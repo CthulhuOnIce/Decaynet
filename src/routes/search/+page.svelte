@@ -6,16 +6,16 @@
 	let { data } = $props();
 </script>
 
-<svelte:head><title>Search: {data.q} · Decaynet</title></svelte:head>
+<svelte:head><title>Search: {data.q} · {data.settings.site_name}</title></svelte:head>
 
 <div class="page narrow">
 	<h1>Search</h1>
 	<form method="get" class="row">
-		<input name="q" value={data.q} placeholder="Hotel Gary, Genesis Towers, Broadway…" style="flex: 1" />
+		<input name="q" value={data.q} placeholder="A building, street, business or person…" style="flex: 1" />
 		<input type="hidden" name="go" value="0" />
 		<button class="primary">Search</button>
 	</form>
-	<p class="hint">Matches current <em>and historic</em> names, so “Genesis Towers” finds Hotel Gary.</p>
+	<p class="hint">Matches current <em>and historic</em> names, so a building's old name still finds it.</p>
 
 	{#if data.q}
 		<ul class="plain-list results">

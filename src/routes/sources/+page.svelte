@@ -10,7 +10,7 @@
 	);
 </script>
 
-<svelte:head><title>Sources · Decaynet</title></svelte:head>
+<svelte:head><title>Sources · {data.settings.site_name}</title></svelte:head>
 
 <div class="page">
 	<h1>Sources</h1>
@@ -54,7 +54,7 @@
 				<div><label for="u">URL</label><input id="u" name="url" type="url" /></div>
 				<div><label for="au">Archived copy URL</label><input id="au" name="archive_url" type="url" /></div>
 				<div class="fields">
-					<div><label for="r">Repository</label><input id="r" name="repository" placeholder="Calumet Regional Archives" /></div>
+					<div><label for="r">Repository</label><input id="r" name="repository" placeholder="City or university archive" /></div>
 					<div><label for="c">Call number</label><input id="c" name="call_number" /></div>
 				</div>
 				<div><label for="n">Notes</label><textarea id="n" name="notes" rows="3" style="min-height: 60px"></textarea></div>

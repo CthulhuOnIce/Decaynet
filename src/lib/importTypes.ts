@@ -46,6 +46,10 @@ export interface Candidate {
 	wikidata: string | null;
 	image_url: string | null;
 	classes: string[];
+	/** for events: a guessed event type id (used only if the site has it) */
+	event_type?: string | null;
+	/** problems found while normalizing, shown in the preview */
+	issues?: string[];
 	/** raw source tags, for the "details" disclosure in the preview */
 	raw: Record<string, string>;
 }

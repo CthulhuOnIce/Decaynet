@@ -1,16 +1,173 @@
-# Decaynet — app container + optional migration runner.
+# Decaynet: everything in one stack, including a self-hosted Supabase
+# (Postgres + PostGIS, Auth, REST, Storage behind the Kong API gateway).
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Supabase itself (Postgres+PostGIS, Auth, Storage) runs separately:
-#   * Supabase Cloud, or
-#   * self-hosted Supabase (https://supabase.com/docs/guides/self-hosting/docker), or
-#   * `npx supabase start` on the host for local development.
+#   cp .env.example .env
+#   node docker/generate-secrets.mjs >> .env      # or see README for the docker one-liner
+#   docker compose up -d                          # http://localhost:3000
 #
-#   cp .env.example .env            # fill in keys
-#   docker compose --profile tools run --rm migrate   # apply schema (+ SEED=1 for demo data)
-#   docker compose up -d app        # http://localhost:3000
+# Supabase's API is published on :8000 because browsers talk to it directly
+# (logins, uploads). Using Supabase Cloud instead? See docker-compose.external.yml.
+
+name: decaynet
+
+x-supabase-images:
+  # Supabase's own registry mirror (avoids Docker Hub rate limits). Override in .env if needed.
+  db: &db-image ${SUPABASE_POSTGRES_IMAGE:-public.ecr.aws/supabase/postgres:17.11.0.006}
+  auth: &auth-image ${SUPABASE_AUTH_IMAGE:-public.ecr.aws/supabase/gotrue:v2.197.0}
+  rest: &rest-image ${SUPABASE_REST_IMAGE:-public.ecr.aws/supabase/postgrest:v16.5}
+  storage: &storage-image ${SUPABASE_STORAGE_IMAGE:-public.ecr.aws/supabase/storage-api:v1.84.19}
+  kong: &kong-image ${SUPABASE_KONG_IMAGE:-public.ecr.aws/supabase/kong:2.8.1}
 
 services:
+  # ------------------------------------------------------------------ Supabase
+  db:
+    image: *db-image
+    restart: unless-stopped
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "log_min_messages=fatal"]
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      PGPORT: 5432
+      POSTGRES_PORT: 5432
+      PGDATABASE: postgres
+      POSTGRES_DB: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Run docker/generate-secrets.mjs first (see README)}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?Run docker/generate-secrets.mjs first (see README)}
+      JWT_EXP: ${JWT_EXP:-3600}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./docker/supabase/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:ro
+      - ./docker/supabase/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:ro
+    ports:
+      # Postgres for backups / psql, on localhost only. Remove if you don't need it.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  auth:
+    image: *auth-image
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${SUPABASE_PUBLIC_URL:-http://localhost:8000}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@db:5432/postgres
+      GOTRUE_SITE_URL: ${ORIGIN:-http://localhost:3000}
+      GOTRUE_URI_ALLOW_LIST: ${ORIGIN:-http://localhost:3000}/auth/callback,${ORIGIN:-http://localhost:3000}/auth/confirm
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: ${JWT_EXP:-3600}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      # Without SMTP, accounts are confirmed immediately. Configure SMTP below for
+      # confirmation emails, password resets and magic links.
+      GOTRUE_MAILER_AUTOCONFIRM: ${MAILER_AUTOCONFIRM:-true}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-admin@example.org}
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:-}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-587}
+      GOTRUE_SMTP_USER: ${SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME:-Decaynet}
+      GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  rest:
+    image: *rest-image
+    restart: unless-stopped
+    command: ["postgrest"]
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@db:5432/postgres
+      PGRST_DB_SCHEMAS: public,storage,graphql_public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_APP_SETTINGS_JWT_SECRET: ${JWT_SECRET}
+      PGRST_APP_SETTINGS_JWT_EXP: ${JWT_EXP:-3600}
+
+  storage:
+    image: *storage-image
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+      rest: { condition: service_started }
+    environment:
+      ANON_KEY: ${ANON_KEY:?Run docker/generate-secrets.mjs first (see README)}
+      SERVICE_KEY: ${SERVICE_ROLE_KEY:?Run docker/generate-secrets.mjs first (see README)}
+      POSTGREST_URL: http://rest:3000
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      AUTH_JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@db:5432/postgres
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: stub
+      REGION: stub
+      GLOBAL_S3_BUCKET: stub
+      ENABLE_IMAGE_TRANSFORMATION: "false"
+    volumes:
+      - storage-data:/var/lib/storage
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  kong:
+    image: *kong-image
+    restart: unless-stopped
+    depends_on:
+      auth: { condition: service_healthy }
+      storage: { condition: service_healthy }
+    entrypoint: bash -c 'eval "echo \"$$(cat ~/temp.yml)\"" > ~/kong.yml && /docker-entrypoint.sh kong docker-start'
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /home/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+    volumes:
+      - ./docker/supabase/kong.yml:/home/kong/temp.yml:ro
+    ports:
+      - "${KONG_HTTP_PORT:-8000}:8000"
+
+  # ------------------------------------------------------------------ Decaynet
+  migrate:
+    build:
+      context: .
+      target: migrate
+      args:
+        PG_IMAGE: ${PG_IMAGE:-postgres:17-alpine}
+    image: decaynet-migrate:latest
+    depends_on:
+      db: { condition: service_healthy }
+      auth: { condition: service_healthy }
+      storage: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      SEED: ${SEED:-0}
+    restart: "no"
+
   app:
     build:
       context: .
@@ -18,29 +175,22 @@ services:
       args:
         NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
     image: decaynet:latest
-    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      kong: { condition: service_started }
     environment:
-      # Public URL of the site. Required by SvelteKit's form CSRF protection.
       ORIGIN: ${ORIGIN:-http://localhost:3000}
+      PUBLIC_SUPABASE_URL: ${SUPABASE_PUBLIC_URL:-http://localhost:8000}
+      PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      SUPABASE_INTERNAL_URL: http://kong:8000
       # Behind a reverse proxy, uncomment so tips see the visitor's real IP:
       # ADDRESS_HEADER: X-Forwarded-For
       # XFF_DEPTH: "1"
     ports:
       - "${PORT:-3000}:3000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
 
-  migrate:
-    profiles: ["tools"]
-    build:
-      context: .
-      target: migrate
-      args:
-        PG_IMAGE: ${PG_IMAGE:-postgres:17-alpine}
-    image: decaynet-migrate:latest
-    environment:
-      DATABASE_URL: ${DATABASE_URL:-}   # the runner explains if it is missing
-      SEED: ${SEED:-0}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+volumes:
+  db-data:
+  storage-data:

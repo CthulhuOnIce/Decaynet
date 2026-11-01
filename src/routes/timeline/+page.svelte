@@ -10,7 +10,7 @@
 	];
 </script>
 
-<svelte:head><title>Timeline · Decaynet</title></svelte:head>
+<svelte:head><title>Timeline · {data.settings.site_name}</title></svelte:head>
 
 <div class="page">
 	<h1>Chronology</h1>

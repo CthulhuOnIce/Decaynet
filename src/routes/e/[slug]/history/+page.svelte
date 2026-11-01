@@ -18,13 +18,13 @@
 	};
 </script>
 
-<svelte:head><title>History: {data.entity.name} · Decaynet</title></svelte:head>
+<svelte:head><title>History: {data.entity.name} · {data.settings.site_name}</title></svelte:head>
 
 <div class="page">
 	<div class="eyebrow">History</div>
 	<h1><a href="/e/{data.entity.slug}">{data.entity.name}</a></h1>
 	<p class="muted">
-		Two clocks run on this wiki. <em>Valid time</em> is when something was true in Gary (on the facts themselves).
+		Two clocks run on this wiki. <em>Valid time</em> is when something was true in the world (on the facts themselves).
 		<em>Record time</em> is when someone wrote it down, shown here.
 	</p>
 
