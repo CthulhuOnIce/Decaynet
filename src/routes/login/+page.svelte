@@ -36,7 +36,6 @@
 			</div>
 		{/if}
 		<button class="primary">{mode === 'signup' ? 'Create account' : mode === 'magic' ? 'Email me a link' : 'Sign in'}</button>
-		{#if mode === 'signup'}<p class="hint">The first account on a fresh install becomes the admin.</p>{/if}
 	</form>
 </div>
 

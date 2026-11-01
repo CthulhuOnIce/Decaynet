@@ -1,8 +1,17 @@
+import { redirect } from '@sveltejs/kit';
+import { ensureBootstrapped, siteHasAdmin } from '$lib/server/bootstrap';
 import { loadSettings, loadVocabulary } from '$lib/server/db';
 import type { Permission, Profile } from '$lib/types';
 import type { LayoutServerLoad } from './$types';
 
-export const load: LayoutServerLoad = async ({ locals }) => {
+export const load: LayoutServerLoad = async ({ locals, url }) => {
+	// Until a first admin exists, every page leads to the setup wizard
+	if (!url.pathname.startsWith('/setup') && !url.pathname.startsWith('/auth/')) {
+		if (!(await siteHasAdmin(locals.supabase))) {
+			await ensureBootstrapped();
+			if (!(await siteHasAdmin(locals.supabase))) redirect(303, '/setup');
+		}
+	}
 	const { user } = await locals.safeGetSession();
 	let profile: (Profile & { suspended: boolean }) | null = null;
 	let perms: Permission[] = [];

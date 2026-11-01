@@ -34,6 +34,7 @@ Pick any address in Gary and any year since 1906, and see:
 
 - [x] Roles × permissions matrix editable by admins (RLS enforced via `has_permission`)
 - [x] Account page (profile, email, password), public contributor pages
+- [x] First-admin bootstrap: ADMIN_EMAIL/ADMIN_PASSWORD, or a /setup wizard guarded by a setup code; first sign-up no longer auto-promoted once the server holds the service key
 - [x] User admin: roles, suspension, last-admin protection
 - [x] Site settings in the database (identity, map defaults, basemap, sign-ups, default role)
 - [x] Server-only secrets store (captcha secret, IP salt)

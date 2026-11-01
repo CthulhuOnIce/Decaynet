@@ -2,7 +2,13 @@ import { createServerClient } from '@supabase/ssr';
 import { env } from '$env/dynamic/public';
 import { env as priv } from '$env/dynamic/private';
 import { AUTH_COOKIE } from '$lib/supabaseConfig';
-import type { Handle } from '@sveltejs/kit';
+import type { Handle, ServerInit } from '@sveltejs/kit';
+import { ensureBootstrapped } from '$lib/server/bootstrap';
+
+/** On startup: create the first admin from env, or print a /setup code. */
+export const init: ServerInit = async () => {
+	await ensureBootstrapped();
+};
 
 export const handle: Handle = async ({ event, resolve }) => {
 	// The server may reach Supabase on a private address (Docker network); browsers use the public one.

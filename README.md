@@ -83,10 +83,14 @@ The output is `POSTGRES_PASSWORD`, `JWT_SECRET`, `ANON_KEY` and `SERVICE_ROLE_KE
    ORIGIN=https://history.example.org          # public URL of the site (app, port 3000)
    SUPABASE_PUBLIC_URL=https://api.history.example.org   # public URL of Supabase (kong, port 8000)
    SEED=0                                      # 1 = load the Gary, Indiana demo
+   ADMIN_EMAIL=you@example.org                 # optional: creates the first admin on start
+   ADMIN_PASSWORD=a-long-password              #   (leave both out to use the setup wizard)
    ```
    For a quick local try, `http://<server-ip>:3000` and `http://<server-ip>:8000` work too.
 4. **Deploy the stack.** On first boot Postgres initialises (up to a few minutes on small machines), then Auth and Storage start, `migrate` applies the schema and **exits with code 0** (that's expected; it reruns harmlessly on every redeploy), and finally `app` and `kong` go healthy.
-5. Open the site, **Sign in → Create account**. **The first account becomes admin.**
+5. **Create the first admin**, in one of two ways (see [First admin](#first-admin)):
+   - **Environment:** with `ADMIN_EMAIL` and `ADMIN_PASSWORD` set, that account exists as soon as the app starts. Sign in with it.
+   - **Setup wizard:** otherwise, opening the site takes you to `/setup`. Enter the **setup code** from the app container's logs (*Containers → decaynet-app → Logs*), create your account and name the site.
 
 ### 2b. Deploy from the command line
 
@@ -95,6 +99,7 @@ mkdir decaynet && cd decaynet
 curl -O https://raw.githubusercontent.com/CthulhuOnIce/Decaynet/main/docker-compose.yml
 docker run --rm ghcr.io/cthulhuonice/decaynet:latest generate-secrets > .env
 docker compose up -d                            # http://localhost:3000
+docker compose logs app | grep -A4 "setup code" # the /setup code (or set ADMIN_EMAIL/ADMIN_PASSWORD in .env first)
 ```
 
 To build the images from a checkout instead of pulling them:
@@ -112,6 +117,33 @@ To build the images from a checkout instead of pulling them:
 | `migrate` | One-shot schema migrator (+ demo seed when `SEED=1`) | | exits 0 when done |
 
 Every health check probes `127.0.0.1`, not `localhost`: inside containers `localhost` can resolve to IPv6 `::1`, where these services don't listen, which used to leave the stack stuck as *unhealthy*. Generous start periods cover slow first boots.
+
+### First admin
+
+A new site has no accounts. Pick whichever suits you:
+
+| Method | How | Good for |
+|---|---|---|
+| **Environment** | Set `ADMIN_EMAIL` + `ADMIN_PASSWORD` (optional `ADMIN_NAME`). On start, if the site has no admin, that account is created (or, if it already exists, promoted). | Portainer / unattended installs |
+| **Setup wizard** | Open the site; it redirects to **`/setup`** until an admin exists. Enter the setup code, create the admin, name the site, then continue to Site settings. | Clicking through it like other wikis |
+| **Fixed setup code** | Set `SETUP_TOKEN=…` to choose the code yourself instead of a random one printed in the logs. | Multiple app replicas, scripted installs |
+
+![The setup wizard](docs/images/setup-wizard.png)
+
+**Why a code?** Without one, whoever reached a fresh site first could make themselves admin. When the app has its service key (always the case in the Docker stack), it also tells the database to stop promoting the first sign-up. So even a direct sign-up through the Auth API before setup only gets the default role. The code is printed on every start until setup is done:
+
+```
+================================================================
+  Decaynet setup: no admin account yet.
+  Open https://history.example.org/setup and enter the setup code:
+
+      K7QD-M2XP-9HTA
+================================================================
+```
+
+Notes:
+- The environment variables only act while the site has **no admin**. Changing `ADMIN_PASSWORD` later does **not** change the password; use *Account → Password*.
+- Development without a service key keeps the old behaviour: the first account to sign up becomes admin (and `/setup` is a plain sign-up form).
 
 ### Production checklist
 
@@ -172,7 +204,7 @@ npm run dev                 # http://localhost:5173
 Nothing about Gary is built into the code or the schema; Gary is only the optional demo seed. To run a **Detroit Decaynet**, a country-wide one, or a **global** one:
 
 1. **Start empty.** Leave `SEED=0` (the default), or run `npx supabase db reset --no-seed` in development.
-2. **Create the first account.** It becomes admin, and a setup banner appears.
+2. **Create the first admin** with the [setup wizard or `ADMIN_EMAIL`/`ADMIN_PASSWORD`](#first-admin). A setup banner then points you to the next steps.
 3. **Admin → Site settings → Region & map:**
 
    ![Setting up a Detroit site](docs/images/admin-region.png)
@@ -496,6 +528,8 @@ Almost everything is configured in the app: **Admin → Site settings** (identit
 | `ORIGIN` | Public URL of the site (default `http://localhost:3000`) |
 | `SUPABASE_PUBLIC_URL` | Public URL of the Supabase gateway (default `http://localhost:8000`) |
 | `SEED` | `1` loads the Gary demo into an empty database |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` | Create the first admin on start (only while the site has none) |
+| `SETUP_TOKEN` | Fixed code for the `/setup` wizard (default: random, printed in the app logs) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL`, `SMTP_SENDER_NAME`, `MAILER_AUTOCONFIRM` | Email for auth |
 | `PORT`, `KONG_HTTP_PORT`, `POSTGRES_HOST_PORT` | Published ports (3000 / 8000 / 5432) |
 | `DECAYNET_IMAGE`, `DECAYNET_MIGRATE_IMAGE` | App / migrator images (default `ghcr.io/cthulhuonice/…:latest`) |
@@ -513,6 +547,7 @@ Almost everything is configured in the app: **Admin → Site settings** (identit
 | `SUPABASE_INTERNAL_URL` | How the server reaches Supabase, if different from the public URL |
 | `ORIGIN`, `ADDRESS_HEADER`, `XFF_DEPTH`, `BODY_SIZE_LIMIT`, `PORT`, `HOST` | Standard SvelteKit adapter-node settings |
 | `DATABASE_URL`, `SEED` | For the migration runner |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME`, `SETUP_TOKEN` | First admin (see [First admin](#first-admin)); needs the service-role key |
 
 ## Project layout
 
