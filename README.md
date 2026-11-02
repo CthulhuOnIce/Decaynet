@@ -333,7 +333,7 @@ The **workbench** lays a Sanborn fire-insurance sheet, an old plat or an aerial 
    - Click to place vertices; they snap to existing corners. <kbd>Backspace</kbd> undoes and <kbd>Esc</kbd> clears.
    - Then either attach the shape to an existing page or create a new page (building, street, parcel…).
    - Pick a condition, a role (*footprint*, *centerline*…), dates and a citation.
-   - Or skip the page entirely: under **…or export it**, **Download** saves the shape as a `.geojson` file and **Copy** puts it on the clipboard (lon/lat, with the name, kind, role and year as properties). **Keep & draw another** sets shapes aside so you can export several at once with **Download all** / **Copy all**. Kept shapes live only in that browser tab.
+   - Or skip the page entirely: under **Export** (at the top of the Trace tool), **Download** saves the shape as a `.geojson` file and **Copy** puts it on the clipboard (lon/lat, with the name, kind, role and year as properties). **Keep & draw another** sets shapes aside so you can export several at once with **Download all** / **Copy all**. Kept shapes live only in that browser tab.
 6. **Save alignment file** downloads the corner positions (and any pins) as a small JSON file. Next time, open the same scan and choose **Load alignment** to pick up where you left off. The scan itself never leaves your computer.
 
 Already georeferenced a sheet elsewhere (Map Warper, Allmaps…)? Paste its XYZ tile URL under **…or a tile layer**. It's also session-only.

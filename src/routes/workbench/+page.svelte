@@ -838,6 +838,44 @@
 				{/each}
 			</div>
 			<p class="muted small">{pts.length} vertices {geometry ? '· ready' : ''}</p>
+			<h3>Export</h3>
+			<p class="hint">
+				Take the shape away as GeoJSON (lon/lat, EPSG:4326) without creating or changing a page. The name, kind and role below, and the
+				year, go in its properties.
+			</p>
+			<div class="row exports">
+				<button disabled={!geometry} onclick={() => download([currentFeature()!])} title="Save this shape as a .geojson file">Download</button>
+				<button disabled={!geometry} onclick={() => copy([currentFeature()!])} title="Copy this shape as GeoJSON">Copy</button>
+				<button disabled={!geometry} onclick={keepShape} title="Set this shape aside and draw another, then export them together">Keep &amp; draw another</button>
+			</div>
+			{#if kept.length}
+				<div class="kept-box">
+					<div class="spread">
+						<strong>{kept.length} kept shape{kept.length === 1 ? '' : 's'}</strong>
+						<button class="ghost x" onclick={() => (kept = [])} title="Forget all kept shapes">Clear</button>
+					</div>
+					<ul class="plain-list">
+						{#each kept as f, i (i)}
+							<li class="small">
+								<span class="sw kept"></span>
+								{f.properties?.name ?? `${f.properties?.kind} ${f.geometry.type.toLowerCase()}`}
+								<span class="muted">· {f.properties?.year}</span>
+								<button class="ghost x" title="Remove" onclick={() => kept.splice(i, 1)}>✕</button>
+							</li>
+						{/each}
+					</ul>
+					<div class="row exports">
+						<button onclick={() => download(kept)}>Download all</button>
+						<button onclick={() => copy(kept)}>Copy all</button>
+						{#if geometry}<span class="muted small">(the shape you're drawing isn't included until you keep it)</span>{/if}
+					</div>
+				</div>
+			{/if}
+			{#if exportNote}<p class="notice ok small">{exportNote}</p>{/if}
+			<p class="hint">Kept shapes stay in this browser tab only and are gone when you leave the page.</p>
+
+			<hr />
+			<h3>…or save it to a page</h3>
 			<form method="post" action="?/trace" class="stack" use:enhance={() => after()}>
 				<input type="hidden" name="tool" value="trace" />
 				<input type="hidden" name="geojson" value={geojsonText} />
@@ -870,43 +908,6 @@
 				/>
 				<button class="primary" disabled={!geometry}>Save shape</button>
 			</form>
-
-			<hr />
-			<h3>…or export it</h3>
-			<p class="hint">
-				Take the shape away as GeoJSON (lon/lat, EPSG:4326) without creating or changing a page. The name, kind, role and year above go
-				in its properties.
-			</p>
-			<div class="row exports">
-				<button disabled={!geometry} onclick={() => download([currentFeature()!])} title="Save this shape as a .geojson file">Download</button>
-				<button disabled={!geometry} onclick={() => copy([currentFeature()!])} title="Copy this shape as GeoJSON">Copy</button>
-				<button disabled={!geometry} onclick={keepShape} title="Set this shape aside and draw another, then export them together">Keep &amp; draw another</button>
-			</div>
-			{#if kept.length}
-				<div class="kept-box">
-					<div class="spread">
-						<strong>{kept.length} kept shape{kept.length === 1 ? '' : 's'}</strong>
-						<button class="ghost x" onclick={() => (kept = [])} title="Forget all kept shapes">Clear</button>
-					</div>
-					<ul class="plain-list">
-						{#each kept as f, i (i)}
-							<li class="small">
-								<span class="sw kept"></span>
-								{f.properties?.name ?? `${f.properties?.kind} ${f.geometry.type.toLowerCase()}`}
-								<span class="muted">· {f.properties?.year}</span>
-								<button class="ghost x" title="Remove" onclick={() => kept.splice(i, 1)}>✕</button>
-							</li>
-						{/each}
-					</ul>
-					<div class="row exports">
-						<button onclick={() => download(kept)}>Download all</button>
-						<button onclick={() => copy(kept)}>Copy all</button>
-						{#if geometry}<span class="muted small">(the shape you're drawing isn't included until you keep it)</span>{/if}
-					</div>
-				</div>
-			{/if}
-			{#if exportNote}<p class="notice ok small">{exportNote}</p>{/if}
-			<p class="hint">Kept shapes stay in this browser tab only and are gone when you leave the page.</p>
 		{/if}
 
 		<!-- ======================= AREA ======================= -->
