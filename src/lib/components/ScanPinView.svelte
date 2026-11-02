@@ -4,7 +4,7 @@
 	Pin positions are in the image's natural pixel coordinates.
 -->
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 
 	type XY = [number, number];
 	interface Pin {
@@ -42,9 +42,11 @@
 		if (!el) return;
 		const { clientWidth: W, clientHeight: H } = el;
 		if (!W || !H) return;
-		scale = Math.min(W / width, H / height) * 0.95;
-		tx = (W - width * scale) / 2;
-		ty = (H - height * scale) / 2;
+		// Compute from a local so this never reads `scale` (it runs inside an effect)
+		const s = Math.min(W / width, H / height) * 0.95;
+		scale = s;
+		tx = (W - width * s) / 2;
+		ty = (H - height * s) / 2;
 		fitted = true;
 	}
 
@@ -52,12 +54,20 @@
 		fitView();
 		const ro = new ResizeObserver(() => !fitted && fitView());
 		ro.observe(el);
-		return () => ro.disconnect();
+		// Added by hand: Svelte's onwheel is passive, so preventDefault() there can't stop the page/browser zooming instead
+		el.addEventListener('wheel', onwheel, { passive: false });
+		return () => {
+			ro.disconnect();
+			el.removeEventListener('wheel', onwheel);
+		};
 	});
+	// Re-fit only when a different scan is shown, never in response to zoom/pan changes
 	$effect(() => {
-		void url;
-		fitted = false;
-		fitView();
+		void [url, width, height];
+		untrack(() => {
+			fitted = false;
+			fitView();
+		});
 	});
 
 	const toImg = (cx: number, cy: number): XY => {
@@ -122,7 +132,6 @@
 <div
 	class="view"
 	bind:this={el}
-	{onwheel}
 	onpointerdown={(e) => down(e)}
 	onpointermove={move}
 	onpointerup={up}
