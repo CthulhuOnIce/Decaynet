@@ -448,6 +448,56 @@
 		(map.getSource('draft') as GeoJSONSource).setData({ type: 'FeatureCollection', features: feats });
 	}
 
+	// How strongly the shape being drawn shows over the scan
+	let shapeFill = $state(0.25);
+	let shapeLine = $state(1);
+	function applyShapeOpacity() {
+		if (!map || !ready) return;
+		map.setPaintProperty('draft-fill', 'fill-opacity', shapeFill);
+		map.setPaintProperty('draft-line', 'line-opacity', shapeLine);
+		map.setPaintProperty('draft-pt', 'circle-opacity', shapeLine);
+		map.setPaintProperty('draft-pt', 'circle-stroke-opacity', shapeLine);
+	}
+
+	// Drag handle that moves the whole shape being drawn
+	let shapeHandle: Marker | undefined;
+	let movingShape = false;
+	const ptsCentre = (p: [number, number][]): [number, number] => [p.reduce((a, c) => a + c[0], 0) / p.length, p.reduce((a, c) => a + c[1], 0) / p.length];
+	function syncShapeHandle() {
+		if (!map || !maplibre || !ready) return;
+		if (!drawing || !pts.length) {
+			shapeHandle?.remove();
+			shapeHandle = undefined;
+			return;
+		}
+		if (shapeHandle) {
+			if (!movingShape) shapeHandle.setLngLat(ptsCentre(pts));
+			return;
+		}
+		const el = document.createElement('div');
+		el.className = 'handle move';
+		el.title = 'Drag to move the whole shape';
+		const h = new maplibre.Marker({ element: el, draggable: true }).setLngLat(ptsCentre(pts)).addTo(map);
+		let start = h.getLngLat();
+		let startPts = pts;
+		h.on('dragstart', () => {
+			movingShape = true;
+			start = h.getLngLat();
+			startPts = pts;
+		});
+		h.on('drag', () => {
+			const ll = h.getLngLat();
+			const dx = ll.lng - start.lng;
+			const dy = ll.lat - start.lat;
+			pts = startPts.map(([x, y]) => [+(x + dx).toFixed(7), +(y + dy).toFixed(7)]);
+		});
+		h.on('dragend', () => {
+			movingShape = false;
+			h.setLngLat(ptsCentre(pts));
+		});
+		shapeHandle = h;
+	}
+
 	// ---------------------------------------------------------------- area preview
 	let previewIds = $state<string[]>([]);
 	$effect(() => {
@@ -557,6 +607,7 @@
 
 			m.on('click', (e) => {
 				if (!drawing && !pinning) return;
+				// clicking a handle isn't a new vertex
 				if ((e.originalEvent.target as HTMLElement | null)?.closest('.maplibregl-marker')) return;
 				let c: [number, number] = [+e.lngLat.lng.toFixed(7), +e.lngLat.lat.toFixed(7)];
 				let best = 10;
@@ -585,6 +636,7 @@
 		markers.forEach((m) => m.remove());
 		pinMarkers.forEach((m) => m.remove());
 		resizeObs?.disconnect();
+		shapeHandle?.remove();
 		if (scan) URL.revokeObjectURL(scan.url);
 		top?.remove();
 		map?.remove();
@@ -633,6 +685,14 @@
 	$effect(() => {
 		void [kept.length, ready];
 		untrack(drawKept);
+	});
+	$effect(() => {
+		void [pts, drawing, ready];
+		untrack(syncShapeHandle);
+	});
+	$effect(() => {
+		void [shapeFill, shapeLine, ready];
+		untrack(applyShapeOpacity);
 	});
 	$effect(() => {
 		void previewIds;
@@ -831,7 +891,26 @@
 
 		<!-- ======================= TRACE ======================= -->
 		{#if tool === 'trace'}
-			<p class="hint">Click to place vertices over the overlay. Corners snap to existing shapes. <kbd>Backspace</kbd> undoes, <kbd>Esc</kbd> clears.</p>
+			<p class="hint">
+				Click to place vertices over the overlay. Corners snap to existing shapes. Drag the <span class="sw move"></span> handle to move the
+				whole shape. <kbd>Backspace</kbd> undoes, <kbd>Esc</kbd> clears.
+			</p>
+			<div class="opacity">
+				{#if activeSource}
+					<div class="field">
+						<label for="tso">Scan opacity {compare === 'swipe' ? '(swipe mode)' : `${Math.round(opacity * 100)}%`}</label>
+						<input id="tso" type="range" min="0" max="1" step="0.05" bind:value={opacity} disabled={compare === 'swipe'} />
+					</div>
+				{/if}
+				<div class="field">
+					<label for="tsf">Shape fill {Math.round(shapeFill * 100)}%</label>
+					<input id="tsf" type="range" min="0" max="1" step="0.05" bind:value={shapeFill} />
+				</div>
+				<div class="field">
+					<label for="tsl">Shape outline {Math.round(shapeLine * 100)}%</label>
+					<input id="tsl" type="range" min="0.1" max="1" step="0.05" bind:value={shapeLine} />
+				</div>
+			</div>
 			<div class="seg">
 				{#each ['polygon', 'line', 'point'] as const as m (m)}
 					<button class:on={drawMode === m} onclick={() => ((drawMode = m), (pts = []))}>{m}</button>
@@ -1105,6 +1184,17 @@
 	.nudges button {
 		padding: 4px 8px;
 		font-size: 0.78rem;
+	}
+	.opacity {
+		display: grid;
+		gap: 2px;
+		margin-bottom: 10px;
+	}
+	.opacity .field {
+		margin: 0;
+	}
+	.opacity input[type='range'] {
+		width: 100%;
 	}
 	.kinds {
 		display: flex;
