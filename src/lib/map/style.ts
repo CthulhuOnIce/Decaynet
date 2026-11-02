@@ -6,7 +6,29 @@ import type { SiteSettings } from '$lib/types';
 export const WORLD_CENTER: [number, number] = [0, 20];
 export const WORLD_ZOOM = 2;
 
-type ViewSettings = Pick<SiteSettings, 'map_center_lon' | 'map_center_lat' | 'map_zoom' | 'map_bounds'> | null | undefined;
+type ViewSettings =
+	| (Pick<SiteSettings, 'map_center_lon' | 'map_center_lat' | 'map_zoom' | 'map_bounds'> & {
+			setup_complete?: boolean;
+	  })
+	| null
+	| undefined;
+
+/**
+ * Whether Site settings actually choose a view. A fresh/neutral install keeps
+ * the whole-world default until someone configures a region, so maps can fall
+ * back to fitting their data instead of showing an empty planet.
+ */
+export function hasConfiguredView(s: ViewSettings): boolean {
+	if (!s) return false;
+	if (s.setup_complete) return true;
+	const b = s.map_bounds;
+	if (Array.isArray(b) && b.length === 4 && b.every(Number.isFinite)) return true;
+	return (
+		Number(s.map_center_lon) !== WORLD_CENTER[0] ||
+		Number(s.map_center_lat) !== WORLD_CENTER[1] ||
+		Number(s.map_zoom) > WORLD_ZOOM
+	);
+}
 
 /** Initial camera + optional pan limits for every map, from Site settings. */
 export function mapView(s: ViewSettings, minZoom?: number) {

@@ -4,6 +4,7 @@
 	import type { GeoJSONSource, Map as MLMap, MapGeoJSONFeature, Popup } from 'maplibre-gl';
 	import {
 		baseStyle,
+		boundsOf,
 		mapView,
 		interactiveLayers,
 		momentLayers,
@@ -25,9 +26,12 @@
 		selected = null,
 		center = undefined,
 		zoom = undefined,
+		/** fit to the first snapshot when the site has no configured view */
+		autoFit = false,
 		onselect,
 		onmoments,
-		onview
+		onview,
+		onready
 	}: {
 		year: number;
 		minYear: number;
@@ -43,9 +47,11 @@
 		/** defaults to Site settings */
 		center?: [number, number];
 		zoom?: number;
+		autoFit?: boolean;
 		onselect?: (p: Picked | null) => void;
 		onmoments?: (fc: { features: GeoJSON.Feature[]; unplaced: unknown[] }) => void;
 		onview?: (v: { center: [number, number]; zoom: number }) => void;
+		onready?: () => void;
 	} = $props();
 
 	let container: HTMLDivElement;
@@ -60,6 +66,7 @@
 	let debounce: ReturnType<typeof setTimeout> | undefined;
 	let lastSelected: string | null = null;
 	let fetchedBox: number[] = [];
+	let fitNext = false;
 
 	/** Current view expanded by half its size on each side, rounded so cache keys repeat. */
 	function paddedBounds(): number[] {
@@ -103,7 +110,14 @@
 				moments ? getJSON(`/api/moments?at=${at}&years=5&bbox=${fetchedBox.join(',')}`, ctrl.signal) : null
 			]);
 			if (ctrl.signal.aborted) return;
-			(map.getSource('snapshot') as GeoJSONSource).setData(snap as GeoJSON.FeatureCollection);
+			const fc = snap as GeoJSON.FeatureCollection;
+			(map.getSource('snapshot') as GeoJSONSource).setData(fc);
+			// A neutral install has no configured view; frame its data instead of the whole world.
+			if (fitNext) {
+				fitNext = false;
+				const b = boundsOf(fc);
+				if (b && fc.features.length) map.fitBounds(b, { padding: 60, maxZoom: 16, duration: 0 });
+			}
 			const m = (mom ?? { type: 'FeatureCollection', features: [], unplaced: [] }) as GeoJSON.FeatureCollection & {
 				unplaced: unknown[];
 			};
@@ -149,6 +163,7 @@
 	onMount(async () => {
 		const maplibregl = (await import('maplibre-gl')).default;
 		const view = mapView(page.data.settings);
+		fitNext = autoFit;
 		map = new maplibregl.Map({
 			container,
 			style: baseStyle(page.data.settings),
@@ -226,6 +241,7 @@
 			ready = true;
 			applyEra();
 			refresh();
+			onready?.();
 		});
 	});
 

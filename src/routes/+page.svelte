@@ -6,6 +6,7 @@
 	import YearSlider from '$lib/components/YearSlider.svelte';
 	import TagSelect from '$lib/components/TagSelect.svelte';
 	import EntityPanel from '$lib/components/EntityPanel.svelte';
+	import { hasConfiguredView } from '$lib/map/style';
 	import { formatFuzzy, yearToDate } from '$lib/time';
 	import type { EntitySnapshot, Picked } from '$lib/types';
 
@@ -24,6 +25,18 @@
 			? { center: [c[0], c[1]] as [number, number], zoom: c[2] }
 			: undefined;
 	let view = $state(startView);
+	// Where the camera starts. `?c=` wins; otherwise Site settings, unless the
+	// site is still neutral (no region configured), in which case the map fits
+	// its own data instead of showing the whole world.
+	const initialView = untrack(() => {
+		if (startView) return startView;
+		if (!hasConfiguredView(data.settings)) return undefined;
+		return {
+			center: [data.settings.map_center_lon, data.settings.map_center_lat] as [number, number],
+			zoom: data.settings.map_zoom
+		};
+	});
+	const initialSel = params.get('sel');
 
 	const NON_SPATIAL = ['person', 'organization', 'event', 'media'];
 	const spatialKinds = $derived(data.vocab.kinds.filter((k) => !NON_SPATIAL.includes(k.id)));
@@ -67,15 +80,30 @@
 		};
 	});
 
+	async function focusOn(id: string) {
+		try {
+			const res = await fetch(`/api/entity/${id}?at=${yearToDate(year)}`);
+			if (!res.ok) return;
+			const s = (await res.json()) as EntitySnapshot | null;
+			if (s?.location) mapRef?.flyTo(s.location.coordinates[0], s.location.coordinates[1], 15.5);
+		} catch {
+			/* the panel still opens even if we can't centre the map */
+		}
+	}
+
 	function pickById(id: string, fly = true) {
 		selected = id;
-		if (!fly) return;
-		fetch(`/api/entity/${id}?at=${yearToDate(year)}`)
-			.then((r) => (r.ok ? r.json() : null))
-			.then((s: EntitySnapshot | null) => {
-				if (s?.location) mapRef?.flyTo(s.location.coordinates[0], s.location.coordinates[1], 15.5);
-			});
+		if (fly) void focusOn(id);
 	}
+
+	// Arriving with ?sel= (from a page, timeline or search) should centre on it.
+	let mapReady = $state(false);
+	let followedInitial = false;
+	$effect(() => {
+		if (!mapReady || followedInitial) return;
+		followedInitial = true;
+		if (initialSel && !startView) void focusOn(initialSel);
+	});
 
 	// ---- moments (events / photos near this year)
 	type Moment = { id: string; slug: string; kind: string; name: string; subtype: string; color?: string; from: string; from_precision: string; years_away?: number };
@@ -123,11 +151,13 @@
 			moments={showMoments}
 			{selected}
 			{basemap}
-			center={startView?.center ?? [data.settings.map_center_lon, data.settings.map_center_lat]}
-			zoom={startView?.zoom ?? data.settings.map_zoom}
+			center={initialView?.center}
+			zoom={initialView?.zoom}
+			autoFit={!initialView && !selected}
 			onselect={(p: Picked | null) => (selected = p?.id ?? null)}
 			{onmoments}
 			onview={(v) => (view = v)}
+			onready={() => (mapReady = true)}
 		/>
 
 		<section class="controls" class:collapsed={!panelOpen} aria-label="Map layers">

@@ -6,6 +6,11 @@ import type { Actions, PageServerLoad } from './$types';
 export const load: PageServerLoad = async ({ locals, url }) => {
 	const { user } = await locals.safeGetSession();
 	if (!user) redirect(303, `/login?next=${encodeURIComponent(url.pathname + url.search)}`);
+	// One media flow: files and external media are added through the uploader.
+	if (url.searchParams.get('kind') === 'media') {
+		const title = url.searchParams.get('name') ?? '';
+		redirect(303, `/media/new${title ? `?title=${encodeURIComponent(title)}` : ''}`);
+	}
 	const slug = url.searchParams.get('slug') ?? '';
 	const latParam = url.searchParams.get('lat');
 	const lonParam = url.searchParams.get('lon');
@@ -36,6 +41,8 @@ export const actions: Actions = {
 		try {
 			const name = required(fd, 'name', 'Name');
 			const kind = required(fd, 'kind', 'Kind');
+			// Media pages need a file/URL, so they belong to the uploader.
+			if (kind === 'media') redirect(303, `/media/new?title=${encodeURIComponent(name)}`);
 			const slug = slugify(str(fd, 'slug') ?? name);
 			if (!slug) throw new FormError('Could not make a slug from that name.');
 			const life = fuzzyPair(fd, 'exists_from', 'exists_to');

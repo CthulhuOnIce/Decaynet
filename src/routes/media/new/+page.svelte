@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { untrack } from 'svelte';
 	import EntityPicker from '$lib/components/EntityPicker.svelte';
 	import GeometryPicker from '$lib/components/GeometryPicker.svelte';
 	import TemporalFields from '$lib/components/TemporalFields.svelte';
@@ -10,7 +11,7 @@
 	let busy = $state(false);
 	let uploadError = $state<string | null>(null);
 	let preview = $state<string | null>(null);
-	let title = $state('');
+	let title = $state(untrack(() => data.title ?? ''));
 
 	function pickFile(e: Event) {
 		const f = (e.currentTarget as HTMLInputElement).files?.[0];
@@ -107,10 +108,10 @@
 		<div class="card">
 			<h3>What it shows</h3>
 			<div class="field">
-				<label for="dep">Depicts</label>
-				<EntityPicker id="dep" name="depicts_id" value={data.depicts} />
+				<label for="dep">Depicts <span class="muted">(one or more pages)</span></label>
+				<EntityPicker id="dep" name="depicts_id" multiple values={data.depicts} placeholder="Search for a page it shows…" />
 			</div>
-			<p class="hint">Depicted period defaults to the capture date. Override it for e.g. a 1990s photo of a 1926 cornerstone.</p>
+			<p class="hint">Add as many as the image shows. The depicted period defaults to the capture date; override it for e.g. a 1990s photo of a 1926 cornerstone.</p>
 			<TemporalFields sources={data.sources} fromLabel="Depicts from" toLabel="Depicts until" idPrefix="dep" />
 		</div>
 

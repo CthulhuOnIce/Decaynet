@@ -9,10 +9,13 @@
 	let name = $state('');
 	let slug = $state('');
 	$effect.pre(() => {
-		kind = v.kind ?? data.preset.kind;
+		const next = v.kind ?? data.preset.kind;
+		// Media pages are created through the uploader, not here.
+		kind = next === 'media' ? 'building' : next;
 		name = v.name ?? data.preset.name;
 		slug = v.slug ?? data.preset.slug;
 	});
+	const creatableKinds = $derived(data.vocab.kinds.filter((k) => k.id !== 'media'));
 	let slugTouched = $state(false);
 	$effect(() => {
 		if (!slugTouched && !data.preset.slug) slug = autoSlug(name);
@@ -31,7 +34,7 @@
 
 	<form method="post" class="stack">
 		<div class="kinds">
-			{#each data.vocab.kinds as kk (kk.id)}
+			{#each creatableKinds as kk (kk.id)}
 				<label class="kind" class:on={kind === kk.id} style:--c={kk.color}>
 					<input type="radio" name="kind" value={kk.id} bind:group={kind} />
 					{kk.label}
@@ -88,7 +91,7 @@
 			{/if}
 		</div>
 
-		{#if k?.geometry_hint || kind === 'event' || kind === 'media'}
+		{#if k?.geometry_hint || kind === 'event'}
 			<div>
 				<div class="eyebrow">Location (optional; refine later)</div>
 				<GeometryPicker
@@ -106,7 +109,6 @@
 
 		<div class="row">
 			<button class="primary">Create page</button>
-			{#if kind === 'media'}<a href="/media/new">Uploading a file? Use the media uploader →</a>{/if}
 		</div>
 	</form>
 </div>
