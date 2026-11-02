@@ -8,15 +8,27 @@ const MEDIA_TYPES = ['photo', 'postcard', 'map', 'aerial', 'document', 'newspape
 export const load: PageServerLoad = async ({ locals, url }) => {
 	const { user } = await locals.safeGetSession();
 	if (!user) redirect(303, `/login?next=${encodeURIComponent(url.pathname + url.search)}`);
-	const depictsSlug = url.searchParams.get('depicts');
+	// `?depicts=slug` may repeat or be comma-separated; the uploader can show several pages.
+	const depictsSlugs = url.searchParams
+		.getAll('depicts')
+		.flatMap((s) => s.split(','))
+		.map((s) => s.trim())
+		.filter(Boolean);
 	const [{ data: depicts }, { data: sources }] = await Promise.all([
-		depictsSlug
-			? locals.supabase.from('entities').select('id, name, slug').eq('slug', depictsSlug).maybeSingle()
-			: Promise.resolve({ data: null }),
+		depictsSlugs.length
+			? locals.supabase.from('entities').select('id, name, slug').in('slug', depictsSlugs)
+			: Promise.resolve({ data: [] }),
 		locals.supabase.from('sources').select('id, title').order('title')
 	]);
 	const tags = await loadTags(locals.supabase);
-	return { depicts, sources: sources ?? [], mediaTypes: MEDIA_TYPES, userId: user.id, tags };
+	return {
+		depicts: (depicts ?? []) as { id: string; name: string; slug: string }[],
+		title: url.searchParams.get('title') ?? '',
+		sources: sources ?? [],
+		mediaTypes: MEDIA_TYPES,
+		userId: user.id,
+		tags
+	};
 };
 
 export const actions: Actions = {
@@ -76,21 +88,24 @@ export const actions: Actions = {
 			});
 			if (mi.error) throw new FormError(dbMessage(mi.error));
 
-			// What it shows, and when. Defaults to the capture date.
-			const depicts = str(fd, 'depicts_id');
-			if (depicts) {
+			// What it shows, and when. Defaults to the capture date. An image may
+			// depict any number of pages; the same depicted period applies to all.
+			const depictsIds = [...new Set(fd.getAll('depicts_id').map(String).filter(Boolean))];
+			if (depictsIds.length) {
 				const t = temporalFromForm(fd);
-				const r = await sb.from('relations').insert({
-					subject_id: entity.id,
-					predicate: 'depicts',
-					object_id: depicts,
-					...t,
-					valid_from: t.valid_from ?? captured.from,
-					valid_from_precision: t.valid_from ? t.valid_from_precision : captured.fromPrecision,
-					valid_to: t.valid_to ?? (t.valid_from ? null : captured.from),
-					valid_to_precision: t.valid_to ? t.valid_to_precision : captured.fromPrecision,
-					source_id: t.source_id ?? sourceId
-				});
+				const r = await sb.from('relations').insert(
+					depictsIds.map((depicts) => ({
+						subject_id: entity.id,
+						predicate: 'depicts',
+						object_id: depicts,
+						...t,
+						valid_from: t.valid_from ?? captured.from,
+						valid_from_precision: t.valid_from ? t.valid_from_precision : captured.fromPrecision,
+						valid_to: t.valid_to ?? (t.valid_from ? null : captured.from),
+						valid_to_precision: t.valid_to ? t.valid_to_precision : captured.fromPrecision,
+						source_id: t.source_id ?? sourceId
+					}))
+				);
 				if (r.error) throw new FormError(dbMessage(r.error));
 			}
 

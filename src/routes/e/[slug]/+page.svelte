@@ -44,6 +44,15 @@
 		return vals.length ? vals.map(([k, v]) => `${k}: ${v}`).join(', ') : '';
 	};
 	const mainMedia = $derived(data.media ? mediaSrc(data.media.storage_path, data.media.external_url) : null);
+	// Carry the current position so "View on map" lands on it without waiting for a lookup
+	const mapHref = $derived.by(() => {
+		const u = new URLSearchParams({ y: String(data.year), sel: e.id });
+		if (snap.location) {
+			const zoom = Math.max(15.5, Number(data.settings.map_zoom) || 0);
+			u.set('c', `${snap.location.coordinates[0]},${snap.location.coordinates[1]},${zoom}`);
+		}
+		return `/?${u}`;
+	});
 	const canEdit = $derived(!!data.user && (data.perms ?? []).includes('edit_content'));
 	// Footprint (grey) + spaces (highlighted) for the floor-plan minimap
 	const floorPlan = $derived<GeoJSON.Feature[]>([
@@ -98,7 +107,7 @@
 			{#if data.article?.locked}<Badge color="#8fb3c9" label="Locked" />{/if}
 			{#if e.is_private}<Badge color="#e0a23a" label="Private" title="Hidden from the public until published" />{/if}
 			<span class="spacer"></span>
-			<a class="btn ghost" href="/?y={data.year}&sel={e.id}">View on map</a>
+			<a class="btn ghost" href={mapHref}>View on map</a>
 			{#if canEdit}
 				<a class="btn" href="/e/{e.slug}/edit">Edit article</a>
 				<a class="btn" href="/e/{e.slug}/facts">Edit facts</a>
