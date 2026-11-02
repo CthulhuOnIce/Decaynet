@@ -7,6 +7,7 @@
 	import TagSelect from '$lib/components/TagSelect.svelte';
 	import EntityPanel from '$lib/components/EntityPanel.svelte';
 	import { hasConfiguredView } from '$lib/map/style';
+	import { loadView, saveView, loadYear, saveYear } from '$lib/mapMemory';
 	import { formatFuzzy, yearToDate } from '$lib/time';
 	import type { EntitySnapshot, Picked } from '$lib/types';
 
@@ -15,18 +16,20 @@
 	// ---- state, seeded from a shareable URL: /?y=1955&sel=<uuid>&c=<lon>,<lat>,<zoom>
 	const params = page.url.searchParams;
 	let year = $state(
-		untrack(() => Math.max(data.minYear, Math.min(data.maxYear, Number(params.get('y')) || data.settings.default_year)))
+		untrack(() => Math.max(data.minYear, Math.min(data.maxYear, Number(params.get('y')) || loadYear() || data.settings.default_year)))
 	);
 	let basemap = $state(untrack(() => data.settings.basemap_mode));
 	let selected = $state<string | null>(params.get('sel'));
 	const c = params.get('c')?.split(',').map(Number);
-	const startView =
+	const urlView =
 		c?.length === 3 && c.every(Number.isFinite)
 			? { center: [c[0], c[1]] as [number, number], zoom: c[2] }
 			: undefined;
+	// Without ?c=, resume wherever the map (or workbench) was last left, unless following a link to an entity
+	const startView = urlView ?? (params.get('sel') ? undefined : loadView());
 	let view = $state(startView);
 	// Temporary pin (?pin=1 with ?c=): marks a searched address with no page; not kept in the URL
-	let pin = $state<[number, number] | null>(params.get('pin') && startView ? startView.center : null);
+	let pin = $state<[number, number] | null>(params.get('pin') && urlView ? urlView.center : null);
 	// Where the camera starts. `?c=` wins; otherwise Site settings, unless the
 	// site is still neutral (no region configured), in which case the map fits
 	// its own data instead of showing the whole world.
@@ -104,7 +107,7 @@
 	$effect(() => {
 		if (!mapReady || followedInitial) return;
 		followedInitial = true;
-		if (initialSel && !startView) void focusOn(initialSel);
+		if (initialSel && !urlView) void focusOn(initialSel);
 	});
 
 	// ---- moments (events / photos near this year)
@@ -122,6 +125,8 @@
 		const s = selected;
 		const v = view;
 		const tg = tag;
+		saveYear(y);
+		if (v) saveView(v);
 		untrack(() => {
 			clearTimeout(urlTimer);
 			urlTimer = setTimeout(() => {

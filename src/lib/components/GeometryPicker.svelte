@@ -4,6 +4,7 @@
 	import { page } from '$app/state';
 	import type { GeoJSONSource, Map as MLMap } from 'maplibre-gl';
 	import { baseStyle, boundsOf, mapView } from '$lib/map/style';
+	import { loadView } from '$lib/mapMemory';
 
 	type Mode = 'point' | 'line' | 'polygon';
 
@@ -69,7 +70,7 @@
 
 	onMount(async () => {
 		const maplibregl = (await import('maplibre-gl')).default;
-		map = new maplibregl.Map({ container: el, style: baseStyle(page.data.settings), ...mapView(page.data.settings, 3), attributionControl: { compact: true } });
+		map = new maplibregl.Map({ container: el, style: baseStyle(page.data.settings), ...mapView(page.data.settings, 3), ...loadView(), attributionControl: { compact: true } });
 		map.doubleClickZoom.disable();
 		map.getCanvas().style.cursor = 'crosshair';
 		map.on('load', () => {

@@ -4,6 +4,7 @@
 	import { enhance } from '$app/forms';
 	import type { GeoJSONSource, Map as MLMap } from 'maplibre-gl';
 	import { baseStyle, mapView, snapshotLayers } from '$lib/map/style';
+	import { loadView, saveView } from '$lib/mapMemory';
 	import { can } from '$lib/perms';
 	import { yearToDate } from '$lib/time';
 	import { WIKIDATA_FIELDS, type ImportOptions, type PlanAction, type PlanItem, type PreviewResult } from '$lib/importTypes';
@@ -183,9 +184,11 @@
 			container: mapEl,
 			style: baseStyle(data.settings),
 			...mapView(data.settings),
+			...loadView(),
 			attributionControl: { compact: true, customAttribution: 'Previews: © OpenHistoricalMap contributors (CC0), © OpenStreetMap contributors (ODbL), Wikidata (CC0), Wikipedia & Commons (Wikimedia), GeoNames (CC BY)' }
 		});
 		map.addControl(new maplibregl.NavigationControl(), 'top-right');
+		map.on('moveend', () => map && saveView({ center: [map.getCenter().lng, map.getCenter().lat], zoom: map.getZoom() }));
 		map.on('load', async () => {
 			const m = map!;
 			m.setPaintProperty('basemap', 'raster-opacity', 0.5);

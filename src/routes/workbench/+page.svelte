@@ -7,6 +7,7 @@
 	import EntityPicker from '$lib/components/EntityPicker.svelte';
 	import TemporalFields from '$lib/components/TemporalFields.svelte';
 	import { baseStyle, mapView, snapshotLayers } from '$lib/map/style';
+	import { loadView, saveView, loadYear, saveYear } from '$lib/mapMemory';
 	import { can } from '$lib/perms';
 	import { yearToDate } from '$lib/time';
 
@@ -16,7 +17,7 @@
 	type Corners = [[number, number], [number, number], [number, number], [number, number]];
 
 	let tool = $state<Tool>('overlay');
-	let year = $state(untrack(() => data.settings.default_year));
+	let year = $state(untrack(() => loadYear() ?? data.settings.default_year));
 	let ready = $state(false);
 	let mapEl: HTMLDivElement;
 	let topEl: HTMLDivElement;
@@ -344,6 +345,7 @@
 			container: mapEl,
 			style: baseStyle(data.settings),
 			...mapView(data.settings),
+			...loadView(),
 			attributionControl: {
 				compact: true,
 				customAttribution: `<a href="${data.settings.source_code_url}" target="_blank" rel="noopener">Source (AGPL)</a>`
@@ -381,6 +383,7 @@
 				}
 				pts = effectiveMode === 'point' ? [c] : [...pts, c];
 			});
+			m.on('moveend', () => saveView({ center: [m.getCenter().lng, m.getCenter().lat], zoom: m.getZoom() }));
 			m.on('move', () => top?.jumpTo({ center: m.getCenter(), zoom: m.getZoom(), bearing: m.getBearing(), pitch: m.getPitch() }));
 			ready = true;
 			applyOverlay();
@@ -397,6 +400,7 @@
 	});
 
 	$effect(() => {
+		saveYear(year);
 		void [year, refreshKey];
 		if (!ready) return;
 		clearTimeout(fetchTimer);
