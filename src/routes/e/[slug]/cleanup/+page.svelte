@@ -1,23 +1,28 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { formatRange } from '$lib/time';
-	import { TIMELINE_RULES, describeFix, fixChange, type TimelineRule } from '$lib/timelineCleanup';
+	import { TIMELINE_SECTIONS, describeFix, fixChange, type TimelineSection } from '$lib/timelineCleanup';
 
 	let { data, form } = $props();
 	const e = $derived(data.entity);
 
-	const groups = $derived(
-		(Object.keys(TIMELINE_RULES) as TimelineRule[])
-			.map((rule) => ({ rule, ...TIMELINE_RULES[rule], fixes: data.fixes.filter((f) => f.rule === rule) }))
-			.filter((g) => g.fixes.length)
+	const actions = $derived(data.fixes.filter((f) => f.op !== 'note'));
+	const notes = $derived(data.fixes.filter((f) => f.op === 'note'));
+	const sections = $derived(
+		(Object.keys(TIMELINE_SECTIONS) as TimelineSection[])
+			.map((id) => ({ id, ...TIMELINE_SECTIONS[id], fixes: actions.filter((f) => f.section === id) }))
+			.filter((s) => s.fixes.length)
 	);
-	// every fix starts ticked; reset whenever a new plan arrives
+	const defaults = $derived(actions.filter((f) => f.default).map((f) => f.key));
+	const suggestions = $derived(actions.length - defaults.length);
+	// fixes start ticked, suggestions unticked; reset whenever a new plan arrives
 	let picked = $state<string[]>([]);
 	$effect.pre(() => {
-		picked = data.fixes.map((f) => f.key);
+		picked = defaults;
 	});
 	let busy = $state(false);
 	const lifespan = $derived(formatRange(e.exists_from, e.exists_from_precision, e.exists_to, e.exists_to_precision) || 'no dates');
+	const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 </script>
 
 <svelte:head><title>Timeline cleanup · {e.name}</title></svelte:head>
@@ -26,19 +31,33 @@
 	<div class="eyebrow">Timeline cleanup</div>
 	<h1><a href="/e/{e.slug}">{e.name}</a></h1>
 	<p class="muted">
-		Lifespan {lifespan}. These fixes keep the conditions and footprint in step with the lifespan. Nothing is applied until you
-		choose; every change shows in the page's <a href="/e/{e.slug}/history">history</a>.
+		Lifespan {lifespan}. These edits make the conditions, shapes, addresses and relations tell one continuous story within the
+		lifespan. Nothing changes until you apply; every edit shows in the page's <a href="/e/{e.slug}/history">history</a>.
 	</p>
 
 	{#if form?.error}<p class="notice error">{form.error}</p>{/if}
 	{#if form?.ok}<p class="notice ok">{form.ok}</p>{/if}
 
 	<div class="grid-2">
-		<div>
-			{#if !data.fixes.length}
+		<div class="stack">
+			{#if notes.length}
+				<section class="card notes">
+					<h3>Needs a person</h3>
+					<ul class="plain-list">
+						{#each notes as n (n.key)}<li>{describeFix(n)}</li>{/each}
+					</ul>
+					<a class="small" href="/e/{e.slug}/facts">Edit facts by hand →</a>
+				</section>
+			{/if}
+
+			{#if !actions.length}
 				<div class="card">
 					<h2>Nothing to fix</h2>
-					<p class="muted">The conditions don't overlap or outlive the lifespan, and the footprint matches it.</p>
+					<p class="muted">
+						{notes.length
+							? 'Everything that can be fixed automatically already agrees with the lifespan.'
+							: 'The conditions, shapes, addresses and relations already agree with the lifespan.'}
+					</p>
 					<a class="btn" href="/e/{e.slug}">Back to the page</a>
 				</div>
 			{:else}
@@ -55,24 +74,28 @@
 					}}
 				>
 					<div class="spread">
-						<h2>{data.fixes.length} proposed fix{data.fixes.length === 1 ? '' : 'es'}</h2>
+						<h2>
+							{plural(defaults.length, 'fix', 'fixes')}{#if suggestions}<span class="muted">, {plural(suggestions, 'suggestion')}</span>{/if}
+						</h2>
 						<span class="small">
-							<button type="button" class="link" onclick={() => (picked = data.fixes.map((f) => f.key))}>all</button> ·
+							<button type="button" class="link" onclick={() => (picked = defaults)}>recommended</button> ·
+							<button type="button" class="link" onclick={() => (picked = actions.map((f) => f.key))}>all</button> ·
 							<button type="button" class="link" onclick={() => (picked = [])}>none</button>
 						</span>
 					</div>
-					{#each groups as g (g.rule)}
+					{#each sections as s (s.id)}
 						<section class="card group">
-							<h3>{g.title}</h3>
-							<p class="hint">{g.why}</p>
+							<h3>{s.title}</h3>
+							<p class="hint">{s.why}</p>
 							<ul class="plain-list">
-								{#each g.fixes as f (f.key)}
+								{#each s.fixes as f (f.key)}
 									{@const change = fixChange(f)}
-									<li>
+									<li class:suggestion={!f.default}>
 										<label class="check">
 											<input type="checkbox" name="key" value={f.key} bind:group={picked} />
 											<span>
 												{describeFix(f)}
+												{#if !f.default}<span class="tag" title="Not ticked by default: check it against your sources">suggestion</span>{/if}
 												{#if change}<span class="change mono">{change}</span>{/if}
 											</span>
 										</label>
@@ -82,12 +105,12 @@
 						</section>
 					{/each}
 					<p class="hint">
-						Check “Record how it ended” against what you know: a building that was moved or renamed rather than torn down needs
-						a different condition.
+						Added conditions are marked “approximate” with a note saying they came from this cleanup. Check “Demolished” against
+						what you know: a building that was moved or renamed rather than torn down needs a different condition.
 					</p>
 					<div class="row">
 						<button class="primary" disabled={!picked.length || busy}>
-							{busy ? 'Applying…' : `Apply ${picked.length} fix${picked.length === 1 ? '' : 'es'}`}
+							{busy ? 'Applying…' : `Apply ${plural(picked.length, 'edit')}`}
 						</button>
 						<a class="btn ghost" href="/e/{e.slug}">Cancel</a>
 					</div>
@@ -121,6 +144,17 @@
 						<li class="muted small">Not on the map.</li>
 					{/each}
 				</ul>
+				{#if data.addresses.length}
+					<h3 class="gap">Addresses</h3>
+					<ul class="plain-list now">
+						{#each data.addresses as a (a.id)}
+							<li>
+								<strong>{a.label}</strong>
+								<span class="muted small">{formatRange(a.valid_from, a.valid_from_precision, a.valid_to, a.valid_to_precision) || 'undated'}</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
 				<p class="small"><a href="/e/{e.slug}/facts">Edit facts by hand →</a></p>
 			</div>
 		</aside>
@@ -128,14 +162,22 @@
 </div>
 
 <style>
-	.group h3 {
+	.group h3,
+	.notes h3 {
 		margin: 0;
 	}
 	.group .hint {
 		margin: 2px 0 8px;
 	}
-	.group li + li {
+	.group li + li,
+	.notes li + li {
 		margin-top: 6px;
+	}
+	.notes {
+		border-color: var(--amber);
+	}
+	.notes ul {
+		margin: 8px 0;
 	}
 	.check {
 		display: flex;
@@ -147,6 +189,18 @@
 	}
 	.check input {
 		margin-top: 3px;
+	}
+	.suggestion .check {
+		color: var(--ink-2);
+	}
+	.tag {
+		margin-left: 6px;
+		padding: 0 6px;
+		border: 1px dashed var(--amber);
+		border-radius: 999px;
+		font-size: 0.7rem;
+		color: var(--amber);
+		white-space: nowrap;
 	}
 	.change {
 		display: block;

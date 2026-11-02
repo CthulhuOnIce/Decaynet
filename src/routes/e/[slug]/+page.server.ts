@@ -52,7 +52,7 @@ export const load: PageServerLoad = async ({ params, url, locals, parent }) => {
 	// For people who can clean up timelines: how many fixes this page has waiting
 	const { perms } = await parent();
 	const timelineFixes = (perms ?? []).includes('clean_timelines')
-		? (((await sb.rpc('timeline_plan', { p_entity: entity.id })).data ?? []) as unknown[]).length
+		? (((await sb.rpc('timeline_plan', { p_entity: entity.id })).data ?? []) as { op: string; default: boolean }[]).filter((f) => f.op !== 'note' && f.default).length
 		: 0;
 
 	const geomFeatures: GeoJSON.Feature[] = (geoms.data ?? []).map((g) => ({

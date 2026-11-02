@@ -473,15 +473,18 @@ Everyone can manage their own profile, email and password at **Account**.
 | ![Timeline](docs/images/timeline.png) | **Timeline** is a city-wide chronology by decade: events, things built and demolished, and decline milestones. |
 | ![Tags](docs/images/tags.png) | **Tags** shows the trait tree with usage counts. Contributors can add sub-traits as they tag. |
 
-**Timeline cleanup** (*Admin → Timelines*, or *More → Clean up timeline* on a page) finds pages whose conditions, lifespan and footprint disagree, and proposes fixes you tick and apply:
+**Timeline cleanup** (*Admin → Timelines*, or *More → Clean up timeline* on a page). Facts arrive one at a time from many tools, so timelines collect loose ends: *Active* still open after *Abandoned* starts, a building with no condition at all, an undated point that reads as "always there", a tenant still listed after the building was demolished. The cleanup reads the page as a whole and proposes the edits that make it one continuous story within its lifespan:
 
-- merge the same condition recorded twice in a row;
-- end a condition where the next one starts, and end standing conditions (in use, vacant, abandoned…) with the lifespan;
-- end the lifespan at a recorded *Demolished* / *Empty lot* / *Vacated*;
-- add *Demolished* (or *Vacated* for a street) when a building, structure or street's lifespan ends without one. Untick this for buildings that were moved or renamed;
-- stretch a page's only footprint to cover its whole lifespan.
+| Section | What it does |
+|---|---|
+| Lifespan | Ends it at a recorded demolition. *Suggests* a start from the earliest dated fact, or moving the end to a demolition date that disagrees with it |
+| Conditions | One chain from start to end: *Active* when nothing is recorded or before the first recorded condition (e.g. before abandonment); gaps carried forward; overlaps closed; repeats merged; clipped to the lifespan; *Demolished* (*Vacated* for streets) added when the lifespan ends without one. *Suggests* removing conditions recorded after the end |
+| Shapes | One footprint, point or line covers the whole lifespan; redrawn ones follow each other |
+| Addresses | A single address covers the building's lifespan; several (corner buildings) are kept within it |
+| Names, facts | Official renamings follow each other; dated names and facts stay within the lifespan |
+| Relations, spaces | Tenants, owners and locations end when either side does; storefronts and suites end with their building |
 
-Every change goes through the normal history, so it can be reviewed and undone by hand.
+Fixes are ticked by default; suggestions are not. Dates are compared at their precision, so "until 1949" followed by "from 1950" is continuous, not a gap. Some things need a person and are only listed: several undated conditions, footprints that start together (wings drawn separately), a fact entirely outside the lifespan. Added conditions are marked *approximate* with a note, and every edit goes through the page history.
 
 **Changes** lists every edit to prose and facts. Each page's **History** shows its revisions, every fact change and its article status transitions.
 

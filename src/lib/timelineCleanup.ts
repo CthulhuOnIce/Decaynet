@@ -1,19 +1,26 @@
 import { formatFuzzy, formatRange } from './time';
 import type { Precision } from './types';
 
-/** One proposed fix from timeline_plan() (see migration 0019). */
+/** One item from timeline_plan() (see migration 0019). */
 export interface TimelineFix {
 	key: string;
-	rule: TimelineRule;
-	target: 'entity' | 'status' | 'geometry';
-	op: 'update' | 'delete' | 'insert';
+	op: 'update' | 'insert' | 'delete' | 'note';
+	rule: string;
+	section: TimelineSection;
+	table: string;
 	id?: string;
-	/** condition label, or the geometry role */
+	/** condition label, shape role, address, name, "occupied by X", ... */
 	label?: string;
-	/** for close_overlap: the condition that starts next */
+	/** the condition that starts next (close_overlap, close_gap, fill_active) */
 	next?: string | null;
+	/** for inserted conditions */
+	status?: string;
+	/** reasons for a range change: start, end, open, overlap, gap, or condition rules */
+	why?: string[];
 	before?: FixRange;
 	after?: FixRange;
+	/** on by default; off = a suggestion a person should confirm */
+	default: boolean;
 }
 
 export interface FixRange {
@@ -23,49 +30,105 @@ export interface FixRange {
 	valid_to_precision: Precision;
 }
 
-export type TimelineRule = 'end_lifespan' | 'merge_duplicate' | 'close_overlap' | 'close_at_end' | 'add_gone' | 'fit_footprint';
+export type TimelineSection = 'lifespan' | 'conditions' | 'shapes' | 'addresses' | 'names' | 'relations' | 'spaces' | 'facts';
 
-/** In the order fixes are applied; titles and explanations for reviewers. */
-export const TIMELINE_RULES: Record<TimelineRule, { title: string; why: string }> = {
-	end_lifespan: { title: 'End the lifespan', why: 'A “gone” condition is recorded, but the page still reads as standing.' },
-	merge_duplicate: { title: 'Merge repeated conditions', why: 'The same condition twice in a row; the earlier one carries on.' },
-	close_overlap: { title: 'Close overlapping conditions', why: 'A condition is still running when the next one starts.' },
-	close_at_end: { title: 'End conditions with the lifespan', why: 'A standing condition runs past the end of the lifespan.' },
-	add_gone: { title: 'Record how it ended', why: 'The lifespan ends but no condition says it was demolished (or vacated, for a street).' },
-	fit_footprint: { title: 'Fit the footprint to the lifespan', why: 'The page has one footprint; it should cover the whole time the building stood.' }
+/** In page order, with what each section's fixes do. */
+export const TIMELINE_SECTIONS: Record<TimelineSection, { title: string; why: string }> = {
+	lifespan: { title: 'Lifespan', why: 'When it stood. Everything else is fitted to this.' },
+	conditions: { title: 'Conditions', why: 'One continuous history from start to end: in use until something else is recorded, no overlaps or gaps, and how it ended.' },
+	shapes: { title: 'Shapes', why: 'A single footprint, point or line covers the whole lifespan; redrawn ones follow each other.' },
+	addresses: { title: 'Addresses', why: 'A single address covers the lifespan; several are kept within it.' },
+	names: { title: 'Names', why: 'Official names follow each other; dated names stay within the lifespan.' },
+	relations: { title: 'Relations', why: 'Tenants, owners and locations end when either side does.' },
+	spaces: { title: 'Spaces', why: 'Storefronts, suites and halls end with their building.' },
+	facts: { title: 'Facts', why: 'Dated facts stay within the lifespan.' }
 };
 
-export const ruleTitle = (r: string) => TIMELINE_RULES[r as TimelineRule]?.title ?? r;
+export const sectionTitle = (s: string) => TIMELINE_SECTIONS[s as TimelineSection]?.title ?? s;
 
 const range = (r?: FixRange) => (r ? formatRange(r.valid_from, r.valid_from_precision, r.valid_to, r.valid_to_precision) || 'undated' : '');
 const date = (d: string | null | undefined, p: Precision | undefined) => (d ? formatFuzzy(d, p ?? 'year') : 'open');
+const from = (r?: FixRange) => date(r?.valid_from, r?.valid_from_precision);
+const to = (r?: FixRange) => date(r?.valid_to, r?.valid_to_precision);
 
-/** One line saying what the fix does. */
+const WHY: Record<string, string> = {
+	start: 'starts with the lifespan',
+	end: 'ends with the lifespan',
+	open: 'runs on, as it still stands',
+	overlap: 'ends where the next one starts',
+	gap: 'runs on until the next one'
+};
+
+/** One line saying what an item does. */
 export function describeFix(f: TimelineFix): string {
 	const a = f.after;
+	const b = f.before;
+	const q = (s?: string | null) => `“${s ?? ''}”`;
 	switch (f.rule) {
+		// lifespan
 		case 'end_lifespan':
-			return `End the lifespan in ${date(a?.valid_to, a?.valid_to_precision)}, when it's recorded as “${f.label}”.`;
+			return `End the lifespan in ${to(a)}, when it's recorded as ${q(f.label)}.`;
+		case 'start_lifespan':
+			return `Start the lifespan in ${from(a)}, from the earliest dated ${f.label}. That's when it was first recorded, not necessarily built.`;
+		case 'gone_mismatch':
+			return `End the lifespan in ${to(a)}, when ${q(f.label)} is recorded, instead of ${to(b)}.`;
+		// conditions
+		case 'seed_active':
+			return `Add ${q(f.label)} for ${range(a)}: no condition is recorded.`;
+		case 'fill_active':
+			return `Add ${q(f.label)} for ${range(a)}, before ${q(f.next)}.`;
+		case 'extend_back':
+			return `Start ${q(f.label)} with the lifespan in ${from(a)}.`;
+		case 'date_at_start':
+			return `Date ${q(f.label)} from the start of the lifespan, ${from(a)}.`;
+		case 'date_at_end':
+			return `Date ${q(f.label)} at the end of the lifespan, ${from(a)}.`;
 		case 'merge_duplicate':
-			return f.op === 'delete'
-				? `Remove the repeated “${f.label}” (${range(f.before)}).`
-				: `“${f.label}” now runs ${range(a)}, covering its repeat.`;
+			return f.op === 'delete' ? `Remove the repeated ${q(f.label)} (${range(b)}).` : `${q(f.label)} runs on to ${to(a)}, covering its repeat.`;
+		case 'clamp_start':
+			return `Start ${q(f.label)} with the lifespan in ${from(a)}.`;
 		case 'close_overlap':
-			return `End “${f.label}” in ${date(a?.valid_to, a?.valid_to_precision)}, when “${f.next}” begins.`;
+			return `End ${q(f.label)} in ${to(a)}, when ${q(f.next)} begins.`;
+		case 'close_gap':
+			return `Carry ${q(f.label)} on to ${to(a)}, when ${q(f.next)} begins.`;
 		case 'close_at_end':
-			return `End “${f.label}” in ${date(a?.valid_to, a?.valid_to_precision)}, when the lifespan ends.`;
+			return `End ${q(f.label)} in ${to(a)}, with the lifespan.`;
 		case 'add_gone':
-			return `Add “${f.label}” from ${date(a?.valid_from, a?.valid_from_precision)}.`;
-		case 'fit_footprint':
-			return `Make the ${f.label ?? 'footprint'} cover ${range(a)}.`;
+			return `Add ${q(f.label)} from ${from(a)}, when the lifespan ends.`;
+		case 'after_end':
+			return `Remove ${q(f.label)} (${range(b)}): it starts after the lifespan ends.`;
+		case 'extend_open':
+			return `Keep ${q(f.label)} running: it ends in ${to(b)} but nothing recorded follows.`;
+		// shapes, addresses, names, relations, spaces, facts
+		case 'fit_shape':
+		case 'fit_address':
+		case 'fit_name':
+		case 'fit_relation':
+		case 'fit_space':
+		case 'fit_fact': {
+			const reasons = (f.why ?? []).map((w) => WHY[w]).filter(Boolean);
+			const what = f.rule === 'fit_shape' ? capital(f.label ?? 'shape') : f.label ?? '';
+			return `${what}: ${reasons.length ? reasons.join(', ') : 'fitted to the lifespan'}.`;
+		}
+		// notes
+		case 'undated_conditions':
+			return `${f.label} conditions have no date, so their order is unknown. Date them by hand.`;
+		case 'undated_condition':
+			return `${q(f.label)} has no date. Add the year it happened by hand.`;
+		case 'concurrent':
+			return `Several ${f.label === 'area' ? 'footprints' : `${f.label ?? ''} shapes`} start on the same date (wings drawn separately, or a duplicate?), so they weren't chained.`;
+		case 'outside':
+			return `${q(f.label)} (${range(b)}) lies outside the lifespan. Check its dates or the lifespan.`;
 		default:
-			return f.key;
+			return f.label ? `${f.label}: ${f.rule}` : f.rule;
 	}
 }
 
-/** "1920 – open → 1920 – 1970" for fixes that change a range. */
+const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** "1920 – → 1920 – 1970" for items that change a range. */
 export function fixChange(f: TimelineFix): string | null {
-	if (f.op === 'insert' || f.op === 'delete' || !f.before || !f.after) return null;
+	if (f.op !== 'update' || !f.before || !f.after) return null;
 	const b = range(f.before);
 	const a = range(f.after);
 	return b === a ? null : `${b} → ${a}`;

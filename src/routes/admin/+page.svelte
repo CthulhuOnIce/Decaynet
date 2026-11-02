@@ -19,7 +19,7 @@
 				s.timelines !== null && {
 					href: '/admin/timelines',
 					title: 'Timelines',
-					text: 'Overlapping conditions, footprints that stop early, ends with no demolition recorded.',
+					text: 'Loose ends: no condition recorded, overlaps, tenants and addresses outliving a building, undated shapes.',
 					stat: s.timelines ? plural(s.timelines, 'page') + ' to review' : 'All tidy',
 					alert: !!s.timelines
 				},

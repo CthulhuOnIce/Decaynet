@@ -1,35 +1,38 @@
 <script lang="ts">
-	import { TIMELINE_RULES, ruleTitle, type TimelineRule } from '$lib/timelineCleanup';
+	import { TIMELINE_SECTIONS, sectionTitle, type TimelineSection } from '$lib/timelineCleanup';
 
 	let { data } = $props();
-	const rules = Object.keys(TIMELINE_RULES) as TimelineRule[];
+	const sections = Object.keys(TIMELINE_SECTIONS) as TimelineSection[];
 </script>
 
 <svelte:head><title>Timelines · Admin</title></svelte:head>
 
 <h1>Timelines</h1>
 <p class="muted">
-	Pages whose conditions, lifespan and footprint disagree. Open one to review the proposed fixes; nothing changes until you apply
-	them. Events, media, people and organizations aren't checked.
+	Pages whose conditions, shapes, addresses or relations don't agree with their lifespan, or have loose ends: no condition
+	recorded, a tenant still listed after demolition, an undated point. Open one to review; nothing changes until you apply.
 </p>
 
 {#if data.total}
 	<div class="filters">
-		<a href="?" class:on={!data.rule}>All <span class="n">{data.total}</span></a>
-		{#each rules as r (r)}
-			{#if data.counts[r]}
-				<a href="?rule={r}" class:on={data.rule === r} title={TIMELINE_RULES[r].why}>{TIMELINE_RULES[r].title} <span class="n">{data.counts[r]}</span></a>
+		<a href="?" class:on={!data.section}>All <span class="n">{data.total}</span></a>
+		{#each sections as s (s)}
+			{#if data.counts[s]}
+				<a href="?section={s}" class:on={data.section === s} title={TIMELINE_SECTIONS[s].why}>{TIMELINE_SECTIONS[s].title} <span class="n">{data.counts[s]}</span></a>
 			{/if}
 		{/each}
 	</div>
 	<table class="list">
-		<thead><tr><th>Page</th><th>Kind</th><th>Fixes</th><th></th></tr></thead>
+		<thead><tr><th>Page</th><th>Kind</th><th>To review</th><th></th></tr></thead>
 		<tbody>
 			{#each data.rows as r (r.entity_id)}
 				<tr>
 					<td><a href="/e/{r.slug}">{r.name}</a></td>
 					<td class="muted small">{r.kind}</td>
-					<td class="small">{r.fixes} · <span class="muted">{r.rules.map(ruleTitle).join(', ')}</span></td>
+					<td class="small">
+						{#if r.fixes}{r.fixes} fix{r.fixes === 1 ? '' : 'es'}{/if}{#if r.suggestions}{r.fixes ? ' · ' : ''}{r.suggestions} suggestion{r.suggestions === 1 ? '' : 's'}{/if}{#if r.notes}{r.fixes || r.suggestions ? ' · ' : ''}<span class="note">{r.notes} to check</span>{/if}
+						<span class="muted"> · {r.sections.map(sectionTitle).join(', ')}</span>
+					</td>
 					<td class="go"><a class="btn" href="/e/{r.slug}/cleanup">Review</a></td>
 				</tr>
 			{/each}
@@ -61,6 +64,9 @@
 	.n {
 		color: var(--muted);
 		margin-left: 2px;
+	}
+	.note {
+		color: var(--amber);
 	}
 	.list {
 		width: 100%;
