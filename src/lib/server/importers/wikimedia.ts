@@ -185,6 +185,7 @@ const plain = (html: string | undefined) =>
 		.trim();
 
 const BROWSER_IMAGE = /^image\/(jpeg|png|gif|webp)$/;
+const THUMB_MIME: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
 const mediaType = (mime: string) =>
 	/^image\/svg/.test(mime) ? 'drawing' : mime.startsWith('image/') ? 'photo' : mime === 'application/pdf' ? 'document' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : 'other';
 
@@ -202,6 +203,12 @@ export function normalizeCommons(files: CommonsFile[], opts: { historicalOnly: b
 		const description = plain(meta.ImageDescription?.value);
 		const creator = plain(meta.Artist?.value) || plain(meta.Credit?.value) || null;
 		const rights = plain(meta.LicenseShortName?.value) || null;
+		// Browsers can't show TIFF, PDF, DjVu…: store the rendered thumbnail instead. Video and
+		// audio keep the original file (their thumbnail is only a still).
+		const playable = BROWSER_IMAGE.test(mime) || /^(video|audio)\//.test(mime);
+		const useThumb = !playable && !!info.thumburl;
+		const fileUrl = useThumb ? info.thumburl! : info.url;
+		const fileMime = useThumb ? (THUMB_MIME[info.thumburl!.split('?')[0].split('.').pop()!.toLowerCase()] ?? null) : mime || null;
 		out.push({
 			key: `commons:${f.pageid}`,
 			origin: 'commons',
@@ -225,9 +232,9 @@ export function normalizeCommons(files: CommonsFile[], opts: { historicalOnly: b
 			wikidata: null,
 			image_url: null,
 			media: {
-				url: BROWSER_IMAGE.test(mime) || !info.thumburl ? info.url : info.thumburl,
+				url: fileUrl,
 				media_type: mediaType(mime),
-				mime: mime || null,
+				mime: fileMime,
 				creator: creator?.slice(0, 200) ?? null,
 				rights
 			},

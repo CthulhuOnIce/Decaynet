@@ -111,6 +111,8 @@ export interface MatchInfo {
 	attributes: string[];
 	tags: string[];
 	ext: string[];
+	/** external URLs of files already linked to the page (depicts) */
+	images?: string[];
 }
 
 export type PlanAction = 'create' | 'merge' | 'skip';

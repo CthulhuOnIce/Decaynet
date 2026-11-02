@@ -6,6 +6,8 @@
 --   * entity_external_ids accepts the new source ids
 --   * apply_import cites each new source, can store a standalone Commons file
 --     as a media page, and records a lifecycle status when a source gives one
+--   * match_import_candidates reports the files already linked to a page, and
+--     apply_import no longer re-adds a Wikidata image the page already has
 -- =============================================================================
 
 alter table public.entity_external_ids drop constraint if exists entity_external_ids_source_check;
@@ -150,8 +152,13 @@ begin
       from jsonb_array_elements(coalesce(it -> 'ext', '[]'::jsonb)) e
     on conflict (source, external_id) do nothing;
 
-    -- Optional linked image (Wikimedia Commons), as a media page that depicts this one
-    if nullif(it ->> 'image_url', '') is not null then
+    -- Optional linked image (Wikimedia Commons), as a media page that depicts this one,
+    -- unless the page already has that file (re-importing the same area)
+    if nullif(it ->> 'image_url', '') is not null
+       and not exists (select 1 from public.relations r
+                         join public.media_items mi on mi.entity_id = r.subject_id
+                        where r.object_id = v_id and r.predicate = 'depicts'
+                          and mi.external_url = it ->> 'image_url') then
       insert into public.entities (kind, slug, name, summary, lifespan_confidence)
       values ('media', left('image-' || coalesce(v_slug, (select slug from public.entities where id = v_id)), 60)
                        || '-' || substr(md5(random()::text), 1, 5),
@@ -180,6 +187,104 @@ begin
   return jsonb_build_object('batch_id', v_batch, 'created', cardinality(v_created), 'merged', cardinality(v_merged));
 end;
 $$;
+
+-- Same matcher as 0012, plus the files already linked to each matched page.
+create or replace function public.match_import_candidates(p_candidates jsonb)
+returns jsonb
+language plpgsql stable security invoker set search_path = public, extensions as $$
+declare
+  c jsonb;
+  out jsonb := '{}'::jsonb;
+  v_id uuid;
+  v_reason text;
+  v_pt geometry;
+  v_geom geometry;
+begin
+  for c in select * from jsonb_array_elements(p_candidates) loop
+    v_id := null; v_reason := null;
+    v_pt := case when c ? 'lon' and (c ->> 'lon') is not null
+                 then st_setsrid(st_makepoint((c ->> 'lon')::float8, (c ->> 'lat')::float8), 4326) end;
+    v_geom := case when c -> 'geom' is not null and jsonb_typeof(c -> 'geom') = 'object'
+                   then st_setsrid(st_geomfromgeojson((c -> 'geom')::text), 4326) end;
+
+    -- 1. already imported from the same source element
+    select x.entity_id, 'same ' || x.source || ' id' into v_id, v_reason
+      from public.entity_external_ids x
+      join jsonb_array_elements(coalesce(c -> 'ext', '[]'::jsonb)) e
+        on x.source = e ->> 'source' and x.external_id = e ->> 'id'
+     limit 1;
+
+    -- 2. same Wikidata item recorded as an attribute
+    if v_id is null and nullif(c ->> 'wikidata', '') is not null then
+      select a.entity_id, 'same Wikidata item' into v_id, v_reason
+        from public.entity_attributes a
+       where a.key = 'wikidata' and a.value #>> '{}' = c ->> 'wikidata'
+       limit 1;
+    end if;
+
+    -- 3. footprint overlap (buildings and sites)
+    if v_id is null and v_geom is not null and st_dimension(v_geom) = 2
+       and c ->> 'kind' in ('building', 'site', 'space') then
+      select g.entity_id, 'overlaps existing footprint' into v_id, v_reason
+        from public.entity_geometries g
+        join public.entities e on e.id = g.entity_id and e.kind in ('building', 'site')
+       where g.role <> 'viewpoint'
+         and g.geom && v_geom
+         and (case when st_dimension(g.geom) = 2
+                   then st_area(st_intersection(g.geom, v_geom)) > 0.3 * least(st_area(g.geom), st_area(v_geom))
+                   else st_intersects(g.geom, v_geom) end)
+       limit 1;
+    end if;
+
+    -- 4. similar name close by (or exact name for streets/water anywhere)
+    if v_id is null and nullif(c ->> 'name', '') is not null then
+      select e.id,
+             case when lower(e.name) = lower(c ->> 'name') then 'same name nearby' else 'similar name nearby' end
+        into v_id, v_reason
+        from public.entities e
+        left join lateral (select public.geometry_at(e.id, null) as g) gg on true
+       where public.kinds_compatible(c ->> 'kind', e.kind)
+         and (similarity(e.name, c ->> 'name') > 0.55
+              or exists (select 1 from public.entity_names n
+                          where n.entity_id = e.id and similarity(n.name, c ->> 'name') > 0.55))
+         and (
+           c ->> 'kind' in ('street', 'water', 'district', 'infrastructure')
+           or (v_pt is not null and gg.g is not null and st_dwithin(gg.g::geography, v_pt::geography, 150))
+           or (v_geom is not null and gg.g is not null and st_dwithin(gg.g::geography, v_geom::geography, 60))
+         )
+       order by similarity(e.name, c ->> 'name') desc
+       limit 1;
+    end if;
+
+    if v_id is not null then
+      out := out || jsonb_build_object(c ->> 'key', (
+        select jsonb_build_object(
+          'entity_id', e.id, 'slug', e.slug, 'name', e.name, 'kind', e.kind, 'reason', v_reason,
+          'exists_from', e.exists_from, 'exists_to', e.exists_to,
+          'has_shape', exists (select 1 from public.entity_geometries g
+                                where g.entity_id = e.id and st_dimension(g.geom) >= 1),
+          'has_geometry', exists (select 1 from public.entity_geometries g where g.entity_id = e.id),
+          'has_status', exists (select 1 from public.entity_states s where s.entity_id = e.id),
+          'summary', e.summary,
+          'names', coalesce((select jsonb_agg(lower(n.name)) from public.entity_names n where n.entity_id = e.id), '[]'::jsonb)
+                   || jsonb_build_array(lower(e.name)),
+          'attributes', coalesce((select jsonb_agg(distinct a.key) from public.entity_attributes a where a.entity_id = e.id), '[]'::jsonb),
+          'tags', coalesce((select jsonb_agg(distinct t.slug) from public.entity_tags et join public.tags t on t.id = et.tag_id
+                             where et.entity_id = e.id), '[]'::jsonb),
+          'ext', coalesce((select jsonb_agg(x.source || ':' || x.external_id) from public.entity_external_ids x
+                            where x.entity_id = e.id), '[]'::jsonb),
+          -- linked files already on the page, so a re-import doesn't offer them again
+          'images', coalesce((select jsonb_agg(distinct mi.external_url)
+                                from public.relations r
+                                join public.media_items mi on mi.entity_id = r.subject_id
+                               where r.object_id = e.id and r.predicate = 'depicts' and mi.external_url is not null), '[]'::jsonb)
+        ) from public.entities e where e.id = v_id));
+    end if;
+  end loop;
+  return out;
+end;
+$$;
+
 
 -- -----------------------------------------------------------------------------
 -- Import API credentials live in site secrets (editable at /admin/settings).

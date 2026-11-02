@@ -188,7 +188,7 @@ function planItem(raw: Candidate, m: MatchInfo | null): PlanItem {
 	if (!m.summary && c.summary) changes.push('+ summary');
 	const newExt = c.ext.filter((e) => !m.ext.includes(`${e.source}:${e.id}`));
 	if (newExt.length) changes.push(`+ link ${newExt.map((e) => (e.source === 'ohm' ? 'OHM ' : '') + e.id).slice(0, 2).join(', ')}${newExt.length > 2 ? '…' : ''}`);
-	if (c.image_url) changes.push('+ Commons image link');
+	if (c.image_url && !m.images?.includes(c.image_url)) changes.push('+ Commons image link');
 	const meaningful = changes.filter((x) => !x.startsWith('+ link') && !x.startsWith('⚠')).length > 0;
 	return { key: c.key, candidate: c, match: m, action: meaningful ? 'merge' : 'skip', changes: changes.length ? changes : ['already up to date'], addShape };
 }
