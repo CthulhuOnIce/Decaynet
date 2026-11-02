@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { page } from '$app/state';
 	import TemporalFields from '$lib/components/TemporalFields.svelte';
+	import { addressLabel } from '$lib/address';
 	import EntityPicker from '$lib/components/EntityPicker.svelte';
 	import GeometryPicker from '$lib/components/GeometryPicker.svelte';
 	import ConfidenceMark from '$lib/components/ConfidenceMark.svelte';
@@ -227,7 +228,8 @@
 		{@render status('addresses')}
 		<ul class="plain-list">
 			{#each data.addresses as a (a.id)}
-				{@render factRow('addresses', a, `${a.house_number ?? ''} ${a.street?.name ?? a.raw_address ?? ''}`.trim())}
+				{@const label = addressLabel(a.house_number, a.street?.name, a.raw_address, data.settings.address_format)}
+				{@render factRow('addresses', a, a.street && a.raw_address && a.raw_address !== label ? `${label} (as written: ${a.raw_address})` : label)}
 			{:else}
 				<li class="muted small">No addresses yet.</li>
 			{/each}
