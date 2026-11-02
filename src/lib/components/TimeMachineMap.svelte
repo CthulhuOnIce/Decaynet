@@ -28,6 +28,7 @@
 		zoom = undefined,
 		/** fit to the first snapshot when the site has no configured view */
 		autoFit = false,
+		pin = null,
 		onselect,
 		onmoments,
 		onview,
@@ -48,6 +49,8 @@
 		center?: [number, number];
 		zoom?: number;
 		autoFit?: boolean;
+		/** temporary marker, e.g. for an address that has no page */
+		pin?: [number, number] | null;
 		onselect?: (p: Picked | null) => void;
 		onmoments?: (fc: { features: GeoJSON.Feature[]; unplaced: unknown[] }) => void;
 		onview?: (v: { center: [number, number]; zoom: number }) => void;
@@ -155,6 +158,27 @@
 		map.setPaintProperty('basemap', 'raster-opacity', 0.14 + 0.5 * modern);
 		map.setPaintProperty('basemap', 'raster-saturation', -1 + 0.35 * modern);
 	}
+
+	let pinMarker: import('maplibre-gl').Marker | undefined;
+	$effect(() => {
+		const p = pin;
+		const isReady = ready;
+		if (!isReady || !map) return;
+		const m = map;
+		let cancelled = false;
+		pinMarker?.remove();
+		pinMarker = undefined;
+		if (!p) return;
+		import('maplibre-gl').then(({ default: gl }) => {
+			if (cancelled) return;
+			pinMarker = new gl.Marker({ color: '#d33' }).setLngLat(p).addTo(m);
+		});
+		return () => {
+			cancelled = true;
+			pinMarker?.remove();
+			pinMarker = undefined;
+		};
+	});
 
 	export function flyTo(lon: number, lat: number, z = 16) {
 		map?.flyTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), z), speed: 1.4 });

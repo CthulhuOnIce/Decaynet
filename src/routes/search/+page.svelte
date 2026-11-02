@@ -15,7 +15,7 @@
 		return `/?${u}`;
 	}
 	function externalMapHref(e: GeoAddressHit) {
-		return `/?c=${e.lon},${e.lat},17`;
+		return `/?c=${e.lon},${e.lat},17&pin=1`;
 	}
 	function createAtHref(label: string, lat?: number, lon?: number) {
 		const u = new URLSearchParams({ kind: 'building', name: label, address: label });

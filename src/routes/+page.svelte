@@ -25,6 +25,8 @@
 			? { center: [c[0], c[1]] as [number, number], zoom: c[2] }
 			: undefined;
 	let view = $state(startView);
+	// Temporary pin (?pin=1 with ?c=): marks a searched address with no page; not kept in the URL
+	let pin = $state<[number, number] | null>(params.get('pin') && startView ? startView.center : null);
 	// Where the camera starts. `?c=` wins; otherwise Site settings, unless the
 	// site is still neutral (no region configured), in which case the map fits
 	// its own data instead of showing the whole world.
@@ -127,6 +129,7 @@
 				u.searchParams.set('y', String(y));
 				if (s) u.searchParams.set('sel', s);
 				else u.searchParams.delete('sel');
+				u.searchParams.delete('pin');
 				if (v) u.searchParams.set('c', `${v.center[0]},${v.center[1]},${v.zoom}`);
 				if (tg) u.searchParams.set('tag', tg);
 				else u.searchParams.delete('tag');
@@ -154,7 +157,11 @@
 			center={initialView?.center}
 			zoom={initialView?.zoom}
 			autoFit={!initialView && !selected}
-			onselect={(p: Picked | null) => (selected = p?.id ?? null)}
+			{pin}
+			onselect={(p: Picked | null) => {
+				selected = p?.id ?? null;
+				if (p) pin = null;
+			}}
 			{onmoments}
 			onview={(v) => (view = v)}
 			onready={() => (mapReady = true)}
