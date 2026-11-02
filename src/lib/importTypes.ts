@@ -1,6 +1,28 @@
 import type { Precision } from './types';
 
-export type ImportSource = 'ohm' | 'wikidata';
+export type ImportSource = 'ohm' | 'wikidata' | 'osm' | 'wikipedia' | 'commons' | 'geonames';
+
+/** Facts the Wikidata importer can pull; each can be switched off in the importer. */
+export const WIKIDATA_FIELDS = [
+	{ id: 'dates', label: 'Start & end dates' },
+	{ id: 'aliases', label: 'Alternate names' },
+	{ id: 'architect', label: 'Architect' },
+	{ id: 'style', label: 'Architectural style' },
+	{ id: 'floors', label: 'Floors' },
+	{ id: 'height', label: 'Height' },
+	{ id: 'material', label: 'Material' },
+	{ id: 'capacity', label: 'Capacity' },
+	{ id: 'nrhp', label: 'NRHP reference' },
+	{ id: 'website', label: 'Website' },
+	{ id: 'owner', label: 'Owner' },
+	{ id: 'use', label: 'Use' },
+	{ id: 'industry', label: 'Industry' },
+	{ id: 'employees', label: 'Employees' },
+	{ id: 'population', label: 'Population' },
+	{ id: 'lanes', label: 'Lanes' },
+	{ id: 'casualties', label: 'Casualties' }
+] as const;
+export type WikidataField = (typeof WIKIDATA_FIELDS)[number]['id'];
 
 export interface ImportOptions {
 	/** [west, south, east, north] */
@@ -18,7 +40,22 @@ export interface ImportOptions {
 	wikidata: {
 		enabled: boolean;
 		images: boolean;
+		/** missing entries count as on */
+		fields: Partial<Record<WikidataField, boolean>>;
 	};
+	/** Current OpenStreetMap: things that (probably) still exist */
+	osm: { enabled: boolean; businesses: boolean; places: boolean; buildings: boolean };
+	wikipedia: { enabled: boolean };
+	commons: { enabled: boolean; historicalOnly: boolean };
+	geonames: { enabled: boolean };
+}
+
+export interface CandidateMedia {
+	url: string;
+	media_type: string;
+	mime: string | null;
+	creator: string | null;
+	rights: string | null;
 }
 
 /** A fetched, normalized feature ready to become (or enrich) a page. */
@@ -45,6 +82,10 @@ export interface Candidate {
 	ext: { source: ImportSource; id: string; url: string }[];
 	wikidata: string | null;
 	image_url: string | null;
+	/** a standalone file (Commons): becomes a media page */
+	media?: CandidateMedia;
+	/** lifecycle status to record (only when the source says so) */
+	status?: string | null;
 	classes: string[];
 	/** for events: a guessed event type id (used only if the site has it) */
 	event_type?: string | null;
@@ -70,6 +111,8 @@ export interface MatchInfo {
 	attributes: string[];
 	tags: string[];
 	ext: string[];
+	/** external URLs of files already linked to the page (depicts) */
+	images?: string[];
 }
 
 export type PlanAction = 'create' | 'merge' | 'skip';
@@ -88,7 +131,7 @@ export interface PlanItem {
 export interface PreviewResult {
 	bbox: [number, number, number, number];
 	fetchedAt: string;
-	counts: { ohm: number; wikidata: number; combined: number; hiddenUnnamed: number };
+	counts: { ohm: number; osm: number; wikidata: number; wikipedia: number; geonames: number; commons: number; combined: number; hiddenUnnamed: number };
 	warnings: string[];
 	items: PlanItem[];
 }

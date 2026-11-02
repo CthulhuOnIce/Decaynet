@@ -242,6 +242,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       ADMIN_NAME: ${ADMIN_NAME:-}
       SETUP_TOKEN: ${SETUP_TOKEN:-}
+      GEONAMES_USERNAME: ${GEONAMES_USERNAME:-}
       # Behind a reverse proxy, set so tips see the visitor's real IP:
       ADDRESS_HEADER: ${ADDRESS_HEADER:-}
       XFF_DEPTH: ${XFF_DEPTH:-1}

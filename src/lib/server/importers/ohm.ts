@@ -46,12 +46,17 @@ function overpassError(body: string): string {
  * queries per IP and answers overload with an XML error page, so retry a few
  * times with backoff before giving up.
  */
-export async function fetchOhm(o: ImportOptions['ohm'], bbox: ImportOptions['bbox'], userAgent: string) {
-	const body = new URLSearchParams({ data: buildOverpassQuery(o, bbox) });
+export const OSM_OVERPASS = 'https://overpass-api.de/api/interpreter';
+
+export const fetchOhm = (o: ImportOptions['ohm'], bbox: ImportOptions['bbox'], userAgent: string) =>
+	fetchOverpass(OHM_OVERPASS, 'OpenHistoricalMap', buildOverpassQuery(o, bbox), userAgent);
+
+export async function fetchOverpass(endpoint: string, label: string, query: string, userAgent: string) {
+	const body = new URLSearchParams({ data: query });
 	let last = '';
 	for (const wait of [0, 3000, 8000, 15000]) {
 		if (wait) await new Promise((r) => setTimeout(r, wait));
-		const res = await fetch(OHM_OVERPASS, {
+		const res = await fetch(endpoint, {
 			method: 'POST',
 			headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': userAgent, accept: 'application/json' },
 			body,
@@ -66,7 +71,7 @@ export async function fetchOhm(o: ImportOptions['ohm'], bbox: ImportOptions['bbo
 		const retryable = res.status === 429 || res.status >= 500 || /rate|too many|timeout|try again|dispatcher|load/i.test(text);
 		if (!retryable) break;
 	}
-	throw new Error(`OpenHistoricalMap Overpass is busy or refused the query (${last}). Try again in a minute.`);
+	throw new Error(`${label} Overpass is busy or refused the query (${last}). Try again in a minute.`);
 }
 
 // ----------------------------------------------------------------------------- geometry
@@ -179,7 +184,11 @@ const SHOP_LABEL = (t: Record<string, string>) => {
 const toHeightUnit = (metres: number, unit: string | null) =>
 	/^(ft|feet|foot)$/i.test(unit ?? '') ? Math.round(metres * 3.28084) : Math.round(metres * 10) / 10;
 
-export function normalizeOhm(elements: OverpassElement[], lang = 'en', heightUnit: string | null = 'm'): Candidate[] {
+export type { OverpassElement };
+
+/** The same normalizer serves OpenHistoricalMap (dated, historic) and current OpenStreetMap. */
+export function normalizeOhm(elements: OverpassElement[], lang = 'en', heightUnit: string | null = 'm', source: 'ohm' | 'osm' = 'ohm'): Candidate[] {
+	const site = source === 'ohm' ? 'https://www.openhistoricalmap.org' : 'https://www.openstreetmap.org';
 	const out: Candidate[] = [];
 	for (const el of elements) {
 		const t = el.tags ?? {};
@@ -199,24 +208,24 @@ export function normalizeOhm(elements: OverpassElement[], lang = 'en', heightUni
 					: `Unnamed ${cls.kind}`;
 		const names: Candidate['names'] = [];
 		const localized = t[`name:${lang}`];
-		if (localized && name && localized !== name) names.push({ name: localized, name_type: 'alternate', source: 'ohm' });
+		if (localized && name && localized !== name) names.push({ name: localized, name_type: 'alternate', source });
 		for (const [k, type] of [['old_name', 'historic'], ['alt_name', 'alternate'], ['official_name', 'official'], ['loc_name', 'common']] as const)
-			for (const v of (t[k] ?? '').split(';').map((x) => x.trim()).filter(Boolean)) names.push({ name: v, name_type: type, source: 'ohm' });
+			for (const v of (t[k] ?? '').split(';').map((x) => x.trim()).filter(Boolean)) names.push({ name: v, name_type: type, source });
 
 		const attributes: Candidate['attributes'] = [];
-		if (t['building:levels'] && Number.isFinite(+t['building:levels'])) attributes.push({ key: 'floors', value: +t['building:levels'], source: 'ohm' });
-		if (t.architect) attributes.push({ key: 'architect', value: t.architect, source: 'ohm' });
-		if (t.height && Number.isFinite(parseFloat(t.height))) attributes.push({ key: 'height', value: toHeightUnit(parseFloat(t.height), heightUnit), source: 'ohm' });
-		if (t['building:material']) attributes.push({ key: 'material', value: t['building:material'], source: 'ohm' });
-		if (t.ref && (cls.kind === 'infrastructure' || cls.kind === 'street')) attributes.push({ key: 'route_designation', value: t.ref, source: 'ohm' });
-		if (t.website) attributes.push({ key: 'website', value: t.website, source: 'ohm' });
-		if (cls.kind === 'organization' && label) attributes.push({ key: 'industry', value: label, source: 'ohm' });
+		if (t['building:levels'] && Number.isFinite(+t['building:levels'])) attributes.push({ key: 'floors', value: +t['building:levels'], source });
+		if (t.architect) attributes.push({ key: 'architect', value: t.architect, source });
+		if (t.height && Number.isFinite(parseFloat(t.height))) attributes.push({ key: 'height', value: toHeightUnit(parseFloat(t.height), heightUnit), source });
+		if (t['building:material']) attributes.push({ key: 'material', value: t['building:material'], source });
+		if (t.ref && (cls.kind === 'infrastructure' || cls.kind === 'street')) attributes.push({ key: 'route_designation', value: t.ref, source });
+		if (t.website) attributes.push({ key: 'website', value: t.website, source });
+		if (cls.kind === 'organization' && label) attributes.push({ key: 'industry', value: label, source });
 
 		out.push({
-			key: `ohm:${el.type}/${el.id}`,
-			origin: 'ohm',
+			key: `${source}:${el.type}/${el.id}`,
+			origin: source,
 			kind: cls.kind,
-			name: name ?? `${fallback} (OHM ${el.type[0]}${el.id})`,
+			name: name ?? `${fallback} (${source.toUpperCase()} ${el.type[0]}${el.id})`,
 			unnamed,
 			summary: t.description ?? null,
 			exists_from: from?.date ?? null,
@@ -225,13 +234,13 @@ export function normalizeOhm(elements: OverpassElement[], lang = 'en', heightUni
 			exists_to_precision: to?.precision ?? 'year',
 			approximate: Boolean(from?.approximate || to?.approximate),
 			geometry,
-			geometry_source: 'ohm',
-			fact_source: 'ohm',
+			geometry_source: source,
+			fact_source: source,
 			role: cls.role,
 			names,
 			attributes,
 			tags: tagSlugs(t),
-			ext: [{ source: 'ohm', id: `${el.type}/${el.id}`, url: `https://www.openhistoricalmap.org/${el.type}/${el.id}` }],
+			ext: [{ source, id: `${el.type}/${el.id}`, url: `${site}/${el.type}/${el.id}` }],
 			wikidata: /^Q\d+$/.test(t.wikidata ?? '') ? t.wikidata : null,
 			image_url: null,
 			classes: [label ?? cls.kind],

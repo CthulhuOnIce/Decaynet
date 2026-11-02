@@ -6,7 +6,7 @@
 	import { baseStyle, mapView, snapshotLayers } from '$lib/map/style';
 	import { can } from '$lib/perms';
 	import { yearToDate } from '$lib/time';
-	import type { ImportOptions, PlanAction, PlanItem, PreviewResult } from '$lib/importTypes';
+	import { WIKIDATA_FIELDS, type ImportOptions, type PlanAction, type PlanItem, type PreviewResult } from '$lib/importTypes';
 
 	let { data, form } = $props();
 
@@ -22,8 +22,17 @@
 	let opts = $state<ImportOptions>({
 		bbox: [0, 0, 0, 0],
 		ohm: { enabled: true, buildings: true, unnamedBuildings: false, streets: true, railways: true, water: true, businesses: true, places: true },
-		wikidata: { enabled: true, images: false }
+		osm: { enabled: false, businesses: true, places: true, buildings: false },
+		wikidata: { enabled: true, images: false, fields: Object.fromEntries(WIKIDATA_FIELDS.map((f) => [f.id, true])) },
+		wikipedia: { enabled: false },
+		commons: { enabled: false, historicalOnly: true },
+		geonames: { enabled: false }
 	});
+	const anySource = $derived(opts.ohm.enabled || opts.osm.enabled || opts.wikidata.enabled || opts.wikipedia.enabled || opts.commons.enabled || opts.geonames.enabled);
+	const setFields = (on: boolean) => {
+		for (const f of WIKIDATA_FIELDS) opts.wikidata.fields[f.id] = on;
+	};
+	const SOURCE_NAMES: Record<string, string> = { ohm: 'OHM', osm: 'OSM', wikidata: 'Wikidata', wikipedia: 'Wikipedia', commons: 'Commons', geonames: 'GeoNames' };
 	const span = $derived(bbox ? Math.max(bbox[2] - bbox[0], bbox[3] - bbox[1]) : 0);
 	const tooBig = $derived(span > MAX_SPAN);
 
@@ -174,7 +183,7 @@
 			container: mapEl,
 			style: baseStyle(data.settings),
 			...mapView(data.settings),
-			attributionControl: { compact: true, customAttribution: 'Previews: © OpenHistoricalMap contributors (CC0), Wikidata (CC0)' }
+			attributionControl: { compact: true, customAttribution: 'Previews: © OpenHistoricalMap contributors (CC0), © OpenStreetMap contributors (ODbL), Wikidata (CC0), Wikipedia & Commons (Wikimedia), GeoNames (CC BY)' }
 		});
 		map.addControl(new maplibregl.NavigationControl(), 'top-right');
 		map.on('load', async () => {
@@ -243,7 +252,7 @@
 		<h1>Import starter pages</h1>
 		<p class="hint">
 			Pull features from <a href="https://www.openhistoricalmap.org" target="_blank" rel="noopener">OpenHistoricalMap</a> and
-			<a href="https://www.wikidata.org" target="_blank" rel="noopener">Wikidata</a> for an area, live. You'll see a preview of
+			<a href="https://www.wikidata.org" target="_blank" rel="noopener">Wikidata</a>, OpenStreetMap, Wikipedia, Wikimedia Commons and GeoNames for an area, live. You'll see a preview of
 			every page that would be created or updated; <strong>nothing is written until you apply it.</strong>
 		</p>
 
@@ -284,14 +293,41 @@
 					<label class="check"><input type="checkbox" bind:checked={opts.ohm.places} /> Neighborhoods, parks, landmarks</label>
 				</div>
 			{/if}
-			<label class="check strong"><input type="checkbox" bind:checked={opts.wikidata.enabled} /> Wikidata <span class="muted small">(names, dates, NRHP, architects, CC0)</span></label>
+			<label class="check strong"><input type="checkbox" bind:checked={opts.osm.enabled} /> OpenStreetMap <span class="muted small">(places & businesses that exist today, ODbL)</span></label>
+			{#if opts.osm.enabled}
+				<div class="sub">
+					<label class="check"><input type="checkbox" bind:checked={opts.osm.businesses} /> Shops, businesses & amenities</label>
+					<label class="check"><input type="checkbox" bind:checked={opts.osm.places} /> Landmarks, parks, schools, worship, museums</label>
+					<label class="check"><input type="checkbox" bind:checked={opts.osm.buildings} /> Named buildings</label>
+					<p class="hint">Current data: no dates are added, so these pages have no end.</p>
+				</div>
+			{/if}
+			<label class="check strong"><input type="checkbox" bind:checked={opts.wikidata.enabled} /> Wikidata <span class="muted small">(names, dates, facts, CC0)</span></label>
 			{#if opts.wikidata.enabled}
 				<div class="sub">
 					<label class="check"><input type="checkbox" bind:checked={opts.wikidata.images} /> Link Wikimedia Commons images</label>
 					<p class="hint">Images are linked, not copied; each keeps its own Commons license.</p>
+					<p class="small muted">
+						Facts to import:
+						<button class="linkish" type="button" onclick={() => setFields(true)}>all</button> ·
+						<button class="linkish" type="button" onclick={() => setFields(false)}>none</button>
+					</p>
+					{#each WIKIDATA_FIELDS as f (f.id)}
+						<label class="check"><input type="checkbox" bind:checked={opts.wikidata.fields[f.id]} /> {f.label}</label>
+					{/each}
 				</div>
 			{/if}
-			<button class="primary wide" onclick={fetchPreview} disabled={!bbox || tooBig || loading || (!opts.ohm.enabled && !opts.wikidata.enabled)}>
+			<label class="check strong"><input type="checkbox" bind:checked={opts.wikipedia.enabled} /> Wikipedia <span class="muted small">(geotagged articles → summaries, CC BY-SA)</span></label>
+			<label class="check strong"><input type="checkbox" bind:checked={opts.commons.enabled} /> Wikimedia Commons <span class="muted small">(geotagged files → media pages)</span></label>
+			{#if opts.commons.enabled}
+				<div class="sub">
+					<label class="check"><input type="checkbox" bind:checked={opts.commons.historicalOnly} /> Only files dated 1975 or earlier</label>
+					<p class="hint">Files are linked, not copied; each keeps its own license.</p>
+				</div>
+			{/if}
+			<label class="check strong"><input type="checkbox" bind:checked={opts.geonames.enabled} disabled={!data.geonamesConfigured} /> GeoNames <span class="muted small">(place names, CC BY)</span></label>
+			{#if !data.geonamesConfigured}<p class="hint">An admin can add a GeoNames username under Admin → Settings → Secrets to enable GeoNames.</p>{/if}
+			<button class="primary wide" onclick={fetchPreview} disabled={!bbox || tooBig || loading || !anySource}>
 				{loading ? 'Fetching & matching…' : 'Fetch preview'}
 			</button>
 			{#if fetchError}<p class="notice error small">{fetchError}</p>{/if}
@@ -301,7 +337,7 @@
 			<section>
 				<h2>3 · Review</h2>
 				<p class="small">
-					OHM {preview.counts.ohm} · Wikidata {preview.counts.wikidata} · combined {preview.counts.combined}
+					{#each Object.entries(SOURCE_NAMES) as [id, label] (id)}{#if preview.counts[id as keyof typeof preview.counts]}{label} {preview.counts[id as keyof typeof preview.counts]} · {/if}{/each}combined {preview.counts.combined}
 					{#if preview.counts.hiddenUnnamed}· <span class="muted">{preview.counts.hiddenUnnamed} unnamed footprints hidden</span>{/if}
 				</p>
 				{#each preview.warnings as w (w)}<p class="notice small">{w}</p>{/each}
@@ -434,7 +470,7 @@
 								<div class="meta muted">
 									{i.candidate.classes.slice(0, 3).join(', ')}
 									{#each i.candidate.ext as x (x.source + x.id)}
-										· <a href={x.url} target="_blank" rel="noopener">{x.source === 'ohm' ? 'OHM ' + x.id : x.id}</a>
+										· <a href={x.url} target="_blank" rel="noopener">{x.source === 'ohm' ? 'OHM ' + x.id : (SOURCE_NAMES[x.source] ?? x.source) + ' ' + x.id}</a>
 									{/each}
 								</div>
 							</div>
@@ -448,7 +484,7 @@
 				</div>
 			</div>
 		{:else if loading}
-			<div class="table placeholder"><p class="muted">Querying OpenHistoricalMap and Wikidata, then matching against existing pages…</p></div>
+			<div class="table placeholder"><p class="muted">Querying the selected sources, then matching against existing pages…</p></div>
 		{/if}
 	</div>
 </div>
@@ -489,6 +525,15 @@
 	.check.indent {
 		margin-left: 22px;
 		color: var(--ink-2);
+	}
+	.linkish {
+		background: none;
+		border: 0;
+		padding: 0;
+		color: var(--link, inherit);
+		text-decoration: underline;
+		cursor: pointer;
+		font: inherit;
 	}
 	.sub {
 		margin-left: 22px;

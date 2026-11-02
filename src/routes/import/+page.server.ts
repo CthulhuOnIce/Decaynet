@@ -1,4 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
+import { getGeonamesUser } from '$lib/server/admin';
 import { requirePermission } from '$lib/server/db';
 import { dbMessage, str } from '$lib/server/forms';
 import { toApplyPayload } from '$lib/server/importers/plan';
@@ -14,7 +15,7 @@ export const load: PageServerLoad = async ({ parent, locals }) => {
 		.select('*, by:profiles(display_name)')
 		.order('created_at', { ascending: false })
 		.limit(15);
-	return { batches: batches ?? [] };
+	return { batches: batches ?? [], geonamesConfigured: !!(await getGeonamesUser()) };
 };
 
 export const actions: Actions = {
