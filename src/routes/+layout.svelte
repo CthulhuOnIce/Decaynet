@@ -139,6 +139,14 @@
 	</div>
 </header>
 
+{#if data.schema}
+	<div class="setup schema" role="alert">
+		<strong>The database is behind this version of Decaynet</strong>
+		(its newest migration is {data.schema.have ?? 'older than this check'}; the app needs {data.schema.need}), so newer features fail.
+		Run the migrate step, then reload: <code>docker compose pull && docker compose up -d</code> for the all-in-one stack, or
+		<code>docker compose -f docker-compose.external.yml run --rm migrate</code> with your own Supabase.
+	</div>
+{/if}
 {#if !data.settings.setup_complete && can('manage_settings') && !page.url.pathname.startsWith('/admin')}
 	<div class="setup">
 		<strong>Welcome to your new {data.settings.site_name}.</strong>
@@ -303,6 +311,14 @@
 	}
 	.new {
 		padding: 5px 10px;
+	}
+	.setup.schema {
+		background: rgba(194, 86, 43, 0.16);
+		border-bottom-color: rgba(194, 86, 43, 0.55);
+	}
+	.setup code {
+		font-size: 0.8rem;
+		white-space: nowrap;
 	}
 	.setup {
 		padding: 10px 20px;

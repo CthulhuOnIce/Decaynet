@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { entityBySlug, requirePermission } from '$lib/server/db';
 import { dbMessage } from '$lib/server/forms';
+import { dbFailure, isMissingFunction } from '$lib/server/schema';
 import type { TimelineFix } from '$lib/timelineCleanup';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -14,7 +15,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		sb.from('entity_geometries').select('id, role, valid_from, valid_from_precision, valid_to, valid_to_precision').eq('entity_id', entity.id).neq('role', 'viewpoint').order('valid_from', { nullsFirst: true }),
 		sb.from('addresses').select('id, house_number, unit, raw_address, valid_from, valid_from_precision, valid_to, valid_to_precision, street:entities!addresses_street_id_fkey(name)').eq('entity_id', entity.id).order('valid_from', { nullsFirst: true })
 	]);
-	if (plan.error) throw new Error(plan.error.message);
+	if (plan.error) dbFailure(plan.error, 'Timeline cleanup');
 	return {
 		entity,
 		fixes: (plan.data ?? []) as TimelineFix[],
@@ -34,7 +35,7 @@ export const actions: Actions = {
 		const keys = (await request.formData()).getAll('key').map(String).filter(Boolean);
 		if (!keys.length) return fail(400, { error: 'Tick at least one fix to apply.' });
 		const { data, error } = await locals.supabase.rpc('normalize_timeline', { p_entity: entity.id, p_keys: keys });
-		if (error) return fail(400, { error: dbMessage(error) });
+		if (error) return fail(isMissingFunction(error) ? 503 : 400, { error: isMissingFunction(error) ? 'The database is behind this version of the app: an admin has to run the migrate step.' : dbMessage(error) });
 		const r = data as { applied: number; remaining: number };
 		return {
 			ok: `Applied ${r.applied} edit${r.applied === 1 ? '' : 's'}.${r.remaining ? ` ${r.remaining} more fix${r.remaining === 1 ? '' : 'es'} now proposed.` : ''}`

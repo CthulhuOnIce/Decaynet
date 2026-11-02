@@ -7,7 +7,8 @@ export const load: PageServerLoad = async ({ parent, locals }) => {
 	const has = (p: string) => perms.includes(p as never);
 	const count = async (q: PromiseLike<{ count: number | null }>) => (await q).count ?? 0;
 	const [timelines, users, suspended, privatePages, imports] = await Promise.all([
-		has('clean_timelines') ? sb.rpc('timeline_review', { p_limit: 2000 }).then((r) => (r.data ?? []).length) : Promise.resolve(null),
+		// null when the database predates timeline cleanup (the layout banner explains)
+		has('clean_timelines') ? sb.rpc('timeline_review', { p_limit: 2000 }).then((r) => (r.error ? null : (r.data ?? []).length)) : Promise.resolve(null),
 		has('manage_users') ? count(sb.from('profiles').select('id', { count: 'exact', head: true })) : Promise.resolve(null),
 		has('manage_users') ? count(sb.from('profiles').select('id', { count: 'exact', head: true }).eq('suspended', true)) : Promise.resolve(null),
 		count(sb.from('entities').select('id', { count: 'exact', head: true }).eq('is_private', true)),

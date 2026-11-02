@@ -1,6 +1,7 @@
 import { redirect } from '@sveltejs/kit';
 import { ensureBootstrapped, siteHasAdmin } from '$lib/server/bootstrap';
 import { loadSettings, loadVocabulary } from '$lib/server/db';
+import { schemaStatus, type SchemaStatus } from '$lib/server/schema';
 import type { Permission, Profile } from '$lib/types';
 import type { LayoutServerLoad } from './$types';
 
@@ -32,5 +33,11 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		}
 	}
 	const [vocab, settings] = await Promise.all([loadVocabulary(locals.supabase), loadSettings(locals.supabase)]);
-	return { user, profile, perms, openTips, vocab, settings };
+	// Admins hear about a database that is behind this version of the app (the migrate step wasn't run)
+	let schema: SchemaStatus | null = null;
+	if (perms.includes('manage_settings')) {
+		const s = await schemaStatus(locals.supabase);
+		if (!s.ok) schema = s;
+	}
+	return { user, profile, perms, openTips, vocab, settings, schema };
 };

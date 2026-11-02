@@ -158,6 +158,7 @@ Notes:
 ### Troubleshooting
 
 - **`migrate` shows "Exited (0)"**: normal. Non-zero means the schema failed to apply; check its logs.
+- **New features give a 503, or menu entries are missing, and admins see "The database is behind this version of Decaynet"**: the app image was updated but the migrate step didn't run. Re-run it (`docker compose pull && docker compose up -d`, or `docker compose -f docker-compose.external.yml run --rm migrate` with your own Supabase), then reload. `/healthz` shows `schema.have` (newest migration applied) and `schema.need`.
 - **`app` unhealthy**: open `http://<host>:3000/healthz`. `db` in the JSON shows the database error, often a wrong `ANON_KEY`/`JWT_SECRET` pair (regenerate all four together).
 - **`manifest unknown` when pulling**: the requested tag doesn't exist (yet). Check the tags at *GitHub → Packages → decaynet*, wait for the *Docker images* workflow to finish, or pin a tag that exists, e.g. `DECAYNET_IMAGE=ghcr.io/cthulhuonice/decaynet:sha-1c1e224` and `DECAYNET_MIGRATE_IMAGE=ghcr.io/cthulhuonice/decaynet-migrate:sha-1c1e224`.
 - **`unauthorized` / `denied` when pulling `ghcr.io/…`**: the package is private (see *Forks* above). Build locally with `docker-compose.build.yml` meanwhile.

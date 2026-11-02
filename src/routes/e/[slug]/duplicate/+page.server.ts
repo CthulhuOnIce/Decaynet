@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { entityBySlug, requirePermission } from '$lib/server/db';
 import { dbMessage, str } from '$lib/server/forms';
+import { dbFailure, isMissingFunction } from '$lib/server/schema';
 import type { Actions, PageServerLoad } from './$types';
 
 interface Item {
@@ -31,7 +32,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
 	let preview: DuplicatePreview | null = null;
 	if (to) {
 		const { data, error } = await locals.supabase.rpc('duplicate_as_kind_preview', { p_entity: entity.id, p_kind: to });
-		if (error) throw new Error(error.message);
+		if (error) dbFailure(error, 'Duplicating a page as another kind');
 		preview = data as DuplicatePreview | null;
 	}
 	return { entity, to, preview };
@@ -47,7 +48,7 @@ export const actions: Actions = {
 			p_kind: str(fd, 'kind') ?? '',
 			p_name: str(fd, 'name')
 		});
-		if (error) return fail(400, { error: dbMessage(error) });
+		if (error) return fail(isMissingFunction(error) ? 503 : 400, { error: isMissingFunction(error) ? 'The database is behind this version of the app: an admin has to run the migrate step.' : dbMessage(error) });
 		redirect(303, `/e/${(data as { slug: string }).slug}?copied_from=${encodeURIComponent(params.slug)}`);
 	}
 };
