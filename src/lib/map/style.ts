@@ -263,7 +263,15 @@ export function snapshotLayers(source: string): LayerSpecification[] {
 			minzoom: 14.2,
 			filter: ['all', ['any', isPoint, isPoly], ['!=', ['get', 'kind'], 'district'], notSpace],
 			layout: {
-				'text-field': ['get', 'name'],
+				// An occupied building reads as its occupant ("Joe's Diner"), its own name small underneath
+				'text-field': [
+					'case',
+					['all', ['has', 'occupant'], ['has', 'place_name']],
+					['format', ['get', 'occupant'], {}, '\n', {}, ['get', 'place_name'], { 'font-scale': 0.8, 'text-color': '#b3a894' }],
+					['has', 'occupant'],
+					['get', 'occupant'],
+					['get', 'name']
+				],
 				'text-font': FONT,
 				'text-size': 11.5,
 				'text-anchor': 'top',

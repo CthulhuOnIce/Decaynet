@@ -28,6 +28,13 @@
 		return null;
 	});
 
+	// A place reads as whoever occupies it that year ("Joe's Diner"), its own name underneath
+	const occupants = $derived(
+		snap && ['building', 'site', 'parcel'].includes(snap.kind) && snap.phase === 'present'
+			? snap.relations.filter((r) => r.direction === 'in' && r.predicate === 'occupies')
+			: []
+	);
+
 	const fmtValue = (v: unknown) => (typeof v === 'number' ? v.toLocaleString() : String(v));
 	const qual = (q: Record<string, unknown>) => {
 		const vals = Object.values(q ?? {}).filter((v) => typeof v === 'string');
@@ -42,7 +49,14 @@
 		<p class="muted">Loading…</p>
 	{:else if snap}
 		<div class="eyebrow">As of {year}</div>
-		<h2>{snap.name}</h2>
+		{#if occupants.length}
+			<h2 class="occupant">
+				{#each occupants as o, i (o.id)}{i ? ' · ' : ''}<button class="link" onclick={() => onpick(o.id)} title="Open {o.name}">{o.name}</button>{/each}
+			</h2>
+			<div class="place-name">in {snap.name}</div>
+		{:else}
+			<h2>{snap.name}</h2>
+		{/if}
 		{#if snap.name !== snap.canonical_name}
 			<div class="muted small">Today's page: {snap.canonical_name}</div>
 		{/if}
@@ -132,6 +146,26 @@
 </aside>
 
 <style>
+	h2.occupant {
+		margin-bottom: 0;
+	}
+	h2.occupant .link {
+		background: none;
+		border: 0;
+		padding: 0;
+		font: inherit;
+		color: inherit;
+		cursor: pointer;
+		text-align: left;
+	}
+	h2.occupant .link:hover {
+		text-decoration: underline;
+	}
+	.place-name {
+		margin: 2px 0 4px;
+		color: var(--ink-2);
+		font-size: 0.9rem;
+	}
 	.panel {
 		position: relative;
 		height: 100%;

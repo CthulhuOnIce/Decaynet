@@ -26,6 +26,12 @@
 		goto(`?y=${y}`, { keepFocus: true, noScroll: true, replaceState: true });
 	}
 
+	// Who occupies this place in the selected year (a building reads as its occupant on the map)
+	const occupants = $derived(
+		['building', 'site', 'parcel'].includes(e.kind) && snap.phase === 'present'
+			? snap.relations.filter((r) => r.direction === 'in' && r.predicate === 'occupies')
+			: []
+	);
 	const akas = $derived(snap.other_names.filter((n) => n.name.toLowerCase() !== e.name.toLowerCase()));
 	const sourceIndex = $derived(Object.fromEntries(data.sources.map((s, i) => [s.id, i + 1])));
 
@@ -110,6 +116,12 @@
 			<ConfidenceMark confidence={e.lifespan_confidence} />
 		</div>
 		<h1>{e.name}</h1>
+		{#if occupants.length}
+			<p class="occupied">
+				In {data.year}: occupied by
+				{#each occupants as o, i (o.id)}{i ? (i === occupants.length - 1 ? ' and ' : ', ') : ''}<a href="/e/{o.slug}">{o.name}</a>{/each}
+			</p>
+		{/if}
 		{#if akas.length}
 			<p class="aka muted">
 				Also recorded as
@@ -408,6 +420,11 @@
 	}
 	.aka {
 		margin: 0 0 12px;
+	}
+	.occupied {
+		margin: 0 0 8px;
+		font-size: 1.05rem;
+		color: var(--ink-2);
 	}
 	.tags {
 		margin-top: 12px;
