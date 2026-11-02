@@ -198,6 +198,15 @@
 		<input id="salt" name="value" type="password" autocomplete="off" placeholder="rotate: paste a new random string" style="max-width: 300px" />
 		<button>Rotate</button>
 	</form>
+	<form method="post" action="?/secret" class="row" use:enhance style="margin-top: 10px">
+		<input type="hidden" name="key" value="geonames_username" />
+		<label for="geo" style="margin: 0">GeoNames username</label>
+		<span class="badge" style:color={data.secrets.geonames_username ? 'var(--moss)' : 'var(--muted)'}>{data.secrets.geonames_username ? 'set' : 'not set'}</span>
+		<input id="geo" name="value" type="password" autocomplete="off" placeholder="free account at geonames.org (enable web services)" style="max-width: 300px" />
+		<button>Save</button>
+		{#if data.secrets.geonames_username}<button name="clear" value="1" class="danger">Clear</button>{/if}
+	</form>
+	<p class="muted small">The GeoNames username is used by the <a href="/import">importer</a>. Without it, GeoNames is unavailable.</p>
 </section>
 
 <style>

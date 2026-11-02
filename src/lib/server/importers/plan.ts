@@ -1,9 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Candidate, ImportOptions, MatchInfo, PlanItem, PreviewResult } from '$lib/importTypes';
+import type { Candidate, ImportOptions, ImportSource, MatchInfo, PlanItem, PreviewResult } from '$lib/importTypes';
 import { formatFuzzy } from '$lib/time';
 import { cached } from './cache';
 import { buildOverpassQuery, fetchOhm, normalizeOhm } from './ohm';
-import { fetchWikidataBox, fetchWikidataItems, normalizeWikidata } from './wikidata';
+import { fetchGeonames, normalizeGeonames } from './geonames';
+import { buildOsmQuery, fetchOsm, normalizeOsm } from './osm';
+import { fetchWikidataBox, fetchWikidataItems, normalizeWikidata, wdOptionsKey } from './wikidata';
+import { fetchCommons, fetchWikipedia, normalizeCommons, normalizeWikipedia } from './wikimedia';
 
 export const MAX_SPAN_DEG = 0.12; // ≈ 13 km north–south; less east–west away from the equator
 
@@ -65,62 +68,65 @@ function similarity(a: string, b: string): number {
 	return inter / (A.size + B.size - inter || 1);
 }
 
-// ----------------------------------------------------------------------------- combine OHM + Wikidata
+// ----------------------------------------------------------------------------- combine sources
 
-function mergeInto(base: Candidate, wd: Candidate): Candidate {
+/** Fold a candidate from another source into a base one: the base's shape and dates win, gaps get filled. */
+function mergeInto(base: Candidate, other: Candidate): Candidate {
 	const names = [...base.names];
-	if (base.unnamed) {
-		// the OHM shape gets its name from Wikidata
-	} else if (base.name.toLowerCase() !== wd.name.toLowerCase()) {
-		names.push({ name: wd.name, name_type: 'alternate', source: 'wikidata' });
+	if (!base.unnamed && base.name.toLowerCase() !== other.name.toLowerCase()) {
+		names.push({ name: other.name, name_type: 'alternate', source: other.fact_source });
 	}
-	for (const n of wd.names) if (!names.some((x) => x.name.toLowerCase() === n.name.toLowerCase())) names.push(n);
+	for (const n of other.names) if (!names.some((x) => x.name.toLowerCase() === n.name.toLowerCase())) names.push(n);
 	const attributes = [...base.attributes];
-	for (const a of wd.attributes) if (!attributes.some((x) => x.key === a.key)) attributes.push(a);
-	const datesFromWd = !base.exists_from && !!wd.exists_from;
+	for (const a of other.attributes) if (!attributes.some((x) => x.key === a.key)) attributes.push(a);
+	const datesFromOther = !base.exists_from && !!other.exists_from;
 	return {
 		...base,
-		key: `${base.key}|${wd.key}`,
+		key: `${base.key}|${other.key}`,
 		origin: 'both',
-		name: base.unnamed ? wd.name : base.name,
+		name: base.unnamed ? other.name : base.name,
 		unnamed: false,
-		summary: base.summary ?? wd.summary,
-		exists_from: base.exists_from ?? wd.exists_from,
-		exists_from_precision: base.exists_from ? base.exists_from_precision : wd.exists_from_precision,
-		exists_to: base.exists_to ?? wd.exists_to,
-		exists_to_precision: base.exists_to ? base.exists_to_precision : wd.exists_to_precision,
-		fact_source: datesFromWd ? 'wikidata' : base.fact_source,
-		kind: base.kind === 'organization' && wd.kind !== 'organization' ? wd.kind : base.kind,
+		summary: base.summary ?? other.summary,
+		exists_from: base.exists_from ?? other.exists_from,
+		exists_from_precision: base.exists_from ? base.exists_from_precision : other.exists_from_precision,
+		exists_to: base.exists_to ?? other.exists_to,
+		exists_to_precision: base.exists_to ? base.exists_to_precision : other.exists_to_precision,
+		fact_source: datesFromOther ? other.fact_source : base.fact_source,
+		kind: base.kind === 'organization' && other.kind !== 'organization' ? other.kind : base.kind,
+		geometry: base.geometry ?? other.geometry,
+		geometry_source: base.geometry ? base.geometry_source : other.geometry_source,
+		role: base.geometry ? base.role : other.role,
 		names,
 		attributes,
-		tags: [...new Set([...base.tags, ...wd.tags])],
-		ext: [...base.ext, ...wd.ext],
-		wikidata: wd.wikidata,
-		image_url: wd.image_url,
-		classes: [...new Set([...wd.classes, ...base.classes])]
+		tags: [...new Set([...base.tags, ...other.tags])],
+		ext: [...base.ext, ...other.ext],
+		wikidata: base.wikidata ?? other.wikidata,
+		image_url: base.image_url ?? other.image_url,
+		status: base.status ?? other.status,
+		classes: [...new Set([...other.classes, ...base.classes])]
 	};
 }
 
-function combine(ohm: Candidate[], wd: Candidate[]): Candidate[] {
-	const out = [...ohm];
+/** Add one more source's candidates onto the combined list, merging likely duplicates. */
+function combineLayer(out: Candidate[], layer: Candidate[]): Candidate[] {
+	const limit = out.length; // only merge into earlier sources, never into this layer's own rows
 	const used = new Set<number>();
-	for (const w of wd) {
+	for (const w of layer) {
 		const pt = w.geometry?.type === 'Point' ? w.geometry.coordinates : null;
-		// 1. OHM feature tagged wikidata=Q…
-		let i = out.findIndex((c, idx) => !used.has(idx) && c.origin === 'ohm' && c.wikidata === w.wikidata);
-		// 2. Wikidata point inside an OHM footprint (unnamed, or similarly named)
+		const ok = (idx: number) => idx < limit && !used.has(idx) && out[idx].kind !== 'media';
+		// 1. same Wikidata item
+		let i = w.wikidata ? out.findIndex((c, idx) => ok(idx) && c.wikidata === w.wikidata) : -1;
+		// 2. point inside a footprint (unnamed, or similarly named)
 		if (i < 0 && pt && ['building', 'site'].includes(w.kind))
 			i = out.findIndex(
 				(c, idx) =>
-					!used.has(idx) && c.origin === 'ohm' && ['building', 'site'].includes(c.kind) && c.geometry &&
+					ok(idx) && ['building', 'site'].includes(c.kind) && c.geometry &&
 					pointInGeom(pt, c.geometry) && (c.unnamed || similarity(c.name, w.name) > 0.45)
 			);
-		// 3. Similar name close by
+		// 3. similar name close by
 		if (i < 0 && pt)
 			i = out.findIndex(
-				(c, idx) =>
-					!used.has(idx) && c.origin === 'ohm' && !c.unnamed && c.geometry &&
-					similarity(c.name, w.name) > 0.6 && metres(centroid(c.geometry), pt) < 120
+				(c, idx) => ok(idx) && !c.unnamed && c.geometry && similarity(c.name, w.name) > 0.6 && metres(centroid(c.geometry), pt) < 120
 			);
 		if (i >= 0) {
 			out[i] = mergeInto(out[i], w);
@@ -131,6 +137,10 @@ function combine(ohm: Candidate[], wd: Candidate[]): Candidate[] {
 }
 
 // ----------------------------------------------------------------------------- planning
+
+export const SOURCE_LABEL: Record<ImportSource, string> = {
+	ohm: 'OHM', osm: 'OpenStreetMap', wikidata: 'Wikidata', wikipedia: 'Wikipedia', commons: 'Commons', geonames: 'GeoNames'
+};
 
 const dim = (g: GeoJSON.Geometry | null) => (!g ? -1 : g.type.includes('Polygon') ? 2 : g.type.includes('LineString') ? 1 : 0);
 const range = (c: Candidate) =>
@@ -153,7 +163,7 @@ function sanitize(c: Candidate): Candidate {
 function planItem(raw: Candidate, m: MatchInfo | null): PlanItem {
 	const c = sanitize(raw);
 	const changes: string[] = [...(c.issues ?? [])];
-	const src = c.origin === 'both' ? 'OHM + Wikidata' : c.origin === 'ohm' ? 'OHM' : 'Wikidata';
+	const src = [...new Set(c.ext.map((e) => SOURCE_LABEL[e.source]))].join(' + ');
 	if (!m) {
 		changes.push(`new ${c.kind} from ${src}`);
 		if (range(c)) changes.push(`dates ${range(c)}`);
@@ -162,6 +172,7 @@ function planItem(raw: Candidate, m: MatchInfo | null): PlanItem {
 		for (const a of c.attributes) if (a.key !== 'wikidata') changes.push(`${a.key.replace(/_/g, ' ')}: ${a.value}`);
 		for (const t of c.tags) changes.push(`tag ${t}`);
 		if (c.image_url) changes.push('Commons image link');
+		if (c.media) changes.push(`${c.media.media_type}${c.media.rights ? ` · ${c.media.rights}` : ''}`);
 		return { key: c.key, candidate: c, match: null, action: 'create', changes, addShape: true };
 	}
 	if (!m.exists_from && c.exists_from) changes.push(`+ start ${formatFuzzy(c.exists_from, c.exists_from_precision)}`);
@@ -184,54 +195,101 @@ function planItem(raw: Candidate, m: MatchInfo | null): PlanItem {
 
 // ----------------------------------------------------------------------------- entry point
 
-export async function buildPreview(sb: SupabaseClient, opts: ImportOptions, userAgent: string, lang = 'en'): Promise<PreviewResult> {
+export interface PreviewKeys {
+	geonamesUser?: string;
+}
+
+export async function buildPreview(sb: SupabaseClient, opts: ImportOptions, userAgent: string, lang = 'en', keys: PreviewKeys = {}): Promise<PreviewResult> {
 	const [w, s, e, n] = opts.bbox;
 	if (![w, s, e, n].every(Number.isFinite) || e <= w || n <= s) throw new Error('Pick an area on the map first.');
 	if (e - w > MAX_SPAN_DEG || n - s > MAX_SPAN_DEG)
 		throw new Error('That area is too large for one import. Zoom in to a neighborhood or a few blocks at a time.');
 
+	const bb = opts.bbox.join(',');
 	const warnings: string[] = [];
 	const { data: hk } = await sb.from('attribute_keys').select('unit').eq('id', 'height').maybeSingle();
 	const heightUnit: string | null = hk?.unit ?? 'm';
 	let ohm: Candidate[] = [];
+	let osm: Candidate[] = [];
 	let wd: Candidate[] = [];
+	let wp: Candidate[] = [];
+	let geo: Candidate[] = [];
+	let commons: Candidate[] = [];
 
 	const tasks: Promise<void>[] = [];
+	const task = (label: string, run: () => Promise<void>) => tasks.push(run().catch((err) => void warnings.push(`${label} fetch failed: ${(err as Error).message}`)));
 	if (opts.ohm.enabled) {
-		tasks.push(
+		task('OpenHistoricalMap', () =>
 			// Always fetch all buildings: unnamed footprints can still give Wikidata items their real shape
 			cached(`ohm:${buildOverpassQuery({ ...opts.ohm, unnamedBuildings: true }, opts.bbox)}`, () =>
 				fetchOhm({ ...opts.ohm, unnamedBuildings: true }, opts.bbox, userAgent)
 			).then(({ elements, remark }) => {
 				if (remark) warnings.push(`OpenHistoricalMap: ${remark}`);
 				ohm = normalizeOhm(elements, lang, heightUnit);
-			}).catch((err) => void warnings.push(`OpenHistoricalMap fetch failed: ${(err as Error).message}`))
+			})
+		);
+	}
+	if (opts.osm.enabled && (opts.osm.businesses || opts.osm.places || opts.osm.buildings)) {
+		task('OpenStreetMap', () =>
+			cached(`osm:${buildOsmQuery(opts.osm, opts.bbox)}`, () => fetchOsm(opts.osm, opts.bbox, userAgent)).then(({ elements, remark }) => {
+				if (remark) warnings.push(`OpenStreetMap: ${remark}`);
+				osm = normalizeOsm(elements, lang, heightUnit);
+			})
 		);
 	}
 	if (opts.wikidata.enabled) {
-		tasks.push(
-			cached(`wd:${lang}:${opts.bbox.join(',')}`, () => fetchWikidataBox(opts.bbox, userAgent, lang))
-				.then((rows) => void (wd = normalizeWikidata(rows, opts.wikidata)))
-				.catch((err) => void warnings.push(`Wikidata fetch failed: ${(err as Error).message}`))
+		task('Wikidata', () =>
+			cached(`wd:${lang}:${bb}:${wdOptionsKey(opts.wikidata)}`, () => fetchWikidataBox(opts.bbox, userAgent, lang, opts.wikidata)).then(
+				(rows) => void (wd = normalizeWikidata(rows, opts.wikidata, heightUnit))
+			)
+		);
+	}
+	if (opts.wikipedia.enabled) {
+		task('Wikipedia', () =>
+			cached(`wp:${lang}:${bb}`, () => fetchWikipedia(opts.bbox, userAgent, lang)).then(({ pages, host, warning }) => {
+				if (warning) warnings.push(warning);
+				wp = normalizeWikipedia(pages, host);
+			})
+		);
+	}
+	if (opts.geonames.enabled) {
+		if (!keys.geonamesUser) warnings.push('GeoNames needs a free account name: an admin can add it under Admin → Settings → Secrets.');
+		else {
+			task('GeoNames', () =>
+				cached(`geo:${lang}:${bb}`, () => fetchGeonames(opts.bbox, userAgent, lang, keys.geonamesUser!)).then(({ rows, truncated }) => {
+					if (truncated) warnings.push('GeoNames returned only the first 1000 features; draw a smaller box to see everything.');
+					geo = normalizeGeonames(rows, lang);
+				})
+			);
+		}
+	}
+	if (opts.commons.enabled) {
+		task('Wikimedia Commons', () =>
+			cached(`commons:${bb}`, () => fetchCommons(opts.bbox, userAgent)).then(({ files, warning }) => {
+				if (warning) warnings.push(warning);
+				commons = normalizeCommons(files, opts.commons);
+			})
 		);
 	}
 	await Promise.all(tasks);
 
-	// Wikidata items that OHM features point at but that have no coordinates in the box
-	if (opts.wikidata.enabled && ohm.length) {
+	// Wikidata items that other sources point at (wikidata=* tags, Wikipedia pages) but that have no coordinates in the box
+	if (opts.wikidata.enabled) {
 		const have = new Set(wd.map((c) => c.wikidata));
-		const missing = [...new Set(ohm.map((c) => c.wikidata).filter((q): q is string => !!q && !have.has(q)))].slice(0, 200);
+		const missing = [...new Set([...ohm, ...osm, ...wp].map((c) => c.wikidata).filter((q): q is string => !!q && !have.has(q)))].slice(0, 200);
 		if (missing.length) {
 			try {
-				wd.push(...normalizeWikidata(await fetchWikidataItems(missing, userAgent, lang), opts.wikidata));
+				wd.push(...normalizeWikidata(await fetchWikidataItems(missing, userAgent, lang, opts.wikidata), opts.wikidata, heightUnit));
 			} catch (err) {
 				warnings.push(`Wikidata enrichment failed: ${(err as Error).message}`);
 			}
 		}
 	}
 
-	const counts = { ohm: ohm.length, wikidata: wd.length, combined: 0, hiddenUnnamed: 0 };
-	let cands = combine(ohm, wd);
+	const counts = { ohm: ohm.length, osm: osm.length, wikidata: wd.length, wikipedia: wp.length, geonames: geo.length, commons: commons.length, combined: 0, hiddenUnnamed: 0 };
+	let cands: Candidate[] = [...ohm];
+	for (const layer of [osm, wd, wp, geo]) cands = combineLayer(cands, layer);
+	cands.push(...commons);
 	counts.combined = cands.filter((c) => c.origin === 'both').length;
 	if (!opts.ohm.unnamedBuildings || !opts.ohm.buildings) {
 		const before = cands.length;
@@ -282,6 +340,8 @@ export function toApplyPayload(items: PlanItem[], bbox: number[], kinds: Set<str
 			const includeShape = i.action === 'create' ? !!c.geometry : i.addShape && !!c.geometry;
 			if (includeShape && c.geometry_source) sources.add(c.geometry_source);
 			sources.add(c.fact_source);
+			if (c.image_url) sources.add('wikidata');
+			for (const x of c.ext) sources.add(x.source);
 			for (const x of [...c.names, ...c.attributes]) sources.add(x.source);
 			const names = [...c.names];
 			if (i.action === 'merge' && !c.unnamed) names.unshift({ name: c.name, name_type: 'alternate', source: c.fact_source });
@@ -303,12 +363,13 @@ export function toApplyPayload(items: PlanItem[], bbox: number[], kinds: Set<str
 				fact_source: c.fact_source,
 				// An end date means it left the record; the lifespan end makes it a ghost. We don't
 				// guess *how* it ended (demolished? renamed? moved?), so no condition is set.
-				status: null,
+				status: c.status ?? null,
 				names,
 				attributes: c.attributes,
 				tags: c.tags,
 				ext: c.ext,
 				image_url: c.image_url,
+				media: i.action === 'create' ? (c.media ?? null) : null,
 				event_type: c.event_type ?? null
 			};
 		});

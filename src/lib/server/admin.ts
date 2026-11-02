@@ -24,3 +24,8 @@ export async function getSecret(key: string): Promise<string | null> {
 	const { data } = await sb.from('site_secrets').select('value').eq('key', key).maybeSingle();
 	return data?.value ?? null;
 }
+
+/** GeoNames account name: set at /admin/settings, with the GEONAMES_USERNAME env var as a fallback. */
+export async function getGeonamesUser(): Promise<string | undefined> {
+	return (await getSecret('geonames_username')) || priv.GEONAMES_USERNAME || undefined;
+}
