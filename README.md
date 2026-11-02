@@ -324,17 +324,16 @@ The **workbench** lays a Sanborn fire-insurance sheet, an old plat or an aerial 
 *(The sheet in these screenshots is a synthetic sample, not a real Sanborn map.)*
 
 1. **Workbench → Scan → Open a scan** (JPG/PNG). It appears over the map with four yellow corner handles.
-2. **Align it:**
-   - Drag each corner onto the matching street intersection; drag the blue centre handle to move the whole sheet.
-   - Use the ⟲/⟳ and ±2 % buttons for fine rotation and scale.
-   - Lower the opacity to see the streets underneath.
+2. **Align it**, either way (switch under *Alignment*):
+   - **Drag corners:** drag each corner onto the matching street intersection; drag the blue centre handle to move the whole sheet. Use the ⟲/⟳ and ±2 % buttons for fine rotation and scale, and lower the opacity to see the streets underneath.
+   - **Match pins:** the scan opens in its own pane beside the map. Click a recognisable spot on the scan (a street corner, a church), then click the same spot on the map (map clicks snap to existing shapes); repeat. Two pins move, turn and scale the sheet into place; three or more also correct stretch and skew. Spread pins toward the edges of the sheet. Drag any pin on either side to fine-tune; with more pins than the fit needs, each pin shows how many metres off it is, so a misplaced one stands out. <kbd>Backspace</kbd> removes the last pin.
 3. **Compare** in *Blend* or *Swipe* mode, or hold <kbd>F</kbd> to flicker the scan off and on.
 4. Enter the **year the scan shows**. This moves the time slider and pre-fills dates on what you trace.
 5. Switch to **Trace**:
    - Click to place vertices; they snap to existing corners. <kbd>Backspace</kbd> undoes and <kbd>Esc</kbd> clears.
    - Then either attach the shape to an existing page or create a new page (building, street, parcel…).
    - Pick a condition, a role (*footprint*, *centerline*…), dates and a citation.
-6. **Save alignment file** downloads the corner positions as a small JSON file. Next time, open the same scan and choose **Load alignment** to pick up where you left off. The scan itself never leaves your computer.
+6. **Save alignment file** downloads the corner positions (and any pins) as a small JSON file. Next time, open the same scan and choose **Load alignment** to pick up where you left off. The scan itself never leaves your computer.
 
 Already georeferenced a sheet elsewhere (Map Warper, Allmaps…)? Paste its XYZ tile URL under **…or a tile layer**. It's also session-only.
 

@@ -6,6 +6,8 @@
 	import YearSlider from '$lib/components/YearSlider.svelte';
 	import EntityPicker from '$lib/components/EntityPicker.svelte';
 	import TemporalFields from '$lib/components/TemporalFields.svelte';
+	import ScanPinView from '$lib/components/ScanPinView.svelte';
+	import { apply, cornersFor, fit, fromMerc, metres, minPins, toMerc, type FitKind, type XY } from '$lib/map/georef';
 	import { baseStyle, mapView, snapshotLayers } from '$lib/map/style';
 	import { loadView, saveView, loadYear, saveYear } from '$lib/mapMemory';
 	import { can } from '$lib/perms';
@@ -42,6 +44,15 @@
 	let depictsYear = $state(''); // year the scan shows; pre-fills traced shapes
 	let markers: Marker[] = [];
 	let scanError = $state<string | null>(null);
+
+	// Two ways to align a scan: drag its four corners, or match pins (control
+	// points) on the scan to the same spots on the map and fit the sheet to them.
+	type Pin = { id: number; img: XY | null; map: XY | null };
+	let alignMode = $state<'corners' | 'pins'>('corners');
+	let pins = $state<Pin[]>([]);
+	let pinSeq = $state(0);
+	let fitChoice = $state<'auto' | FitKind>('auto');
+	let pinMarkers: Marker[] = [];
 
 	const activeSource = $derived.by(() => {
 		if (scan) return { kind: 'image' as const, url: scan.url, corners: scan.corners };
@@ -102,7 +113,7 @@
 	function placeMarkers() {
 		markers.forEach((m) => m.remove());
 		markers = [];
-		if (!scan || !aligning || !map || !maplibre) return;
+		if (!scan || !aligning || alignMode !== 'corners' || !map || !maplibre) return;
 		const mk = (cls: string, title: string) => {
 			const el = document.createElement('div');
 			el.className = `handle ${cls}`;
@@ -178,6 +189,7 @@
 			};
 			tileUrl = '';
 			aligning = true;
+			clearPins();
 			scan = {
 				name: file.name,
 				url,
@@ -200,13 +212,98 @@
 		scan = null;
 		markers.forEach((m) => m.remove());
 		markers = [];
+		clearPins();
+	}
+
+	// ---------------------------------------------------------------- pin alignment
+	const pinning = $derived(tool === 'overlay' && !!scan && aligning && alignMode === 'pins');
+	const pairs = $derived(pins.filter((p) => p.img && p.map));
+	const fitKind = $derived<FitKind>(fitChoice === 'auto' ? (pairs.length >= 3 ? 'affine' : 'similarity') : fitChoice);
+	const pinFit = $derived(
+		pairs.length >= minPins(fitKind)
+			? fit(
+					pairs.map((p) => p.img!),
+					pairs.map((p) => toMerc(p.map!)),
+					fitKind
+				)
+			: null
+	);
+	/**
+	 * How far (metres) each pin's scan spot lands from its map spot under the current fit.
+	 * Only meaningful once there are more pins than the fit needs (otherwise every pin is matched exactly).
+	 */
+	const residuals = $derived(
+		new Map<number, number>(
+			pinFit && pairs.length > minPins(pinFit.kind) ? pairs.map((p) => [p.id, metres(fromMerc(apply(pinFit.m, p.img!)), p.map!)]) : []
+		)
+	);
+	const rms = $derived(residuals.size ? Math.sqrt([...residuals.values()].reduce((s, r) => s + r * r, 0) / residuals.size) : null);
+	const waitingImg = $derived(pins.find((p) => !p.img)?.id ?? null);
+	const waitingMap = $derived(pins.find((p) => !p.map)?.id ?? null);
+
+	function addImgPin(img: XY) {
+		const p = pins.find((x) => !x.img);
+		if (p) p.img = img;
+		else pins.push({ id: ++pinSeq, img, map: null });
+	}
+	function addMapPin(ll: XY) {
+		const p = pins.find((x) => !x.map);
+		if (p) p.map = ll;
+		else pins.push({ id: ++pinSeq, img: null, map: ll });
+	}
+	function moveImgPin(id: number, img: XY) {
+		const p = pins.find((x) => x.id === id);
+		if (p) p.img = img;
+	}
+	function removePin(id: number) {
+		pins = pins.filter((p) => p.id !== id);
+		if (!pins.length) pinSeq = 0;
+	}
+	function clearPins() {
+		pins = [];
+		pinSeq = 0;
+	}
+
+	function placePins() {
+		pinMarkers.forEach((m) => m.remove());
+		pinMarkers = [];
+		if (!pinning || !map || !maplibre) return;
+		for (const p of pins) {
+			if (!p.map) continue;
+			const el = document.createElement('div');
+			el.className = `handle pin${p.img ? '' : ' half'}`;
+			el.textContent = String(p.id);
+			el.title = `Pin ${p.id}: drag to adjust`;
+			const id = p.id;
+			const m = new maplibre.Marker({ element: el, draggable: true }).setLngLat(p.map).addTo(map);
+			m.on('drag', () => {
+				const ll = m.getLngLat();
+				const q = pins.find((x) => x.id === id);
+				if (q) q.map = [+ll.lng.toFixed(7), +ll.lat.toFixed(7)];
+			});
+			pinMarkers.push(m);
+		}
 	}
 
 	/** Save the alignment to a small file so the same scan can be re-aligned instantly next time. */
 	function exportAlignment() {
 		if (!scan) return;
 		const blob = new Blob(
-			[JSON.stringify({ decaynet_alignment: 1, file: scan.name, width: scan.width, height: scan.height, depicts: depictsYear || null, corners: scan.corners }, null, 2)],
+			[
+				JSON.stringify(
+					{
+						decaynet_alignment: 1,
+						file: scan.name,
+						width: scan.width,
+						height: scan.height,
+						depicts: depictsYear || null,
+						corners: scan.corners,
+						pins: pairs.map((p) => ({ image: p.img, map: p.map }))
+					},
+					null,
+					2
+				)
+			],
 			{ type: 'application/json' }
 		);
 		const a = document.createElement('a');
@@ -224,6 +321,13 @@
 			if (!Array.isArray(j.corners) || j.corners.length !== 4) throw new Error('No corners in that file.');
 			setCorners(j.corners as Corners);
 			if (j.depicts) depictsYear = String(j.depicts);
+			// Pins saved with the alignment come back too, so you can keep refining
+			const ok = (v: unknown): v is XY => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number');
+			if (Array.isArray(j.pins)) {
+				const loaded = (j.pins as { image?: unknown; map?: unknown }[]).filter((p) => ok(p?.image) && ok(p?.map));
+				pins = loaded.map((p, i) => ({ id: i + 1, img: p.image as XY, map: p.map as XY }));
+				pinSeq = pins.length;
+			}
 			placeMarkers();
 			const xs = j.corners.map((c: number[]) => c[0]);
 			const ys = j.corners.map((c: number[]) => c[1]);
@@ -330,6 +434,7 @@
 
 	// ---------------------------------------------------------------- map lifecycle
 	let fetchTimer: ReturnType<typeof setTimeout> | undefined;
+	let resizeObs: ResizeObserver | undefined;
 	async function refresh() {
 		if (!map || !ready) return;
 		const res = await fetch(`/api/snapshot?at=${yearToDate(year)}&ghosts=1&_=${refreshKey}`);
@@ -353,6 +458,12 @@
 			maxZoom: 21
 		});
 		const mm = map;
+		// The map shares the stage with the scan pane while pinning, so follow its size
+		resizeObs = new ResizeObserver(() => {
+			map?.resize();
+			top?.resize();
+		});
+		resizeObs.observe(mapEl);
 		mm.addControl(new maplibre.NavigationControl(), 'top-right');
 		mm.doubleClickZoom.disable();
 		mm.on('load', () => {
@@ -370,7 +481,8 @@
 			m.addLayer({ id: 'draft-pt', type: 'circle', source: 'draft', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 4.5, 'circle-color': '#f2c14e', 'circle-stroke-color': '#17130f', 'circle-stroke-width': 1.5 } });
 
 			m.on('click', (e) => {
-				if (!drawing) return;
+				if (!drawing && !pinning) return;
+				if ((e.originalEvent.target as HTMLElement | null)?.closest('.maplibregl-marker')) return;
 				let c: [number, number] = [+e.lngLat.lng.toFixed(7), +e.lngLat.lat.toFixed(7)];
 				let best = 10;
 				for (const v of [...snapshotVertices(), ...pts]) {
@@ -381,7 +493,8 @@
 						c = v;
 					}
 				}
-				pts = effectiveMode === 'point' ? [c] : [...pts, c];
+				if (pinning) addMapPin(c);
+				else pts = effectiveMode === 'point' ? [c] : [...pts, c];
 			});
 			m.on('moveend', () => saveView({ center: [m.getCenter().lng, m.getCenter().lat], zoom: m.getZoom() }));
 			m.on('move', () => top?.jumpTo({ center: m.getCenter(), zoom: m.getZoom(), bearing: m.getBearing(), pitch: m.getPitch() }));
@@ -394,6 +507,8 @@
 	onDestroy(() => {
 		clearTimeout(fetchTimer);
 		markers.forEach((m) => m.remove());
+		pinMarkers.forEach((m) => m.remove());
+		resizeObs?.disconnect();
 		if (scan) URL.revokeObjectURL(scan.url);
 		top?.remove();
 		map?.remove();
@@ -417,8 +532,19 @@
 		untrack(applyOpacity);
 	});
 	$effect(() => {
-		void [scan?.url, aligning, ready];
+		void [scan?.url, aligning, alignMode, ready];
 		untrack(placeMarkers);
+	});
+	// Rebuild map pins when pins are added, removed or completed (not while one is dragged)
+	$effect(() => {
+		void [pinning, ready, pins.map((p) => `${p.id}:${p.map ? 1 : 0}:${p.img ? 1 : 0}`).join()];
+		untrack(placePins);
+	});
+	// Re-fit the sheet whenever the matched pins change
+	$effect(() => {
+		const f = pinFit;
+		if (!f) return;
+		untrack(() => scan && setCorners(cornersFor(f, scan.width, scan.height)));
 	});
 	// Hide handles while drawing so clicks land on the map
 	$effect(() => {
@@ -433,7 +559,7 @@
 		untrack(() => highlight(previewIds));
 	});
 	$effect(() => {
-		if (map) map.getCanvas().style.cursor = drawing ? 'crosshair' : '';
+		if (map) map.getCanvas().style.cursor = drawing || pinning ? 'crosshair' : '';
 	});
 
 	function onkey(e: KeyboardEvent) {
@@ -445,6 +571,10 @@
 			pts = pts.slice(0, -1);
 		}
 		if (drawing && e.key === 'Escape') pts = [];
+		if (pinning && e.key === 'Backspace' && pins.length) {
+			e.preventDefault();
+			removePin(pins[pins.length - 1].id);
+		}
 	}
 	function onkeyup(e: KeyboardEvent) {
 		if (e.key === 'f') overlayHidden = false;
@@ -539,15 +669,71 @@
 						<label class="check"><input type="checkbox" bind:checked={aligning} /> show handles</label>
 					</div>
 					{#if aligning}
-						<p class="hint">Drag the <span class="sw corner"></span> corners onto matching intersections; drag <span class="sw move"></span> to move the sheet. Lower the opacity to see streets beneath.</p>
-						<div class="row nudges">
-							<button title="Rotate left" onclick={() => transform(-1, 1)}>⟲ 1°</button>
-							<button title="Rotate right" onclick={() => transform(1, 1)}>⟳ 1°</button>
-							<button title="Rotate left a little" onclick={() => transform(-0.2, 1)}>⟲ .2°</button>
-							<button title="Rotate right a little" onclick={() => transform(0.2, 1)}>⟳ .2°</button>
-							<button title="Shrink" onclick={() => transform(0, 0.98)}>− 2%</button>
-							<button title="Grow" onclick={() => transform(0, 1.02)}>+ 2%</button>
+						<div class="seg">
+							<button class:on={alignMode === 'corners'} onclick={() => (alignMode = 'corners')} title="Drag the sheet's corners into place">Drag corners</button>
+							<button class:on={alignMode === 'pins'} onclick={() => (alignMode = 'pins')} title="Pin matching spots on the scan and the map">Match pins</button>
 						</div>
+						{#if alignMode === 'corners'}
+							<p class="hint">Drag the <span class="sw corner"></span> corners onto matching intersections; drag <span class="sw move"></span> to move the sheet. Lower the opacity to see streets beneath.</p>
+							<div class="row nudges">
+								<button title="Rotate left" onclick={() => transform(-1, 1)}>⟲ 1°</button>
+								<button title="Rotate right" onclick={() => transform(1, 1)}>⟳ 1°</button>
+								<button title="Rotate left a little" onclick={() => transform(-0.2, 1)}>⟲ .2°</button>
+								<button title="Rotate right a little" onclick={() => transform(0.2, 1)}>⟳ .2°</button>
+								<button title="Shrink" onclick={() => transform(0, 0.98)}>− 2%</button>
+								<button title="Grow" onclick={() => transform(0, 1.02)}>+ 2%</button>
+							</div>
+						{:else}
+							<p class="hint">
+								Click a recognisable spot on the scan (a street corner, a church, a bridge), then click the same spot on the map.
+								Map clicks snap to existing shapes. With <strong>2 pins</strong> the sheet moves, turns and scales into place;
+								<strong>3 or more</strong> also correct stretch and skew. Spread them out toward the edges of the sheet. Drag any pin to fine-tune.
+							</p>
+							<p class="next">
+								{#if waitingMap != null && pins.find((p) => p.id === waitingMap)?.img}
+									<span class="sw pin"></span> Pin {waitingMap}: now click the same spot on the <strong>map</strong>.
+								{:else if waitingImg != null}
+									<span class="sw pin"></span> Pin {waitingImg}: now click that spot on the <strong>scan</strong>.
+								{:else}
+									<span class="sw pin"></span> Click a spot on the <strong>scan</strong> to place pin {pinSeq + 1}.
+								{/if}
+							</p>
+							{#if pins.length}
+								<table class="pins">
+									<thead><tr><th>#</th><th>Scan</th><th>Map</th><th title="Distance between where the fitted scan puts this spot and where you pinned it">Off by</th><th></th></tr></thead>
+									<tbody>
+										{#each pins as p (p.id)}
+											<tr>
+												<td><span class="pin-no">{p.id}</span></td>
+												<td>{p.img ? '✓' : '—'}</td>
+												<td>{p.map ? '✓' : '—'}</td>
+												<td class:bad={(residuals.get(p.id) ?? 0) > 2 * (rms ?? Infinity)}>
+													{#if residuals.has(p.id)}{residuals.get(p.id)!.toFixed(1)} m{:else}<span class="muted">–</span>{/if}
+												</td>
+												<td><button class="ghost x" title="Remove pin {p.id}" onclick={() => removePin(p.id)}>✕</button></td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							{/if}
+							<p class="muted small">
+								{#if pinFit}
+									Fitted from {pairs.length} pins ({pinFit.kind === 'affine' ? 'stretch & skew' : 'move, turn & scale'}){#if rms != null}{' · '}typical error {rms.toFixed(1)} m; a pin far off the rest is probably misplaced{/if}.
+									{#if pairs.length === minPins(pinFit.kind)}Add another pin to check the fit.{/if}
+								{:else}
+									{Math.max(0, minPins(fitKind) - pairs.length)} more matched pin{minPins(fitKind) - pairs.length === 1 ? '' : 's'} to fit the sheet.
+								{/if}
+							</p>
+							<div class="field">
+								<label for="fk">Fit</label>
+								<select id="fk" bind:value={fitChoice}>
+									<option value="auto">Automatic</option>
+									<option value="similarity">Move, turn &amp; scale only (2+ pins)</option>
+									<option value="affine">Also stretch &amp; skew (3+ pins)</option>
+								</select>
+							</div>
+							{#if pins.length}<button class="ghost" onclick={clearPins}>Clear pins</button>{/if}
+						{/if}
 						<button class="primary" onclick={() => (aligning = false)}>Done aligning</button>
 					{/if}
 					<div class="row" style="margin-top: 10px">
@@ -718,18 +904,41 @@
 		{/if}
 	</aside>
 
-	<div class="stage">
-		<div class="map" bind:this={mapEl}></div>
-		<div class="top" bind:this={topEl} class:hidden={compare !== 'swipe' || !activeSource} style:clip-path="inset(0 {100 - swipe * 100}% 0 0)"></div>
-		{#if compare === 'swipe' && activeSource}
-			<div class="swipe" style:left="{swipe * 100}%" onpointerdown={() => (dragging = true)} role="slider" aria-valuenow={Math.round(swipe * 100)} aria-label="Swipe position" tabindex="0">
-				<span>⇔</span>
+	<div class="stage" class:split={pinning}>
+		{#if pinning && scan}
+			<div class="scanpane">
+				<ScanPinView
+					url={scan.url}
+					width={scan.width}
+					height={scan.height}
+					{pins}
+					waiting={waitingImg != null && !(waitingMap != null && pins.find((p) => p.id === waitingMap)?.img) ? waitingImg : null}
+					onpin={addImgPin}
+					onmove={moveImgPin}
+				/>
 			</div>
 		{/if}
-		{#if scan && aligning}<div class="banner">Aligning: drag the corners · lower the opacity to see streets beneath</div>{/if}
-		{#if activeSource}<div class="session-badge" title="Not uploaded or saved; gone when you close the page">session-only scan</div>{/if}
-		<div class="dock">
-			<YearSlider bind:year min={Math.min(data.minYear, data.settings.min_year)} max={data.maxYear} />
+		<div class="mapwrap">
+			<div class="map" bind:this={mapEl}></div>
+			<div class="top" bind:this={topEl} class:hidden={compare !== 'swipe' || !activeSource} style:clip-path="inset(0 {100 - swipe * 100}% 0 0)"></div>
+			{#if compare === 'swipe' && activeSource}
+				<div class="swipe" style:left="{swipe * 100}%" onpointerdown={() => (dragging = true)} role="slider" aria-valuenow={Math.round(swipe * 100)} aria-label="Swipe position" tabindex="0">
+					<span>⇔</span>
+				</div>
+			{/if}
+			{#if scan && aligning}
+				<div class="banner">
+					{#if alignMode === 'pins'}
+						Pinning: a spot on the scan, then the same spot here
+					{:else}
+						Aligning: drag the corners · lower the opacity to see streets beneath
+					{/if}
+				</div>
+			{/if}
+			{#if activeSource}<div class="session-badge" title="Not uploaded or saved; gone when you close the page">session-only scan</div>{/if}
+			<div class="dock">
+				<YearSlider bind:year min={Math.min(data.minYear, data.settings.min_year)} max={data.maxYear} />
+			</div>
 		</div>
 	</div>
 </div>
@@ -816,9 +1025,65 @@
 		background: #8fb3c9;
 		border-radius: 50%;
 	}
+	.sw.pin {
+		background: #e0574a;
+		border-radius: 50%;
+	}
 	.stage {
 		position: relative;
 		min-width: 0;
+		display: grid;
+		grid-template-columns: 1fr;
+	}
+	.stage.split {
+		grid-template-columns: 1fr 1fr;
+	}
+	.scanpane,
+	.mapwrap {
+		position: relative;
+		min-width: 0;
+		min-height: 0;
+		overflow: hidden;
+	}
+	.scanpane {
+		border-right: 2px solid var(--amber);
+	}
+	.next {
+		margin: 6px 0;
+		padding: 6px 8px;
+		border-radius: 4px;
+		background: rgba(224, 87, 74, 0.12);
+		border: 1px solid rgba(224, 87, 74, 0.4);
+	}
+	table.pins {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 0.8rem;
+		margin: 6px 0;
+	}
+	table.pins th,
+	table.pins td {
+		padding: 2px 4px;
+		text-align: left;
+		border-bottom: 1px solid var(--line);
+	}
+	table.pins td.bad {
+		color: #e0574a;
+		font-weight: 600;
+	}
+	.pin-no {
+		display: inline-grid;
+		place-items: center;
+		width: 18px;
+		height: 18px;
+		border-radius: 50%;
+		background: #e0574a;
+		color: #fff;
+		font: 700 0.65rem/1 var(--mono);
+	}
+	button.x {
+		padding: 0 6px;
+		font-size: 0.75rem;
 	}
 	.map,
 	.top {
@@ -929,10 +1194,34 @@
 		background: #8fb3c9;
 		border-radius: 50%;
 	}
+	:global(.handle.pin) {
+		width: 22px;
+		height: 22px;
+		display: grid;
+		place-items: center;
+		background: #e0574a;
+		color: #fff;
+		border-radius: 50%;
+		font: 700 0.7rem/1 var(--mono, monospace);
+		box-shadow:
+			0 0 0 2px #17130f,
+			0 0 0 4px rgba(255, 255, 255, 0.85);
+	}
+	:global(.handle.pin.half) {
+		opacity: 0.75;
+	}
 	@media (max-width: 800px) {
 		.wb {
 			grid-template-columns: 1fr;
 			grid-template-rows: 45% 1fr;
+		}
+		.stage.split {
+			grid-template-columns: 1fr;
+			grid-template-rows: 1fr 1fr;
+		}
+		.scanpane {
+			border-right: 0;
+			border-bottom: 2px solid var(--amber);
 		}
 	}
 </style>
