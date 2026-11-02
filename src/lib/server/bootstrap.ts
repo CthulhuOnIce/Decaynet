@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { env as priv } from '$env/dynamic/private';
+import { env as pub } from '$env/dynamic/public';
 import { serviceClient } from './admin';
 
 /**
@@ -66,8 +67,21 @@ async function run() {
 		console.warn('[decaynet] SUPABASE_SERVICE_ROLE_KEY not set: the first account to sign up becomes admin.');
 		return;
 	}
-	const { data: has, error } = await admin.rpc('site_has_admin');
-	if (error) throw new Error(`database not ready (${error.message})`);
+	const target = priv.SUPABASE_INTERNAL_URL || pub.PUBLIC_SUPABASE_URL;
+	let has: boolean | null;
+	try {
+		const { data, error } = await admin.rpc('site_has_admin');
+		if (error) throw new Error(error.message);
+		has = data;
+	} catch (e) {
+		// fetch failures hide the real reason (DNS, refused, TLS) in `cause`
+		const cause = (e as { cause?: { code?: string; message?: string } }).cause;
+		const detail = cause ? `${cause.code ?? ''} ${cause.message ?? ''}`.trim() : (e as Error).message;
+		const hint = priv.SUPABASE_INTERNAL_URL
+			? ''
+			: ' SUPABASE_INTERNAL_URL is not set, so the app is using the public URL; behind a reverse proxy set it to an address the app container can reach (e.g. http://kong:8000).';
+		throw new Error(`database not ready: cannot reach ${target} (${detail}).${hint}`);
+	}
 	if (has) {
 		adminKnown = true;
 		return;

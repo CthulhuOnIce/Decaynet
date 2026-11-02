@@ -148,6 +148,7 @@ Notes:
 ### Production checklist
 
 - **Hostnames:** put both public URLs behind HTTPS (a reverse proxy such as Traefik, Caddy or Nginx Proxy Manager: `history.example.org` → `app:3000`, `api.history.example.org` → `kong:8000`), then set `ORIGIN` and `SUPABASE_PUBLIC_URL`. Browsers talk to Supabase directly for sign-in and uploads, so it needs its own public URL.
+- **App → Supabase address:** the app server talks to Supabase itself, not through the browser. If it logs `admin bootstrap will retry: database not ready`, set `SUPABASE_INTERNAL_URL` (e.g. `http://kong:8000`) to an address reachable from the app container instead of relying on the public hostname (which often fails from inside Docker behind a proxy).
 - **Real visitor IPs for tips:** behind a reverse proxy, set `ADDRESS_HEADER=X-Forwarded-For` (and `XFF_DEPTH` to the number of proxies, default 1).
 - **Email:** set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL` and `MAILER_AUTOCONFIRM=false` for confirmation emails, password resets and magic links. Without SMTP, new accounts are confirmed immediately.
 - **Backups:** `docker exec <db-container> pg_dump -U postgres postgres > backup.sql`, plus the `storage-data` volume (uploaded media).
