@@ -438,7 +438,7 @@
 		</section>
 	{/if}
 
-	<section class="card danger-zone">
+	<section class="card danger-zone" id="danger">
 		<h2>Danger zone</h2>
 		{@render status('danger')}
 		<form

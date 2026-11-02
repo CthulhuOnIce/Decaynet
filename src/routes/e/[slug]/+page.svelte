@@ -54,6 +54,18 @@
 		return `/?${u}`;
 	});
 	const canEdit = $derived(!!data.user && (data.perms ?? []).includes('edit_content'));
+	const canClean = $derived(!!data.user && (data.perms ?? []).includes('clean_timelines'));
+	const canModerate = $derived(!!data.user && (data.perms ?? []).includes('moderate'));
+	let moreOpen = $state(false);
+	let moreEl: HTMLDetailsElement | undefined = $state();
+	// Close the More menu on an outside click or Escape (reads the element: its toggle event lands a tick later)
+	function closeMore(ev: Event) {
+		if (!moreEl?.open) return;
+		if (ev instanceof KeyboardEvent ? ev.key === 'Escape' : !(ev.target as HTMLElement).closest('details.more')) {
+			moreEl.open = false;
+			moreOpen = false;
+		}
+	}
 	// Footprint (grey) + spaces (highlighted) for the floor-plan minimap
 	const floorPlan = $derived<GeoJSON.Feature[]>([
 		...data.geomFeatures.filter((f) => f.geometry?.type !== 'Point').map((f) => ({ ...f, properties: { current: false } })),
@@ -62,6 +74,7 @@
 </script>
 
 <svelte:head><title>{e.name} · {data.settings.site_name}</title></svelte:head>
+<svelte:window onclick={closeMore} onkeydown={closeMore} />
 
 <div class="page">
 	{#if e.is_private}
@@ -107,25 +120,55 @@
 			{#if data.article?.locked}<Badge color="#8fb3c9" label="Locked" />{/if}
 			{#if e.is_private}<Badge color="#e0a23a" label="Private" title="Hidden from the public until published" />{/if}
 			<span class="spacer"></span>
+			{#if data.timelineFixes}
+				<a class="fix-hint" href="/e/{e.slug}/cleanup" title="Review automatic fixes for this page's timeline">
+					Timeline: {data.timelineFixes} fix{data.timelineFixes === 1 ? '' : 'es'}
+				</a>
+			{/if}
 			<a class="btn ghost" href={mapHref}>View on map</a>
 			{#if canEdit}
 				<a class="btn" href="/e/{e.slug}/edit">Edit article</a>
 				<a class="btn" href="/e/{e.slug}/facts">Edit facts</a>
-				<a class="btn ghost" href="/media/new?depicts={e.slug}">+ Media</a>
 			{/if}
-			<a class="btn ghost" href="/e/{e.slug}/history">History</a>
-			{#if canEdit && !e.is_private}
-				<form
-					method="post"
-					action="?/visibility"
-					use:enhance={({ cancel }) => {
-						if (!confirm('Hide this page from the public again?')) cancel();
-					}}
-				>
-					<input type="hidden" name="private" value="true" />
-					<button class="ghost" title="Hide from the public until it's ready">Make private</button>
-				</form>
-			{/if}
+			<details class="more" bind:open={moreOpen} bind:this={moreEl}>
+				<summary class="btn ghost" aria-label="More actions">More ▾</summary>
+				<div class="more-menu" role="menu">
+					<a role="menuitem" href="/e/{e.slug}/history">History</a>
+					{#if canEdit}
+						<a role="menuitem" href="/media/new?depicts={e.slug}">Add media</a>
+						{#if !e.is_private}
+							<form
+								method="post"
+								action="?/visibility"
+								use:enhance={({ cancel }) => {
+									if (!confirm('Hide this page from the public again?')) cancel();
+									moreOpen = false;
+								}}
+							>
+								<input type="hidden" name="private" value="true" />
+								<button role="menuitem" title="Hide from the public until it's ready">Make private</button>
+							</form>
+						{/if}
+					{/if}
+					{#if canClean || canModerate}
+						<div class="menu-label">Moderation</div>
+						{#if canClean}
+							<a role="menuitem" href="/e/{e.slug}/cleanup">
+								Clean up timeline{#if data.timelineFixes}<span class="count">{data.timelineFixes}</span>{/if}
+							</a>
+						{/if}
+						{#if canModerate && data.article}
+							<form method="post" action="?/lock" use:enhance={() => { moreOpen = false; }}>
+								<input type="hidden" name="locked" value={data.article.locked ? 'false' : 'true'} />
+								<button role="menuitem">{data.article.locked ? 'Unlock article' : 'Lock article'}</button>
+							</form>
+						{/if}
+						{#if canModerate}
+							<a role="menuitem" class="danger-item" href="/e/{e.slug}/facts#danger">Delete page…</a>
+						{/if}
+					{/if}
+				</div>
+			</details>
 		</div>
 		{#if data.tags.length}
 			<div class="tags"><TagChips tags={data.tags} /></div>
@@ -364,6 +407,76 @@
 	}
 	.spacer {
 		flex: 1;
+	}
+	.fix-hint {
+		font-size: 0.8rem;
+		padding: 3px 10px;
+		border-radius: 999px;
+		border: 1px dashed var(--amber);
+		color: var(--amber);
+		text-decoration: none;
+	}
+	.more {
+		position: relative;
+	}
+	.more summary {
+		list-style: none;
+		cursor: pointer;
+	}
+	.more summary::-webkit-details-marker {
+		display: none;
+	}
+	.more-menu {
+		position: absolute;
+		right: 0;
+		top: calc(100% + 4px);
+		z-index: 20;
+		min-width: 210px;
+		padding: 6px;
+		display: grid;
+		gap: 2px;
+		background: var(--bg-2);
+		border: 1px solid var(--line-2);
+		border-radius: var(--radius);
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+	}
+	.more-menu a,
+	.more-menu button {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		width: 100%;
+		padding: 6px 10px;
+		border: 0;
+		border-radius: calc(var(--radius) - 2px);
+		background: none;
+		color: var(--ink);
+		font: inherit;
+		font-size: 0.9rem;
+		text-align: left;
+		text-decoration: none;
+		cursor: pointer;
+	}
+	.more-menu a:hover,
+	.more-menu button:hover {
+		background: var(--bg);
+	}
+	.more-menu .danger-item {
+		color: var(--rust-2);
+	}
+	.menu-label {
+		margin: 6px 10px 2px;
+		font-size: 0.68rem;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+	.more-menu .count {
+		font-size: 0.72rem;
+		padding: 0 6px;
+		border-radius: 999px;
+		background: var(--amber);
+		color: #17130f;
 	}
 	.lede {
 		font-size: 1.12rem;

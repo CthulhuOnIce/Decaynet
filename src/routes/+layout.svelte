@@ -2,7 +2,7 @@
 	import '../app.css';
 	import { page } from '$app/state';
 	import { enhance } from '$app/forms';
-	import { can } from '$lib/perms';
+	import { can, canAdmin } from '$lib/perms';
 
 	let { data, children } = $props();
 
@@ -21,15 +21,26 @@
 			can('review_tips') && { href: '/tips', label: 'Tips', badge: data.openTips },
 			(can('bulk_edit') || can('edit_content')) && { href: '/workbench', label: 'Workbench' },
 			can('bulk_edit') && { href: '/import', label: 'Import' },
-			(can('manage_users') || can('manage_settings') || can('moderate')) && { href: '/admin', label: 'Admin' }
+			canAdmin() && { href: '/admin', label: 'Admin' }
 		].filter(Boolean) as { href: string; label: string; badge?: number }[]
 	);
 	let menuOpen = $state(false);
 	let navOpen = $state(false);
+	// Staff with several tools get one "Tools" menu instead of a row of links (keeps room for search)
+	let toolsOpen = $state(false);
+	const groupTools = $derived(tools.length > 1);
+	const toolBadge = $derived(tools.reduce((n, t) => n + (t.badge ?? 0), 0));
 	$effect(() => {
 		page.url.pathname;
 		navOpen = false;
+		toolsOpen = false;
+		menuOpen = false;
 	});
+	function closeMenus(e: Event) {
+		if (e instanceof KeyboardEvent ? e.key !== 'Escape' : (e.target as HTMLElement).closest('.menu')) return;
+		toolsOpen = false;
+		menuOpen = false;
+	}
 	const fullBleed = $derived(page.url.pathname === '/' || page.url.pathname === '/workbench');
 
 	const isActive = (href: string) =>
@@ -40,6 +51,8 @@
 	<title>{data.settings.site_name}: {data.settings.tagline}</title>
 	<meta name="description" content="A time-machine map and regional wiki for {data.settings.region_name}." />
 </svelte:head>
+
+<svelte:window onclick={closeMenus} onkeydown={closeMenus} />
 
 <header class="site-header">
 	<a class="brand" href="/" aria-label="Decaynet home">
@@ -61,7 +74,7 @@
 			<a href={item.href} class:active={isActive(item.href)}>{item.label}</a>
 		{/each}
 		{#each tools as item (item.href)}
-			<a href={item.href} class="tool" class:active={isActive(item.href)}>
+			<a href={item.href} class="tool" class:grouped={groupTools} class:active={isActive(item.href)}>
 				{item.label}{#if item.badge}<span class="count">{item.badge}</span>{/if}
 			</a>
 		{/each}
@@ -69,6 +82,30 @@
 			<a href="/tip" class="mobile-only" class:active={isActive('/tip')}>Send a tip</a>
 		{/if}
 	</nav>
+
+	{#if groupTools}
+		<div class="menu tools-menu">
+			<button
+				class="ghost tools-btn"
+				class:active={tools.some((t) => isActive(t.href))}
+				onclick={() => ((toolsOpen = !toolsOpen), (menuOpen = false))}
+				aria-expanded={toolsOpen}
+				aria-haspopup="menu"
+			>
+				Tools{#if toolBadge}<span class="count">{toolBadge}</span>{/if} ▾
+			</button>
+			{#if toolsOpen}
+				<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+				<div class="dropdown from-left" role="menu" tabindex="-1" onclick={() => (toolsOpen = false)}>
+					{#each tools as item (item.href)}
+						<a href={item.href} role="menuitem" class:current={isActive(item.href)}>
+							{item.label}{#if item.badge}<span class="count">{item.badge}</span>{/if}
+						</a>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	{/if}
 
 	<form class="search" action="/search" method="get" role="search">
 		<input name="q" type="search" placeholder="Search names, addresses, past and present…" value={page.url.searchParams.get('q') ?? ''} aria-label="Search" />
@@ -81,7 +118,7 @@
 		{#if data.user}
 			{#if can('edit_content')}<a class="btn primary new" href="/new">+ New</a>{/if}
 			<div class="menu">
-				<button class="ghost who" onclick={() => (menuOpen = !menuOpen)} aria-expanded={menuOpen} aria-haspopup="menu">
+				<button class="ghost who" onclick={() => ((menuOpen = !menuOpen), (toolsOpen = false))} aria-expanded={menuOpen} aria-haspopup="menu">
 					{data.profile?.display_name ?? data.user.email} ▾
 				</button>
 				{#if menuOpen}
@@ -233,6 +270,26 @@
 	nav a.tool {
 		color: var(--amber);
 	}
+	nav a.tool.grouped {
+		display: none;
+	}
+	.tools-btn {
+		font-size: 0.9rem;
+		color: var(--amber);
+		border: 0;
+		padding: 6px 10px;
+		white-space: nowrap;
+	}
+	.tools-btn.active {
+		background: var(--panel-2);
+	}
+	.dropdown.from-left {
+		left: 0;
+		right: auto;
+	}
+	.dropdown a.current {
+		background: var(--line);
+	}
 	.count {
 		display: inline-block;
 		margin-left: 5px;
@@ -318,6 +375,9 @@
 		nav {
 			display: none;
 		}
+		.tools-menu {
+			display: none;
+		}
 		nav.open {
 			display: flex;
 			flex-direction: column;
@@ -334,6 +394,7 @@
 		}
 		nav.open a,
 		nav.open a:nth-child(n + 4):not(.tool),
+		nav.open a.tool.grouped,
 		nav.open a.mobile-only {
 			display: flex;
 			justify-content: space-between;

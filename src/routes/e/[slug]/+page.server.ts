@@ -7,7 +7,7 @@ import { yearToDate } from '$lib/time';
 import type { EntitySnapshot, EntityTag, RelationRow, SourceRow, Space, TimelineRow } from '$lib/types';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ params, url, locals }) => {
+export const load: PageServerLoad = async ({ params, url, locals, parent }) => {
 	const sb = locals.supabase;
 	const entity = await entityBySlug(sb, params.slug);
 	const nowYear = new Date().getFullYear();
@@ -49,6 +49,12 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 		: { data: [] };
 	const footnote = Object.fromEntries((sources ?? []).map((s, i) => [s.id as string, i + 1]));
 
+	// For people who can clean up timelines: how many fixes this page has waiting
+	const { perms } = await parent();
+	const timelineFixes = (perms ?? []).includes('clean_timelines')
+		? (((await sb.rpc('timeline_plan', { p_entity: entity.id })).data ?? []) as unknown[]).length
+		: 0;
+
 	const geomFeatures: GeoJSON.Feature[] = (geoms.data ?? []).map((g) => ({
 		type: 'Feature',
 		geometry: g.geojson,
@@ -76,7 +82,8 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 		gallery: gallery ?? [],
 		tags: (tags.data ?? []) as EntityTag[],
 		spaces: (spaces ?? []) as Space[],
-		sources: (sources ?? []) as SourceRow[]
+		sources: (sources ?? []) as SourceRow[],
+		timelineFixes
 	};
 };
 
@@ -90,5 +97,14 @@ export const actions: Actions = {
 		const { error: err } = await locals.supabase.from('entities').update({ is_private: makePrivate }).eq('id', entity.id);
 		if (err) return fail(400, { error: dbMessage(err) });
 		return { ok: makePrivate ? 'Page is now private.' : 'Published: the page is now public.' };
+	},
+	/** Moderators: lock or unlock the article without opening the editor. */
+	lock: async ({ request, locals, params }) => {
+		await requirePermission(locals, 'moderate');
+		const entity = await entityBySlug(locals.supabase, params.slug);
+		const locked = (await request.formData()).get('locked') === 'true';
+		const { error: err } = await locals.supabase.from('articles').update({ locked }).eq('entity_id', entity.id);
+		if (err) return fail(400, { error: dbMessage(err) });
+		return { ok: locked ? 'Article locked: only moderators can edit it.' : 'Article unlocked.' };
 	}
 };

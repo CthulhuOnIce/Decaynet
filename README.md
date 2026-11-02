@@ -416,6 +416,8 @@ Tips are written only by the app server, after the captcha, rate-limit and honey
 
 ### Administration
 
+*Admin* opens an **Overview** of what needs attention (timelines to review, open tips, unpublished drafts) and links to every admin section you have access to. Staff with more than one tool (Tips, Workbench, Import, Admin) find them under a single **Tools** menu in the header. On a page, the main actions stay as buttons; History, Add media, Make private and the moderator tools (Clean up timeline, Lock article, Delete page) are under **More**.
+
 **Site settings** (*Admin → Site settings*) replaces config files:
 
 ![Site settings](docs/images/admin-settings.png)
@@ -452,6 +454,7 @@ Tick a box to grant a permission to a role, and add your own roles (e.g. "Archiv
 | Review tips | | ✓ | ✓ | ✓ |
 | Bulk map tools (area change, import) | | ✓ | ✓ | ✓ |
 | Moderate (delete others' content, lock & feature articles) | | | ✓ | ✓ |
+| Clean up timelines (review and apply timeline fixes) | | | ✓ | ✓ |
 | Manage users | | | | ✓ |
 | Manage site settings | | | | ✓ |
 
@@ -469,6 +472,16 @@ Everyone can manage their own profile, email and password at **Account**.
 | ![Maintenance](docs/images/maintenance.png) | **Maintenance** shows article status counts and work queues computed from the data: not on the map, no citations, no photos, thin article, no condition history, not connected to anything. |
 | ![Timeline](docs/images/timeline.png) | **Timeline** is a city-wide chronology by decade: events, things built and demolished, and decline milestones. |
 | ![Tags](docs/images/tags.png) | **Tags** shows the trait tree with usage counts. Contributors can add sub-traits as they tag. |
+
+**Timeline cleanup** (*Admin → Timelines*, or *More → Clean up timeline* on a page) finds pages whose conditions, lifespan and footprint disagree, and proposes fixes you tick and apply:
+
+- merge the same condition recorded twice in a row;
+- end a condition where the next one starts, and end standing conditions (in use, vacant, abandoned…) with the lifespan;
+- end the lifespan at a recorded *Demolished* / *Empty lot* / *Vacated*;
+- add *Demolished* (or *Vacated* for a street) when a building, structure or street's lifespan ends without one. Untick this for buildings that were moved or renamed;
+- stretch a page's only footprint to cover its whole lifespan.
+
+Every change goes through the normal history, so it can be reviewed and undone by hand.
 
 **Changes** lists every edit to prose and facts. Each page's **History** shows its revisions, every fact change and its article status transitions.
 
