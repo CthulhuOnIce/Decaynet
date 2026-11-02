@@ -6,11 +6,24 @@ import type { Actions, PageServerLoad } from './$types';
 export const load: PageServerLoad = async ({ locals, url }) => {
 	const { user } = await locals.safeGetSession();
 	if (!user) redirect(303, `/login?next=${encodeURIComponent(url.pathname + url.search)}`);
+	const slug = url.searchParams.get('slug') ?? '';
+	const latParam = url.searchParams.get('lat');
+	const lonParam = url.searchParams.get('lon');
+	const lat = latParam === null ? NaN : Number(latParam);
+	const lon = lonParam === null ? NaN : Number(lonParam);
+	const point =
+		Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180
+			? { type: 'Point' as const, coordinates: [lon, lat] as [number, number] }
+			: null;
 	return {
 		preset: {
 			kind: url.searchParams.get('kind') ?? 'building',
-			slug: url.searchParams.get('slug') ?? '',
-			name: (url.searchParams.get('slug') ?? '').replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+			slug,
+			name:
+				url.searchParams.get('name') ??
+				slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+			address: url.searchParams.get('address') ?? '',
+			point
 		}
 	};
 };
@@ -62,6 +75,19 @@ export const actions: Actions = {
 					p_confidence: 'approximate'
 				});
 				if (r.error) throw new FormError(`Page created, but the shape failed: ${dbMessage(r.error)}`);
+			}
+
+			// Address carried over from the search box ("create a page at 577 Washington St")
+			const addressRaw = str(fd, 'address_raw');
+			if (addressRaw) {
+				const r = await locals.supabase.from('addresses').insert({
+					entity_id: entity.id,
+					raw_address: addressRaw,
+					valid_from: life.from,
+					valid_from_precision: life.fromPrecision,
+					confidence: life.approximate ? 'approximate' : 'probable'
+				});
+				if (r.error) throw new FormError(`Page created, but the address failed: ${dbMessage(r.error)}`);
 			}
 
 			// Initial condition, if given

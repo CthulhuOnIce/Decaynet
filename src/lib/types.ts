@@ -256,6 +256,36 @@ export interface SearchHit {
 	score: number;
 }
 
+/** A street address matched by the global search. */
+export interface AddressHit {
+	address_id: string;
+	entity_id: string;
+	entity_slug: string;
+	entity_kind: string;
+	entity_name: string;
+	street_id: string | null;
+	street_name: string | null;
+	house_number: string | null;
+	raw_address: string | null;
+	formatted: string;
+	lon: number | null;
+	lat: number | null;
+	score: number;
+}
+
+/** An address geocoded from OpenStreetMap that may not exist in this wiki yet. */
+export interface GeoAddressHit {
+	place_id: number;
+	/** Short form: "577 Washington St" */
+	label: string;
+	display_name: string;
+	lat: number;
+	lon: number;
+	house_number: string | null;
+	street: string | null;
+	locality: string | null;
+}
+
 /** A feature the user clicked on the time-machine map. */
 export interface Picked {
 	id: string;

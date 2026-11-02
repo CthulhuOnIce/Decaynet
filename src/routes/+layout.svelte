@@ -57,7 +57,7 @@
 	</nav>
 
 	<form class="search" action="/search" method="get" role="search">
-		<input name="q" type="search" placeholder="Search names, past and present…" value={page.url.searchParams.get('q') ?? ''} aria-label="Search" />
+		<input name="q" type="search" placeholder="Search names, addresses, past and present…" value={page.url.searchParams.get('q') ?? ''} aria-label="Search" />
 	</form>
 
 	<div class="account">

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import 'maplibre-gl/dist/maplibre-gl.css';
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import type { GeoJSONSource, Map as MLMap } from 'maplibre-gl';
 	import { baseStyle, boundsOf, mapView } from '$lib/map/style';
@@ -12,7 +12,8 @@
 		mode: initialMode = 'point',
 		context = [],
 		height = 360,
-		snap = true
+		snap = true,
+		initial = null
 	}: {
 		name?: string;
 		mode?: Mode;
@@ -21,7 +22,17 @@
 		height?: number;
 		/** snap clicks to nearby vertices of the context shapes (shared walls, street corners) */
 		snap?: boolean;
+		/** a starting shape, e.g. a point carried over from a geocoded address */
+		initial?: GeoJSON.Geometry | null;
 	} = $props();
+
+	function pointsOf(g: GeoJSON.Geometry | null): [number, number][] {
+		if (!g) return [];
+		if (g.type === 'Point') return [g.coordinates as [number, number]];
+		if (g.type === 'LineString') return g.coordinates as [number, number][];
+		if (g.type === 'Polygon') return (g.coordinates[0] ?? []).slice(0, -1) as [number, number][];
+		return [];
+	}
 
 	function contextVertices(): [number, number][] {
 		const out: [number, number][] = [];
@@ -37,7 +48,7 @@
 	$effect.pre(() => {
 		mode = initialMode;
 	});
-	let pts = $state<[number, number][]>([]);
+	let pts = $state<[number, number][]>(untrack(() => pointsOf(initial)));
 	let el: HTMLDivElement;
 	let map: MLMap | undefined;
 	let ready = false;
@@ -74,6 +85,7 @@
 			m.addLayer({ id: 'draft-pt', type: 'circle', source: 'draft', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#f2c14e', 'circle-stroke-color': '#17130f', 'circle-stroke-width': 1.5 } });
 			const b = context.length ? boundsOf({ type: 'FeatureCollection', features: context }) : null;
 			if (b) m.fitBounds(b, { padding: 60, maxZoom: 17, duration: 0 });
+			else if (pts.length) m.jumpTo({ center: pts[0], zoom: Math.max(m.getZoom(), 16) });
 			m.on('click', (e) => {
 				let c: [number, number] = [+e.lngLat.lng.toFixed(7), +e.lngLat.lat.toFixed(7)];
 				if (snap) {
