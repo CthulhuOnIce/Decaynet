@@ -360,6 +360,77 @@
 	});
 	const geojsonText = $derived(geometry ? JSON.stringify(geometry) : '');
 
+	// ---------------------------------------------------------------- export (no page needed)
+	// Drawn shapes can be downloaded or copied as GeoJSON instead of being saved to a page.
+	let traceName = $state('');
+	let traceKind = $state('building');
+	let traceRole = $state('footprint');
+	let kept = $state<GeoJSON.Feature[]>([]);
+	let exportNote = $state<string | null>(null);
+	let noteTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function currentFeature(): GeoJSON.Feature | null {
+		if (!geometry) return null;
+		const props: Record<string, string | number> = { kind: traceKind, role: traceRole };
+		if (traceName.trim()) props.name = traceName.trim();
+		const y = /^\d{4}$/.test(depictsYear) ? Number(depictsYear) : year;
+		props.year = y;
+		if (scan) props.traced_from = scan.name;
+		return { type: 'Feature', geometry: $state.snapshot(geometry) as GeoJSON.Geometry, properties: props };
+	}
+	const fc = (features: GeoJSON.Feature[]): GeoJSON.FeatureCollection => ({ type: 'FeatureCollection', features });
+	const exportText = (features: GeoJSON.Feature[]) => JSON.stringify(fc(features), null, 2);
+
+	function note(msg: string) {
+		exportNote = msg;
+		clearTimeout(noteTimer);
+		noteTimer = setTimeout(() => (exportNote = null), 2500);
+	}
+
+	function download(features: GeoJSON.Feature[]) {
+		if (!features.length) return;
+		const base = (features.length === 1 && (features[0].properties?.name as string | undefined)) || `traced-${features.length === 1 ? 'shape' : 'shapes'}`;
+		const a = document.createElement('a');
+		a.href = URL.createObjectURL(new Blob([exportText(features)], { type: 'application/geo+json' }));
+		a.download = `${base.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'shape'}.geojson`;
+		a.click();
+		URL.revokeObjectURL(a.href);
+		note(`Downloaded ${a.download}`);
+	}
+
+	async function copy(features: GeoJSON.Feature[]) {
+		if (!features.length) return;
+		const text = exportText(features);
+		try {
+			await navigator.clipboard.writeText(text);
+		} catch {
+			// Clipboard API needs a secure context; fall back to the old way
+			const ta = document.createElement('textarea');
+			ta.value = text;
+			ta.style.position = 'fixed';
+			ta.style.opacity = '0';
+			document.body.appendChild(ta);
+			ta.select();
+			const ok = document.execCommand('copy');
+			ta.remove();
+			if (!ok) return note("Couldn't reach the clipboard; use Download instead.");
+		}
+		note(`Copied ${features.length} shape${features.length === 1 ? '' : 's'} as GeoJSON`);
+	}
+
+	/** Set the current shape aside for a multi-shape export and start a new one. */
+	function keepShape() {
+		const f = currentFeature();
+		if (!f) return;
+		kept.push(f);
+		pts = [];
+		traceName = '';
+	}
+	function drawKept() {
+		if (!map || !ready) return;
+		(map.getSource('kept') as GeoJSONSource | undefined)?.setData(fc($state.snapshot(kept) as GeoJSON.Feature[]));
+	}
+
 	function snapshotVertices(): [number, number][] {
 		const out: [number, number][] = [];
 		const walk = (c: unknown): void => {
@@ -475,6 +546,10 @@
 			m.addLayer({ id: 'import-fill', type: 'fill', source: 'import', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#8fb3c9', 'fill-opacity': 0.3 } });
 			m.addLayer({ id: 'import-line', type: 'line', source: 'import', paint: { 'line-color': '#8fb3c9', 'line-width': 1.5 } });
 			m.addLayer({ id: 'import-pt', type: 'circle', source: 'import', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 4, 'circle-color': '#8fb3c9' } });
+			m.addSource('kept', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+			m.addLayer({ id: 'kept-fill', type: 'fill', source: 'kept', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#e08a4a', 'fill-opacity': 0.15 } });
+			m.addLayer({ id: 'kept-line', type: 'line', source: 'kept', filter: ['!=', ['geometry-type'], 'Point'], paint: { 'line-color': '#e08a4a', 'line-width': 2, 'line-dasharray': [2, 1.5] } });
+			m.addLayer({ id: 'kept-pt', type: 'circle', source: 'kept', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#e08a4a', 'circle-stroke-color': '#17130f', 'circle-stroke-width': 1.5 } });
 			m.addSource('draft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
 			m.addLayer({ id: 'draft-fill', type: 'fill', source: 'draft', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#f2c14e', 'fill-opacity': 0.25 } });
 			m.addLayer({ id: 'draft-line', type: 'line', source: 'draft', filter: ['!=', ['geometry-type'], 'Point'], paint: { 'line-color': '#f2c14e', 'line-width': 2.5 } });
@@ -506,6 +581,7 @@
 
 	onDestroy(() => {
 		clearTimeout(fetchTimer);
+		clearTimeout(noteTimer);
 		markers.forEach((m) => m.remove());
 		pinMarkers.forEach((m) => m.remove());
 		resizeObs?.disconnect();
@@ -553,6 +629,10 @@
 	$effect(() => {
 		void [geometry, pts.length];
 		untrack(drawDraft);
+	});
+	$effect(() => {
+		void [kept.length, ready];
+		untrack(drawKept);
 	});
 	$effect(() => {
 		void previewIds;
@@ -767,10 +847,10 @@
 				</div>
 				<p class="muted small">…or create a new one:</p>
 				<div class="fields">
-					<div><label for="tn">Name</label><input id="tn" name="name" placeholder="Hardware store" /></div>
+					<div><label for="tn">Name</label><input id="tn" name="name" placeholder="Hardware store" bind:value={traceName} /></div>
 					<div>
 						<label for="tk">Kind</label>
-						<select id="tk" name="kind">{#each spatialKinds as k (k.id)}<option value={k.id} selected={k.id === 'building'}>{k.label}</option>{/each}</select>
+						<select id="tk" name="kind" bind:value={traceKind}>{#each spatialKinds as k (k.id)}<option value={k.id}>{k.label}</option>{/each}</select>
 					</div>
 					<div>
 						<label for="ts">Condition</label>
@@ -778,7 +858,7 @@
 					</div>
 					<div>
 						<label for="tr">Role</label>
-						<select id="tr" name="role">{#each ['footprint', 'shape', 'centerline', 'boundary', 'point'] as r (r)}<option>{r}</option>{/each}</select>
+						<select id="tr" name="role" bind:value={traceRole}>{#each ['footprint', 'shape', 'centerline', 'boundary', 'point'] as r (r)}<option>{r}</option>{/each}</select>
 					</div>
 				</div>
 				<TemporalFields
@@ -790,6 +870,43 @@
 				/>
 				<button class="primary" disabled={!geometry}>Save shape</button>
 			</form>
+
+			<hr />
+			<h3>…or export it</h3>
+			<p class="hint">
+				Take the shape away as GeoJSON (lon/lat, EPSG:4326) without creating or changing a page. The name, kind, role and year above go
+				in its properties.
+			</p>
+			<div class="row exports">
+				<button disabled={!geometry} onclick={() => download([currentFeature()!])} title="Save this shape as a .geojson file">Download</button>
+				<button disabled={!geometry} onclick={() => copy([currentFeature()!])} title="Copy this shape as GeoJSON">Copy</button>
+				<button disabled={!geometry} onclick={keepShape} title="Set this shape aside and draw another, then export them together">Keep &amp; draw another</button>
+			</div>
+			{#if kept.length}
+				<div class="kept-box">
+					<div class="spread">
+						<strong>{kept.length} kept shape{kept.length === 1 ? '' : 's'}</strong>
+						<button class="ghost x" onclick={() => (kept = [])} title="Forget all kept shapes">Clear</button>
+					</div>
+					<ul class="plain-list">
+						{#each kept as f, i (i)}
+							<li class="small">
+								<span class="sw kept"></span>
+								{f.properties?.name ?? `${f.properties?.kind} ${f.geometry.type.toLowerCase()}`}
+								<span class="muted">· {f.properties?.year}</span>
+								<button class="ghost x" title="Remove" onclick={() => kept.splice(i, 1)}>✕</button>
+							</li>
+						{/each}
+					</ul>
+					<div class="row exports">
+						<button onclick={() => download(kept)}>Download all</button>
+						<button onclick={() => copy(kept)}>Copy all</button>
+						{#if geometry}<span class="muted small">(the shape you're drawing isn't included until you keep it)</span>{/if}
+					</div>
+				</div>
+			{/if}
+			{#if exportNote}<p class="notice ok small">{exportNote}</p>{/if}
+			<p class="hint">Kept shapes stay in this browser tab only and are gone when you leave the page.</p>
 		{/if}
 
 		<!-- ======================= AREA ======================= -->
@@ -1024,6 +1141,29 @@
 	.sw.move {
 		background: #8fb3c9;
 		border-radius: 50%;
+	}
+	.sw.kept {
+		background: #e08a4a;
+		border-radius: 2px;
+	}
+	.exports {
+		flex-wrap: wrap;
+		gap: 4px;
+		align-items: center;
+	}
+	.kept-box {
+		margin-top: 8px;
+		padding: 6px 8px;
+		border: 1px dashed #e08a4a;
+		border-radius: 4px;
+	}
+	.kept-box li {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.kept-box li button {
+		margin-left: auto;
 	}
 	.sw.pin {
 		background: #e0574a;
