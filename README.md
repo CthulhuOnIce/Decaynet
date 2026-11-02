@@ -281,6 +281,12 @@ At country or world scale, the map only fetches what's in view (plus a margin) a
 5. **Write the article** with **Edit article** (Markdown). Link pages with `[[slug]]` or `[[slug|label]]`; links to pages that don't exist yet show red. Set the article status (stub → draft → needs sources → needs review → good) and add an edit summary.
 6. **Add media** with **+ Media**. A photo has three dates: when it was taken, the period it shows, and when it was added. You can also mark where the camera stood.
 
+### Wrong kind? Duplicate as another kind
+
+Imports and quick edits sometimes get the kind wrong: a "building" that is really the business inside it, a site that is a building, an event created as a place. *More → Duplicate as another kind…* makes a **new page** of the right kind next to the original and copies everything that fits: name, summary, lifespan, other names, tags, facts that apply to the new kind, links, the article (as its first revision) and the sources made for the page (citations point at the copies). **The original isn't changed**; review the copy, then delete the original or keep both.
+
+When a place becomes an occupant (building → organization, person or event), its footprint, addresses, conditions and place links stay with the place, and the new page is linked to it: it *occupies*, *lived at* or *happened at* the original for its lifespan. An occupant becoming a place is linked the other way. Map and Wikidata ids stay with the original, since each belongs to one page. Media pages can't be duplicated as another kind.
+
 ### Private pages (drafts)
 
 ![A private page waiting to be published](docs/images/private-page.png)

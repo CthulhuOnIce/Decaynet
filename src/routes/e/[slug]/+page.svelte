@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { enhance } from '$app/forms';
 	import { untrack } from 'svelte';
 	import Badge from '$lib/components/Badge.svelte';
@@ -57,6 +58,7 @@
 	const canClean = $derived(!!data.user && (data.perms ?? []).includes('clean_timelines'));
 	const canModerate = $derived(!!data.user && (data.perms ?? []).includes('moderate'));
 	let moreOpen = $state(false);
+	const copiedFrom = $derived(page.url.searchParams.get('copied_from'));
 	let moreEl: HTMLDetailsElement | undefined = $state();
 	// Close the More menu on an outside click or Escape (reads the element: its toggle event lands a tick later)
 	function closeMore(ev: Event) {
@@ -90,6 +92,12 @@
 				</form>
 			{/if}
 		</div>
+	{/if}
+	{#if copiedFrom}
+		<p class="notice ok">
+			Copied from <a href="/e/{copiedFrom}">{copiedFrom}</a>. Check this page; the original is unchanged. When this one replaces it,
+			<a href="/e/{copiedFrom}/facts#danger">delete the original</a>.
+		</p>
 	{/if}
 	{#if form && 'ok' in form && form.ok}<p class="notice ok">{form.ok}</p>{/if}
 	{#if form && 'error' in form && form.error}<p class="notice error">{form.error}</p>{/if}
@@ -136,6 +144,9 @@
 					<a role="menuitem" href="/e/{e.slug}/history">History</a>
 					{#if canEdit}
 						<a role="menuitem" href="/media/new?depicts={e.slug}">Add media</a>
+						{#if e.kind !== 'media'}
+							<a role="menuitem" href="/e/{e.slug}/duplicate" title="Make a new page of another kind from this one">Duplicate as another kind…</a>
+						{/if}
 						{#if !e.is_private}
 							<form
 								method="post"
