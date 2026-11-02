@@ -25,6 +25,11 @@
 		].filter(Boolean) as { href: string; label: string; badge?: number }[]
 	);
 	let menuOpen = $state(false);
+	let navOpen = $state(false);
+	$effect(() => {
+		page.url.pathname;
+		navOpen = false;
+	});
 	const fullBleed = $derived(page.url.pathname === '/' || page.url.pathname === '/workbench');
 
 	const isActive = (href: string) =>
@@ -45,7 +50,13 @@
 		<span>{data.settings.site_name}</span>
 	</a>
 
-	<nav aria-label="Main">
+	<button class="burger ghost" onclick={() => (navOpen = !navOpen)} aria-expanded={navOpen} aria-controls="main-nav" aria-label="Toggle menu">
+		<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+			{#if navOpen}<path d="M5 5l14 14M19 5L5 19" />{:else}<path d="M4 7h16M4 12h16M4 17h16" />{/if}
+		</svg>
+	</button>
+
+	<nav id="main-nav" aria-label="Main" class:open={navOpen}>
 		{#each nav as item (item.href)}
 			<a href={item.href} class:active={isActive(item.href)}>{item.label}</a>
 		{/each}
@@ -54,6 +65,9 @@
 				{item.label}{#if item.badge}<span class="count">{item.badge}</span>{/if}
 			</a>
 		{/each}
+		{#if data.settings.tips_enabled}
+			<a href="/tip" class="mobile-only" class:active={isActive('/tip')}>Send a tip</a>
+		{/if}
 	</nav>
 
 	<form class="search" action="/search" method="get" role="search">
@@ -264,13 +278,67 @@
 			display: none;
 		}
 	}
+	nav a.mobile-only {
+		display: none;
+	}
+	.burger {
+		display: none;
+		padding: 6px;
+		border: 0;
+		color: var(--ink);
+	}
+	.burger svg {
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 2;
+		stroke-linecap: round;
+		display: block;
+	}
 	@media (max-width: 640px) {
 		.site-header {
-			gap: 10px;
+			gap: 8px;
 		}
-		.brand span,
-		.search {
+		.brand span {
 			display: none;
+		}
+		.burger {
+			display: block;
+		}
+		.search {
+			min-width: 0;
+			flex: 1 1 0;
+		}
+		.search input {
+			min-width: 0;
+			width: 100%;
+		}
+		.tip-link {
+			display: none;
+		}
+		nav {
+			display: none;
+		}
+		nav.open {
+			display: flex;
+			flex-direction: column;
+			gap: 0;
+			position: absolute;
+			top: 100%;
+			left: 0;
+			right: 0;
+			padding: 8px;
+			background: var(--bg, #14110f);
+			border-bottom: 1px solid var(--line);
+			max-height: calc(100vh - var(--header-h));
+			overflow-y: auto;
+		}
+		nav.open a,
+		nav.open a:nth-child(n + 4):not(.tool),
+		nav.open a.mobile-only {
+			display: flex;
+			justify-content: space-between;
+			padding: 12px;
+			font-size: 1rem;
 		}
 	}
 </style>

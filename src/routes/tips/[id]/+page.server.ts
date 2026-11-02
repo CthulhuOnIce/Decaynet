@@ -1,10 +1,19 @@
 import { error, fail, redirect } from '@sveltejs/kit';
+import { env as priv } from '$env/dynamic/private';
+import { env as pub } from '$env/dynamic/public';
 import { newPagesPrivate, requirePermission } from '$lib/server/db';
 import { dbMessage, required, slugify, str } from '$lib/server/forms';
 import { parseFuzzyDate } from '$lib/time';
 import type { Actions, PageServerLoad } from './$types';
 
 type TipImage = { path: string; name: string; mime: string; size: number };
+
+// Signed URLs are built from the internal Supabase URL (e.g. http://kong:8000); browsers need the public one.
+function publicUrl(signed: string) {
+	const internal = priv.SUPABASE_INTERNAL_URL?.replace(/\/$/, '');
+	const pubBase = pub.PUBLIC_SUPABASE_URL?.replace(/\/$/, '');
+	return internal && pubBase && signed.startsWith(internal) ? pubBase + signed.slice(internal.length) : signed;
+}
 
 export const load: PageServerLoad = async ({ params, locals }) => {
 	await requirePermission(locals, 'review_tips');
@@ -15,7 +24,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	let urls: Record<string, string> = {};
 	if (images.length) {
 		const { data } = await locals.supabase.storage.from('tips').createSignedUrls(images.map((i) => i.path), 3600);
-		urls = Object.fromEntries((data ?? []).filter((d) => d.signedUrl && d.path).map((d) => [d.path!, d.signedUrl as string]));
+		urls = Object.fromEntries((data ?? []).filter((d) => d.signedUrl && d.path).map((d) => [d.path!, publicUrl(d.signedUrl as string)]));
 	}
 	// Other tips from the same source, to spot duplicates and abuse
 	const { count: sameSource } = tip.ip_hash
