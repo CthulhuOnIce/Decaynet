@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { loadTags, newPagesPrivate, requireEditor } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, required, slugify, str, temporalFromForm } from '$lib/server/forms';
+import { librarySources, resolveInlineSource } from '$lib/server/sources';
 import type { Actions, PageServerLoad } from './$types';
 
 const MEDIA_TYPES = ['photo', 'postcard', 'map', 'aerial', 'document', 'newspaper', 'video', 'audio', 'drawing', 'other'];
@@ -18,7 +19,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		depictsSlugs.length
 			? locals.supabase.from('entities').select('id, name, slug').in('slug', depictsSlugs)
 			: Promise.resolve({ data: [] }),
-		locals.supabase.from('sources').select('id, title').order('title')
+		librarySources(locals.supabase).then((data) => ({ data }))
 	]);
 	const tags = await loadTags(locals.supabase);
 	return {
@@ -74,6 +75,8 @@ export const actions: Actions = {
 				.single();
 			if (error) throw new FormError(dbMessage(error));
 
+			// "New source…": it belongs to this media page
+			await resolveInlineSource(sb, fd, entity.id);
 			const sourceId = str(fd, 'source_id');
 			const mi = await sb.from('media_items').insert({
 				entity_id: entity.id,

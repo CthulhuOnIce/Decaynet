@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { newPagesPrivate, requirePermission } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, required, slugify, str } from '$lib/server/forms';
+import { librarySources, resolveInlineSource } from '$lib/server/sources';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, parent }) => {
@@ -8,11 +9,11 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 	if (!user) redirect(303, '/login?next=/workbench');
 	if (!perms.includes('edit_content') && !perms.includes('bulk_edit')) redirect(303, '/');
 	const [sources, extent] = await Promise.all([
-		locals.supabase.from('sources').select('id, title').order('title'),
+		librarySources(locals.supabase),
 		locals.supabase.rpc('timeline_extent')
 	]);
 	return {
-		sources: sources.data ?? [],
+		sources,
 		minYear: extent.data?.min_year ?? 1800,
 		maxYear: extent.data?.max_year ?? new Date().getFullYear()
 	};
@@ -54,7 +55,9 @@ export const actions: Actions = {
 		const confidence = str(fd, 'confidence') ?? 'probable';
 		let entityId = str(fd, 'entity_id');
 		let slug: string | null = null;
-		if (!entityId) {
+		// "New source…" belongs to the page the shape goes on
+		if (entityId) await resolveInlineSource(locals.supabase, fd, entityId);
+		else {
 			const name = required(fd, 'name', 'Name');
 			const kind = required(fd, 'kind', 'Kind');
 			const ins = await locals.supabase
@@ -75,6 +78,7 @@ export const actions: Actions = {
 			check(ins);
 			entityId = ins.data!.id;
 			slug = ins.data!.slug;
+			await resolveInlineSource(locals.supabase, fd, entityId!);
 			const status = str(fd, 'status');
 			if (status)
 				check(

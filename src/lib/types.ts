@@ -126,6 +126,8 @@ export interface SourceRow {
 	repository: string | null;
 	call_number: string | null;
 	notes: string | null;
+	/** page this source was made for; null = shared library */
+	entity_id?: string | null;
 }
 
 

@@ -1,21 +1,36 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { entityBySlug, requireEditor } from '$lib/server/db';
 import { renderArticle } from '$lib/server/markdown';
-import { dbMessage, str } from '$lib/server/forms';
+import { FormError, dbMessage, str } from '$lib/server/forms';
+import { createPageSource, sourceOptions } from '$lib/server/sources';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
 	const { user } = await locals.safeGetSession();
 	if (!user) redirect(303, `/login?next=/e/${params.slug}/edit`);
 	const entity = await entityBySlug(locals.supabase, params.slug);
-	const { data: article } = await locals.supabase.from('articles').select('*').eq('entity_id', entity.id).maybeSingle();
-	return { entity, article };
+	const [{ data: article }, sources] = await Promise.all([
+		locals.supabase.from('articles').select('*').eq('entity_id', entity.id).maybeSingle(),
+		sourceOptions(locals.supabase, entity.id)
+	]);
+	return { entity, article, sources };
 };
 
 export const actions: Actions = {
 	preview: async ({ request, locals }) => {
 		const fd = await request.formData();
 		return { preview: await renderArticle(locals.supabase, str(fd, 'body') ?? '') };
+	},
+	/** Create a source for this page from the editor's Cite panel (the article text is untouched). */
+	addSource: async ({ request, params, locals }) => {
+		await requireEditor(locals);
+		const entity = await entityBySlug(locals.supabase, params.slug);
+		try {
+			return { newSource: await createPageSource(locals.supabase, await request.formData(), entity.id, 'cs_') };
+		} catch (e) {
+			if (e instanceof FormError) return fail(400, { sourceError: e.message });
+			throw e;
+		}
 	},
 	save: async ({ request, params, locals }) => {
 		await requireEditor(locals);

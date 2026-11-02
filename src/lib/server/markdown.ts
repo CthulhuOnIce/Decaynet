@@ -1,6 +1,7 @@
 import { Marked, type TokenizerAndRendererExtension, type Tokens } from 'marked';
 import sanitizeHtml from 'sanitize-html';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { extractCitations } from '$lib/sources';
 
 const WIKI_LINK = /\[\[([a-z0-9]+(?:-[a-z0-9]+)*)(?:\|([^\]]+))?\]\]/g;
 
@@ -17,7 +18,40 @@ interface WikiLinkToken extends Tokens.Generic {
 	label: string;
 }
 
-function makeRenderer(existing: Set<string>) {
+interface CiteToken extends Tokens.Generic {
+	id: string;
+	detail: string;
+}
+
+/** How article citations render: footnote numbers and titles for the sources they point at. */
+export interface CiteContext {
+	number: Record<string, number>;
+	title: Record<string, string>;
+}
+
+function makeRenderer(existing: Set<string>, cites: CiteContext = { number: {}, title: {} }) {
+	// [cite:<source id>] or [cite:<source id>|p. 42] → a footnote reference like [3]
+	const cite: TokenizerAndRendererExtension = {
+		name: 'cite',
+		level: 'inline',
+		start: (src) => {
+			const i = src.indexOf('[cite:');
+			return i < 0 ? undefined : i;
+		},
+		tokenizer(src) {
+			const m = /^\[cite:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\|([^\]\n]*))?\]/i.exec(src);
+			if (m) return { type: 'cite', raw: m[0], id: m[1].toLowerCase(), detail: (m[2] ?? '').trim() } as CiteToken;
+		},
+		renderer(token) {
+			const t = token as CiteToken;
+			const n = cites.number[t.id];
+			const title = cites.title[t.id];
+			if (!n || !title) return `<sup class="cite missing" title="Source not found">[?]</sup>`;
+			const tip = escapeHtml(t.detail ? `${title}, ${t.detail}` : title);
+			return `<sup class="cite"><a href="#source-${n}" title="${tip}">[${n}]</a></sup>`;
+		}
+	};
+
 	const wikiLink: TokenizerAndRendererExtension = {
 		name: 'wikilink',
 		level: 'inline',
@@ -34,27 +68,35 @@ function makeRenderer(existing: Set<string>) {
 			return `<a class="wikilink${missing ? ' redlink' : ''}" href="${href}">${escapeHtml(t.label)}</a>`;
 		}
 	};
-	return new Marked({ gfm: true, breaks: false, extensions: [wikiLink] });
+	return new Marked({ gfm: true, breaks: false, extensions: [wikiLink, cite] });
 }
 
 const SANITIZE: sanitizeHtml.IOptions = {
 	allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'figure', 'figcaption', 'del', 'ins', 'sup', 'sub']),
 	allowedAttributes: {
 		a: ['href', 'class', 'title'],
+		sup: ['class', 'title'],
 		img: ['src', 'alt', 'title', 'width', 'height', 'loading'],
 		'*': ['id']
 	},
 	allowedSchemes: ['http', 'https', 'mailto']
 };
 
-/** Render article markdown to safe HTML, marking links to missing pages as red links. */
-export async function renderArticle(supabase: SupabaseClient, md: string): Promise<string> {
+/**
+ * Render article markdown to safe HTML, marking links to missing pages as red
+ * links. Citations are numbered by `numbering` (the page's footnote list) when
+ * given, otherwise in order of first appearance (editor preview).
+ */
+export async function renderArticle(supabase: SupabaseClient, md: string, numbering?: Record<string, number>): Promise<string> {
 	const slugs = extractWikiLinks(md);
-	let existing = new Set<string>();
-	if (slugs.length) {
-		const { data } = await supabase.from('entities').select('slug').in('slug', slugs);
-		existing = new Set((data ?? []).map((r) => r.slug as string));
-	}
-	const html = await makeRenderer(existing).parse(md);
+	const citeIds = extractCitations(md);
+	const [pages, cited] = await Promise.all([
+		slugs.length ? supabase.from('entities').select('slug').in('slug', slugs) : Promise.resolve({ data: [] }),
+		citeIds.length ? supabase.from('sources').select('id, title').in('id', citeIds) : Promise.resolve({ data: [] })
+	]);
+	const existing = new Set((pages.data ?? []).map((r) => r.slug as string));
+	const title = Object.fromEntries(((cited.data ?? []) as { id: string; title: string }[]).map((s) => [s.id, s.title]));
+	const number = numbering ?? Object.fromEntries(citeIds.filter((id) => title[id]).map((id, i) => [id, i + 1]));
+	const html = await makeRenderer(existing, { number, title }).parse(md);
 	return sanitizeHtml(html, SANITIZE);
 }

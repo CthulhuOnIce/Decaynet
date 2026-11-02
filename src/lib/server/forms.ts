@@ -1,3 +1,4 @@
+import { NEW_SOURCE } from '$lib/sources';
 import { parseFuzzyDate } from '$lib/time';
 import { CONFIDENCES, PRECISIONS, type Confidence, type Precision } from '$lib/types';
 
@@ -39,6 +40,13 @@ export function fuzzyPair(fd: FormData, fromKey: string, toKey: string) {
 	};
 }
 
+function sourceId(fd: FormData): string | null {
+	const id = str(fd, 'source_id');
+	// resolveInlineSource() turns "new" into a real id before this runs
+	if (id === NEW_SOURCE) throw new FormError('Creating a new source is not available here; pick an existing one.');
+	return id;
+}
+
 /** Every component row's shared header, from <TemporalFields>. */
 export function temporalFromForm(fd: FormData) {
 	const pair = fuzzyPair(fd, 'valid_from', 'valid_to');
@@ -51,7 +59,7 @@ export function temporalFromForm(fd: FormData) {
 		valid_to: pair.to,
 		valid_to_precision: pair.toPrecision,
 		confidence,
-		source_id: str(fd, 'source_id'),
+		source_id: sourceId(fd),
 		source_detail: str(fd, 'source_detail'),
 		note: str(fd, 'note')
 	};

@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { entityBySlug, loadTags, requireEditor } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, required, slugify, str, temporalFromForm } from '$lib/server/forms';
+import { discardSource, resolveInlineSource, sourceOptions } from '$lib/server/sources';
 import type { RelationRow, Space } from '$lib/types';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
 
@@ -23,7 +24,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		sb.from('addresses').select('*, street:entities!addresses_street_id_fkey(id, name, slug)').eq('entity_id', id).order('valid_from', { nullsFirst: true }),
 		sb.rpc('entity_relations', { p_entity: id }),
 		sb.from('entity_geometries_geojson').select('*').eq('entity_id', id).order('valid_from', { nullsFirst: true }),
-		sb.from('sources').select('id, title').order('title'),
+		sourceOptions(sb, id),
 		sb.from('event_details').select('*').eq('entity_id', id).maybeSingle(),
 		sb.from('media_items').select('*').eq('entity_id', id).maybeSingle(),
 		sb.from('entity_tags').select('*').eq('entity_id', id).order('valid_from', { nullsFirst: true }),
@@ -41,7 +42,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		addresses: addresses.data ?? [],
 		relations: (relations.data ?? []) as RelationRow[],
 		geoms: geoms.data ?? [],
-		sources: sources.data ?? [],
+		sources,
 		event: event.data,
 		media: media.data,
 		entityTags: entityTags.data ?? [],
@@ -57,9 +58,13 @@ function action(fn: (ctx: { fd: FormData; entityId: string; event: RequestEvent 
 		const entity = await entityBySlug(event.locals.supabase, event.params.slug);
 		const fd = await event.request.formData();
 		const section = str(fd, 'section') ?? 'general';
+		let newSource: string | null = null;
 		try {
+			// "New source…" in a fact form: create it for this page first
+			newSource = await resolveInlineSource(event.locals.supabase, fd, entity.id);
 			await fn({ fd, entityId: entity.id, event });
 		} catch (e) {
+			await discardSource(event.locals.supabase, newSource);
 			if (e instanceof FormError) return fail(400, { section, error: e.message });
 			throw e;
 		}

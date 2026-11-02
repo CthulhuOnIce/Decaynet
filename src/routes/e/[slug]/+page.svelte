@@ -252,6 +252,7 @@
 							{#if s.publisher}. {s.publisher}{/if}
 							{#if s.published_on}, {formatFuzzy(s.published_on, s.published_precision)}{/if}
 							{#if s.url}· <a href={s.url} target="_blank" rel="noopener">link</a>{/if}
+							{#if s.entity_id === data.entity.id}<span class="muted small">· this page's source</span>{/if}
 						</li>
 					{/each}
 				</ol>
@@ -457,6 +458,17 @@
 	}
 	.sources li:target {
 		background: rgba(224, 162, 58, 0.15);
+	}
+	.prose :global(sup.cite) {
+		font-size: 0.72em;
+		line-height: 0;
+		margin-left: 1px;
+	}
+	.prose :global(sup.cite a) {
+		text-decoration: none;
+	}
+	.prose :global(sup.cite.missing) {
+		color: var(--muted);
 	}
 	.infobox table th {
 		text-transform: none;

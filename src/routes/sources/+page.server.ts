@@ -6,7 +6,7 @@ import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	const [sources, cited] = await Promise.all([
-		locals.supabase.from('sources').select('*').order('title'),
+		locals.supabase.from('sources').select('*, page:entities!sources_entity_id_fkey(slug, name)').order('title'),
 		locals.supabase.from('facts').select('source_id').not('source_id', 'is', null)
 	]);
 	const counts: Record<string, number> = {};

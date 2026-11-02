@@ -2,6 +2,7 @@ import { error, fail } from '@sveltejs/kit';
 import { entityBySlug, requirePermission } from '$lib/server/db';
 import { dbMessage } from '$lib/server/forms';
 import { renderArticle } from '$lib/server/markdown';
+import { extractCitations } from '$lib/sources';
 import { yearToDate } from '$lib/time';
 import type { EntitySnapshot, EntityTag, RelationRow, SourceRow, Space, TimelineRow } from '$lib/types';
 import type { Actions, PageServerLoad } from './$types';
@@ -38,11 +39,15 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 		? await sb.from('entities').select('id, slug, name, exists_from, exists_from_precision, media_items(*)').in('id', mediaIds).order('exists_from', { nullsFirst: false })
 		: { data: [] };
 
-	// Footnotes: every source cited by any fact on this page
-	const sourceIds = [...new Set([...tl.map((r) => r.source_id), ...rels.map((r) => r.source_id), mediaItem.data?.source_id].filter(Boolean))] as string[];
+	// Footnotes: every source cited by any fact on this page or in its article
+	const body = article.data?.body ?? '';
+	const sourceIds = [
+		...new Set([...tl.map((r) => r.source_id), ...rels.map((r) => r.source_id), mediaItem.data?.source_id, ...extractCitations(body)].filter(Boolean))
+	] as string[];
 	const { data: sources } = sourceIds.length
 		? await sb.from('sources').select('*').in('id', sourceIds).order('title')
 		: { data: [] };
+	const footnote = Object.fromEntries((sources ?? []).map((s, i) => [s.id as string, i + 1]));
 
 	const geomFeatures: GeoJSON.Feature[] = (geoms.data ?? []).map((g) => ({
 		type: 'Feature',
@@ -60,7 +65,7 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 		entity,
 		year,
 		article: article.data,
-		html: article.data?.body ? await renderArticle(sb, article.data.body) : '',
+		html: body ? await renderArticle(sb, body, footnote) : '',
 		snapshot: snapshot.data as EntitySnapshot,
 		timeline: tl,
 		relations: rels,

@@ -277,7 +277,7 @@ At country or world scale, the map only fetches what's in view (plus a margin) a
    | `May 12, 1926`, `1926-05-12` | the day |
 
    Leave **Until** blank if something is still true.
-4. **Cite it.** Add the source once on the **Sources** page, then choose it on any fact, with a page or frame number. Mark uncertain facts *approximate*, *speculative* or *disputed*.
+4. **Cite it.** Pick a source on any fact, with a page or frame number, or choose *+ New source…* to create one right there for that page. In an article, the **Cite** button inserts a numbered footnote the same way. Sources used across many pages (a city directory, a Sanborn atlas) belong in the shared library on the **Sources** page; a page's own source can be shared later with *Add to library*. Mark uncertain facts *approximate*, *speculative* or *disputed*.
 5. **Write the article** with **Edit article** (Markdown). Link pages with `[[slug]]` or `[[slug|label]]`; links to pages that don't exist yet show red. Set the article status (stub → draft → needs sources → needs review → good) and add an edit summary.
 6. **Add media** with **+ Media**. A photo has three dates: when it was taken, the period it shows, and when it was added. You can also mark where the camera stood.
 

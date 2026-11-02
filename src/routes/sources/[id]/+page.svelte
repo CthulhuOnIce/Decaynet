@@ -1,9 +1,11 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
 	import ConfidenceMark from '$lib/components/ConfidenceMark.svelte';
 	import { formatFuzzy, formatRange } from '$lib/time';
 
-	let { data } = $props();
+	let { data, form } = $props();
 	const s = $derived(data.source);
+	const owner = $derived(s.entity_id ? data.entities[s.entity_id] : null);
 </script>
 
 <svelte:head><title>{s.title} · Sources · {data.settings.site_name}</title></svelte:head>
@@ -11,6 +13,18 @@
 <div class="page narrow">
 	<div class="eyebrow">Source · {s.kind.replace('_', ' ')}</div>
 	<h1>{s.title}</h1>
+	{#if form?.error}<p class="notice error">{form.error}</p>{/if}
+	{#if form?.ok}<p class="notice ok">{form.ok}</p>{/if}
+	{#if s.entity_id}
+		<div class="notice owner">
+			Made for {#if owner}<a href="/e/{owner.slug}">{owner.name}</a>{:else}one page{/if}: only that page's forms and article offer it.
+			{#if data.user}
+				<form method="post" action="?/addToLibrary" use:enhance>
+					<button class="ghost">Add to library</button>
+				</form>
+			{/if}
+		</div>
+	{/if}
 	<table class="meta">
 		<tbody>
 			{#if s.author}<tr><th>Author</th><td>{s.author}</td></tr>{/if}
@@ -23,6 +37,16 @@
 		</tbody>
 	</table>
 	{#if s.notes}<p>{s.notes}</p>{/if}
+
+	{#if data.articles.length}
+		<h2>Articles citing this source ({data.articles.length})</h2>
+		<ul class="plain-list">
+			{#each data.articles as id (id)}
+				{@const e = data.entities[id]}
+				{#if e}<li><a href="/e/{e.slug}">{e.name}</a></li>{/if}
+			{/each}
+		</ul>
+	{/if}
 
 	<h2>Facts citing this source ({data.facts.length})</h2>
 	<ul class="plain-list">
@@ -45,6 +69,13 @@
 </div>
 
 <style>
+	.owner {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
 	.meta th {
 		width: 140px;
 		text-transform: none;

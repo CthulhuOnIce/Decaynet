@@ -1,5 +1,8 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { enhance } from '$app/forms';
+	import SourceFields from '$lib/components/SourceFields.svelte';
+	import { NEW_SOURCE, citeToken, type SourceOption } from '$lib/sources';
 
 	let { data, form } = $props();
 	const statuses = $derived(
@@ -26,6 +29,30 @@
 		const sel = body.slice(ta.selectionStart, ta.selectionEnd);
 		const text = sel ? `[[${slug}|${sel}]]` : `[[${slug}]]`;
 		body = body.slice(0, ta.selectionStart) + text + body.slice(ta.selectionEnd);
+	}
+
+	// ---- citations: pick a source (this page's or the library's), or make one for this page
+	let citeOpen = $state(false);
+	let added = $state<SourceOption[]>([]);
+	const allSources = $derived([...data.sources, ...added.filter((a) => !data.sources.some((s) => s.id === a.id))]);
+	const pageSources = $derived(allSources.filter((s) => s.entity_id));
+	const library = $derived(allSources.filter((s) => !s.entity_id));
+	let citeId = $state('');
+	let citeDetail = $state('');
+	let citeError = $state<string | null>(null);
+	let citing = $state(false);
+	let citeForm: HTMLFormElement | undefined = $state();
+
+	async function insertCite(id: string) {
+		if (!ta || !id || id === NEW_SOURCE) return;
+		const at = ta.selectionEnd ?? body.length;
+		const token = citeToken(id, citeDetail);
+		body = body.slice(0, at) + token + body.slice(at);
+		citeDetail = '';
+		tab = 'write';
+		await tick();
+		ta.focus();
+		ta.setSelectionRange(at + token.length, at + token.length);
 	}
 </script>
 
@@ -65,8 +92,57 @@
 					aria-selected={tab === 'preview'}
 				>Preview</button>
 			</div>
-			<button type="button" class="ghost" onclick={insertLink} title="Wrap selection in a [[wiki link]]">[[ link ]]</button>
+			<div class="row">
+				<button type="button" class="ghost" onclick={insertLink} title="Wrap selection in a [[wiki link]]">[[ link ]]</button>
+				<button type="button" class="ghost" class:active={citeOpen} onclick={() => (citeOpen = !citeOpen)} title="Cite a source at the cursor">Cite</button>
+			</div>
 		</div>
+
+		{#if citeOpen}
+			<div class="cite-panel">
+				<div class="fields">
+					<div class="grow">
+						<label for="cite-pick">Source</label>
+						<select id="cite-pick" bind:value={citeId}>
+							<option value="" disabled>Pick a source…</option>
+							<option value={NEW_SOURCE}>+ New source for this page…</option>
+							{#if pageSources.length}
+								<optgroup label="This page">
+									{#each pageSources as s (s.id)}<option value={s.id}>{s.title}</option>{/each}
+								</optgroup>
+							{/if}
+							{#if library.length}
+								<optgroup label="Library">
+									{#each library as s (s.id)}<option value={s.id}>{s.title}</option>{/each}
+								</optgroup>
+							{/if}
+						</select>
+					</div>
+					<div>
+						<label for="cite-detail">Page / detail</label>
+						<input
+							id="cite-detail"
+							bind:value={citeDetail}
+							placeholder="p. 42"
+							onkeydown={(e) => {
+								if (e.key !== 'Enter') return;
+								e.preventDefault(); // don't save the article
+								if (citeId === NEW_SOURCE) citeForm?.requestSubmit();
+								else insertCite(citeId);
+							}}
+						/>
+					</div>
+				</div>
+				{#if citeId === NEW_SOURCE}
+					<SourceFields prefix="cs_" idPrefix="cs" form="cite-src" />
+					<button type="submit" form="cite-src" class="primary" disabled={citing}>{citing ? 'Saving…' : 'Create source & insert citation'}</button>
+				{:else}
+					<button type="button" class="primary" disabled={!citeId} onclick={() => insertCite(citeId)}>Insert citation</button>
+				{/if}
+				{#if citeError}<p class="notice error small">{citeError}</p>{/if}
+				<p class="hint">Inserts <code>[cite:…]</code> at the cursor. Readers see a numbered footnote that links to the page's source list.</p>
+			</div>
+		{/if}
 
 		<textarea bind:this={ta} name="body" bind:value={body} rows="22" hidden={tab !== 'write'} placeholder="Write in Markdown. Link other pages with [[slug]] or [[slug|label]]."></textarea>
 		{#if tab === 'preview'}
@@ -74,7 +150,7 @@
 		{/if}
 
 		<p class="hint">
-			Markdown with <code>[[slug]]</code> wiki links (red if the page doesn't exist yet).
+			Markdown with <code>[[slug]]</code> wiki links (red if the page doesn't exist yet) and <code>[cite:…]</code> citations from the Cite button.
 			Keep dated claims in <a href="/e/{data.entity.slug}/facts">structured facts</a> too, so they show on the map and timeline.
 		</p>
 
@@ -100,6 +176,30 @@
 			<a class="btn ghost" href="/e/{data.entity.slug}">Cancel</a>
 		</div>
 	</form>
+
+	<!-- The Cite panel's "new source" fields submit here (form="cite-src"); the article text stays as typed -->
+	<form
+		id="cite-src"
+		method="post"
+		action="?/addSource"
+		hidden
+		bind:this={citeForm}
+		use:enhance={() => {
+			citing = true;
+			citeError = null;
+			return async ({ result }) => {
+				citing = false;
+				if (result.type === 'success' && result.data?.newSource) {
+					const src = result.data.newSource as SourceOption;
+					added = [...added, src];
+					citeId = src.id;
+					await insertCite(src.id);
+					citeForm?.reset();
+				} else if (result.type === 'failure') citeError = String(result.data?.sourceError ?? 'Could not create the source.');
+				else if (result.type === 'error') citeError = result.error?.message ?? 'Could not create the source.';
+			};
+		}}
+	></form>
 </div>
 
 <style>
@@ -111,6 +211,24 @@
 		background: var(--rust);
 		border-color: var(--rust);
 		color: white;
+	}
+	.cite-panel {
+		display: grid;
+		gap: 8px;
+		padding: 10px 12px;
+		background: var(--bg-2);
+		border: 1px dashed var(--line-2);
+		border-radius: var(--radius);
+	}
+	.cite-panel .fields {
+		grid-template-columns: 2fr 1fr;
+	}
+	.cite-panel .primary {
+		justify-self: start;
+	}
+	button.ghost.active {
+		border-color: var(--rust);
+		color: var(--rust-2);
 	}
 	textarea {
 		font-family: var(--mono);

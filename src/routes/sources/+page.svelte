@@ -2,11 +2,19 @@
 	import { enhance } from '$app/forms';
 	import { formatFuzzy } from '$lib/time';
 
+	import { SOURCE_KINDS as KINDS } from '$lib/sources';
+
 	let { data, form } = $props();
-	const KINDS = ['book', 'newspaper', 'periodical', 'website', 'archive', 'map', 'photograph', 'public_record', 'oral_history', 'directory', 'film', 'other'];
 	let filter = $state('');
+	// Library = shared sources; page sources were made on one page for its facts or article
+	let view = $state<'library' | 'page'>('library');
+	const pageCount = $derived(data.sources.filter((s) => s.entity_id).length);
 	const shown = $derived(
-		data.sources.filter((s) => !filter || `${s.title} ${s.author ?? ''} ${s.repository ?? ''}`.toLowerCase().includes(filter.toLowerCase()))
+		data.sources.filter(
+			(s) =>
+				(view === 'library' ? !s.entity_id : !!s.entity_id) &&
+				(!filter || `${s.title} ${s.author ?? ''} ${s.repository ?? ''} ${s.page?.name ?? ''}`.toLowerCase().includes(filter.toLowerCase()))
+		)
 	);
 </script>
 
@@ -14,10 +22,17 @@
 
 <div class="page">
 	<h1>Sources</h1>
-	<p class="muted">Every fact can cite a source plus a page/frame detail. City directories, Sanborn maps and the Post-Tribune are gold.</p>
+	<p class="muted">
+		Every fact and article can cite a source plus a page/frame detail. City directories, Sanborn maps and the Post-Tribune are gold.
+		Sources here are shared by every page; a one-off source can also be made right on a page while adding a fact or writing its article.
+	</p>
 
 	<div class="grid-2">
 		<div>
+			<div class="seg">
+				<button class:on={view === 'library'} onclick={() => (view = 'library')}>Library</button>
+				<button class:on={view === 'page'} onclick={() => (view = 'page')}>Page sources ({pageCount})</button>
+			</div>
 			<input placeholder="Filter sources…" bind:value={filter} />
 			<ul class="plain-list">
 				{#each shown as s (s.id)}
@@ -28,17 +43,20 @@
 							{[s.author, s.publisher, s.repository].filter(Boolean).join(' · ')}
 							{#if s.published_on}· {formatFuzzy(s.published_on, s.published_precision)}{/if}
 						</div>
-						<div class="small">{data.counts[s.id] ?? 0} facts cite this</div>
+						<div class="small">
+							{data.counts[s.id] ?? 0} facts cite this
+							{#if s.page}· made for <a href="/e/{s.page.slug}">{s.page.name}</a>{/if}
+						</div>
 					</li>
 				{:else}
-					<li class="muted">No sources yet.</li>
+					<li class="muted">{view === 'library' ? 'No sources yet.' : 'No page sources yet.'}</li>
 				{/each}
 			</ul>
 		</div>
 
 		{#if data.user}
 			<form method="post" action="?/create" class="card stack" use:enhance>
-				<h3>Add a source</h3>
+				<h3>Add a source to the library</h3>
 				{#if form?.error}<p class="notice error">{form.error}</p>{/if}
 				{#if form?.ok}<p class="notice ok">Added.</p>{/if}
 				<div><label for="t">Title</label><input id="t" name="title" required /></div>
@@ -63,3 +81,20 @@
 		{/if}
 	</div>
 </div>
+
+<style>
+	.seg {
+		display: flex;
+		gap: 2px;
+		margin-bottom: 8px;
+	}
+	.seg button {
+		flex: 1;
+		justify-content: center;
+	}
+	.seg button.on {
+		background: var(--rust);
+		border-color: var(--rust);
+		color: #fff;
+	}
+</style>
