@@ -247,7 +247,7 @@ At country or world scale, the map only fetches what's in view (plus a margin) a
   - filter to things carrying a tag, including its sub-traits.
 - **Events ±5 years** appear as glowing dots and in a list. Things fade with distance in time.
 - **Share a view:** the URL keeps the year, selection, map position and tag filter, for example `/?y=1955&sel=…&c=-87.338,41.601,15.4&tag=entertainment`.
-- **Search** matches historic names too: "Genesis Towers" finds Hotel Gary.
+- **Search** matches historic names too: "Genesis Towers" finds Hotel Gary. It also finds street addresses: "577 Washington St" lists the buildings at that address, links to their pages and jumps to them on the map. Addresses the wiki doesn't know yet are geocoded from OpenStreetMap, with a *Create a page here* shortcut that carries the address and map point onto the new page.
 
 ### Adding and editing pages
 
@@ -510,6 +510,7 @@ Key RPCs:
 | `entity_snapshot(id, at)` / `entity_timeline(id)` / `entity_relations(id)` | One entity folded to a date / every fact in order / all edges with period-correct names |
 | `moments_near(at, years)` / `chronology(from, to)` | Events and photos near a date / the city-wide chronology |
 | `search_entities(q)` | Fuzzy search across current and historic names |
+| `search_addresses(q)` | Fuzzy search across street addresses, with the linked page and a map point |
 | `building_spaces(id, at)` / `add_space(...)` | Spaces and tenants of a building / validated space creation |
 | `entities_in_area(...)` / `retire_area(...)` / `import_features(...)` | Workbench bulk tools |
 | `match_import_candidates(...)` / `apply_import(...)` / `undo_import(...)` | OHM / Wikidata import: match, apply a reviewed plan, undo |

@@ -54,6 +54,13 @@
 			<label for="summary">One-line summary</label>
 			<input id="summary" name="summary" value={v.summary ?? ''} />
 		</div>
+		{#if data.preset.address}
+			<input type="hidden" name="address_raw" value={data.preset.address} />
+			<p class="hint">
+				Address will be recorded as <strong>{data.preset.address}</strong>. On the next screen, link the street page
+				so the address follows street renamings.
+			</p>
+		{/if}
 		<div class="fields">
 			<div>
 				<label for="from">{k?.start_verb ?? 'Began'}</label>
@@ -84,7 +91,11 @@
 		{#if k?.geometry_hint || kind === 'event' || kind === 'media'}
 			<div>
 				<div class="eyebrow">Location (optional; refine later)</div>
-				<GeometryPicker mode={k?.geometry_hint === 'line' ? 'line' : 'point'} height={300} />
+				<GeometryPicker
+					mode={k?.geometry_hint === 'line' ? 'line' : 'point'}
+					height={300}
+					initial={data.preset.point as GeoJSON.Geometry | null}
+				/>
 			</div>
 		{/if}
 
