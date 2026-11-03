@@ -13,10 +13,19 @@ export interface FuzzyDate {
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
+/** 1900 → "20th century", 2000 → "21st century" (parseFuzzyDate reads it back). */
+export function centuryName(year: number): string {
+	const n = Math.floor(year / 100) + 1;
+	const suffix = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th';
+	return `${n}${suffix} century`;
+}
+
 /**
  * Parse the free-form dates historians actually write:
  *   1926 · 1926-05 · 1926-05-12 · May 1926 · May 12, 1926
- *   1920s (decade) · 1900s / 19th century (century)
+ *   1920s (decade) · 1800s, 1900s / 19th century (century)
+ *   2000s is the decade 2000–2009 (what a historical record means by it); write
+ *   "21st century" for the century
  *   c. 1926 · ca 1926 · ~1926 · 1926? (flagged approximate)
  */
 export function parseFuzzyDate(input: string | null | undefined): FuzzyDate | null {
@@ -44,7 +53,7 @@ export function parseFuzzyDate(input: string | null | undefined): FuzzyDate | nu
 		const start = (+m[1] - 1) * 100;
 		return { date: `${String(start).padStart(4, '0')}-01-01`, precision: 'century', approximate };
 	}
-	if ((m = s.match(/^(\d{2})00s$/)))
+	if ((m = s.match(/^(\d{2})00s$/)) && m[1] !== '20')
 		return { date: `${m[1]}00-01-01`, precision: 'century', approximate };
 	if ((m = s.match(/^(\d{3})0s$/)))
 		return { date: `${m[1]}0-01-01`, precision: 'decade', approximate };
@@ -80,7 +89,8 @@ export function formatFuzzy(date: string | null | undefined, precision: Precisio
 		case 'decade':
 			return `${Math.floor(y / 10) * 10}s`;
 		case 'century':
-			return `${Math.floor(y / 100) * 100}s`;
+			// "20th century", never "1900s", which reads like a decade
+			return centuryName(y);
 		case 'unknown':
 			return `?${y}`;
 		default:
@@ -114,7 +124,7 @@ export function toFuzzyInput(date: string | null | undefined, precision: Precisi
 		case 'decade':
 			return `${y.slice(0, 3)}0s`;
 		case 'century':
-			return `${y.slice(0, 2)}00s`;
+			return centuryName(Number(y));
 		default:
 			return y;
 	}
