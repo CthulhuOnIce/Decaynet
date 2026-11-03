@@ -1,12 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { NEW_SOURCE, SOURCE_KINDS, type SourceOption } from '$lib/sources';
+import { NEW_SOURCE, SOURCE_KINDS, SOURCE_OPTION_COLUMNS, type SourceOption } from '$lib/sources';
 import { parseFuzzyDate } from '$lib/time';
 import { queueArchive } from './archive';
 import { FormError, dbMessage, str } from './forms';
 
 /** Sources a page's forms can cite: its own page sources first, then the shared library. */
 export async function sourceOptions(sb: SupabaseClient, entityId: string | null): Promise<SourceOption[]> {
-	const q = sb.from('sources').select('id, title, entity_id');
+	const q = sb.from('sources').select(SOURCE_OPTION_COLUMNS);
 	const { data } = await (entityId ? q.or(`entity_id.is.null,entity_id.eq.${entityId}`) : q.is('entity_id', null)).order('title');
 	return (data ?? []) as SourceOption[];
 }
@@ -36,7 +36,7 @@ export function sourceFromForm(fd: FormData, prefix = 'ns_') {
 /** Create a source that belongs to one page. */
 export async function createPageSource(sb: SupabaseClient, fd: FormData, entityId: string, prefix = 'ns_'): Promise<SourceOption> {
 	const row = sourceFromForm(fd, prefix);
-	const { data, error } = await sb.from('sources').insert({ ...row, entity_id: entityId }).select('id, title, entity_id').single();
+	const { data, error } = await sb.from('sources').insert({ ...row, entity_id: entityId }).select(SOURCE_OPTION_COLUMNS).single();
 	if (error) throw new FormError(dbMessage(error));
 	if (row.url) queueArchive(data.id, sb);
 	return data as SourceOption;

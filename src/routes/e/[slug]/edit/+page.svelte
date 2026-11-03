@@ -2,6 +2,7 @@
 	import { tick } from 'svelte';
 	import { enhance } from '$app/forms';
 	import SourceFields from '$lib/components/SourceFields.svelte';
+	import SourcePicker from '$lib/components/SourcePicker.svelte';
 	import { NEW_SOURCE, citeToken, type SourceOption } from '$lib/sources';
 
 	let { data, form } = $props();
@@ -35,8 +36,6 @@
 	let citeOpen = $state(false);
 	let added = $state<SourceOption[]>([]);
 	const allSources = $derived([...data.sources, ...added.filter((a) => !data.sources.some((s) => s.id === a.id))]);
-	const pageSources = $derived(allSources.filter((s) => s.entity_id));
-	const library = $derived(allSources.filter((s) => !s.entity_id));
 	let citeId = $state('');
 	let citeDetail = $state('');
 	let citeError = $state<string | null>(null);
@@ -103,20 +102,7 @@
 				<div class="fields">
 					<div class="grow">
 						<label for="cite-pick">Source</label>
-						<select id="cite-pick" bind:value={citeId}>
-							<option value="" disabled>Pick a source…</option>
-							<option value={NEW_SOURCE}>+ New source for this page…</option>
-							{#if pageSources.length}
-								<optgroup label="This page">
-									{#each pageSources as s (s.id)}<option value={s.id}>{s.title}</option>{/each}
-								</optgroup>
-							{/if}
-							{#if library.length}
-								<optgroup label="Library">
-									{#each library as s (s.id)}<option value={s.id}>{s.title}</option>{/each}
-								</optgroup>
-							{/if}
-						</select>
+						<SourcePicker id="cite-pick" sources={allSources} allowNone={false} placeholder="Search by title, author, publisher, year or website…" bind:value={citeId} />
 					</div>
 					<div>
 						<label for="cite-detail">Page / detail</label>

@@ -14,7 +14,17 @@ export interface SourceOption {
 	title: string;
 	/** page the source belongs to; null = shared library */
 	entity_id: string | null;
+	/** shown and searched in the source picker */
+	kind?: string | null;
+	author?: string | null;
+	publisher?: string | null;
+	published_on?: string | null;
+	published_precision?: import('./types').Precision | null;
+	url?: string | null;
 }
+
+/** Columns the source picker needs. */
+export const SOURCE_OPTION_COLUMNS = 'id, title, entity_id, kind, author, publisher, published_on, published_precision, url';
 
 /** [cite:<source id>] or [cite:<source id>|p. 42] in article markdown */
 export const CITE = /\[cite:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\|([^\]\n]*))?\]/gi;
