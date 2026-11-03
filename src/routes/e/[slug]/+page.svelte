@@ -11,6 +11,7 @@
 	import TagChips from '$lib/components/TagChips.svelte';
 	import { formatFuzzy, formatRange } from '$lib/time';
 	import { isImage, mediaSrc } from '$lib/media';
+	import { exportsFor } from '$lib/exports';
 	import type { RelationRow } from '$lib/types';
 
 	let { data, form } = $props();
@@ -66,14 +67,16 @@
 	let moreOpen = $state(false);
 	const copiedFrom = $derived(page.url.searchParams.get('copied_from'));
 	let moreEl: HTMLDetailsElement | undefined = $state();
-	// Close the More menu on an outside click or Escape (reads the element: its toggle event lands a tick later)
+	// Close the More / Export menus on an outside click or Escape (reads the elements: their toggle event lands a tick later)
 	function closeMore(ev: Event) {
-		if (!moreEl?.open) return;
-		if (ev instanceof KeyboardEvent ? ev.key === 'Escape' : !(ev.target as HTMLElement).closest('details.more')) {
-			moreEl.open = false;
-			moreOpen = false;
+		for (const d of document.querySelectorAll<HTMLDetailsElement>('details.more[open]')) {
+			if (ev instanceof KeyboardEvent ? ev.key === 'Escape' : !d.contains(ev.target as Node)) d.open = false;
 		}
+		moreOpen = !!moreEl?.open;
 	}
+	const exportFormats = $derived(exportsFor(e.kind));
+	// an export shows the page as you're viewing it (the same year)
+	const exportQuery = $derived(data.year !== new Date().getFullYear() ? `?y=${data.year}` : '');
 	// Footprint (grey) + spaces (highlighted) for the floor-plan minimap
 	const floorPlan = $derived<GeoJSON.Feature[]>([
 		...data.geomFeatures.filter((f) => f.geometry?.type !== 'Point').map((f) => ({ ...f, properties: { current: false } })),
@@ -149,6 +152,19 @@
 			{#if canEdit}
 				<a class="btn" href="/e/{e.slug}/edit">Edit article</a>
 				<a class="btn" href="/e/{e.slug}/facts">Edit facts</a>
+			{/if}
+			{#if exportFormats.length}
+				<details class="more">
+					<summary class="btn ghost" aria-label="Export this page">Export ▾</summary>
+					<div class="more-menu export-menu" role="menu">
+						{#each exportFormats as x (x.id)}
+							<a role="menuitem" href="{x.href(e.slug)}{exportQuery}" target={x.newTab ? '_blank' : undefined} rel={x.newTab ? 'noopener' : undefined}>
+								<span>{x.label}</span>
+								<span class="item-desc">{x.description}</span>
+							</a>
+						{/each}
+					</div>
+				</details>
 			{/if}
 			<details class="more" bind:open={moreOpen} bind:this={moreEl}>
 				<summary class="btn ghost" aria-label="More actions">More ▾</summary>
@@ -492,6 +508,20 @@
 	}
 	.more-menu .danger-item {
 		color: var(--rust-2);
+	}
+	.export-menu a {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 1px;
+	}
+	.export-menu {
+		min-width: 260px;
+	}
+	.item-desc {
+		font-size: 0.75rem;
+		color: var(--muted);
+		white-space: normal;
 	}
 	.menu-label {
 		margin: 6px 10px 2px;

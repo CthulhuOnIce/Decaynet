@@ -42,6 +42,8 @@
 		menuOpen = false;
 	}
 	const fullBleed = $derived(page.url.pathname === '/' || page.url.pathname === '/workbench');
+	// export pages (a printable article) stand alone: no site header, banners or footer
+	const bare = $derived(/^\/e\/[^/]+\/print$/.test(page.url.pathname));
 
 	const isActive = (href: string) =>
 		href === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(href);
@@ -54,6 +56,9 @@
 
 <svelte:window onclick={closeMenus} onkeydown={closeMenus} />
 
+{#if bare}
+	{@render children()}
+{:else}
 <header class="site-header">
 	<a class="brand" href="/" aria-label="Decaynet home">
 		<svg viewBox="0 0 32 32" width="24" height="24" aria-hidden="true">
@@ -169,6 +174,7 @@
 		<span>Free software under the <a href="https://www.gnu.org/licenses/agpl-3.0.html" rel="license noopener" target="_blank">GNU AGPL v3</a></span>
 		<a href={data.settings.source_code_url} rel="noopener" target="_blank">Source code</a>
 	</footer>
+{/if}
 {/if}
 
 <style>
