@@ -1,7 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { entityBySlug, loadTags, requireEditor } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, geometryFromForm, required, slugify, str, temporalFromForm } from '$lib/server/forms';
-import { discardSource, resolveInlineSource, sourceOptions } from '$lib/server/sources';
+import { discardSource, madeSource, resolveInlineSource, sourceOptions, type MadeSource } from '$lib/server/sources';
 import type { RelationRow, Space } from '$lib/types';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
 
@@ -58,7 +58,7 @@ function action(fn: (ctx: { fd: FormData; entityId: string; event: RequestEvent 
 		const entity = await entityBySlug(event.locals.supabase, event.params.slug);
 		const fd = await event.request.formData();
 		const section = str(fd, 'section') ?? 'general';
-		let newSource: string | null = null;
+		let newSource: MadeSource | null = null;
 		try {
 			// "New source…" in a fact form: create it for this page first
 			newSource = await resolveInlineSource(event.locals.supabase, fd, entity.id);
@@ -68,7 +68,8 @@ function action(fn: (ctx: { fd: FormData; entityId: string; event: RequestEvent 
 			if (e instanceof FormError) return fail(400, { section, error: e.message });
 			throw e;
 		}
-		return { section, ok: true };
+		// the form switches from "New source…" to it, so saving again doesn't make another
+		return { section, ok: true, newSource: madeSource(newSource) };
 	};
 }
 

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
+	import { page } from '$app/state';
 	import { NEW_SOURCE, type SourceOption } from '$lib/sources';
 	import { toFuzzyInput } from '$lib/time';
 	import { CONFIDENCES, PRECISIONS, type TemporalFact } from '$lib/types';
@@ -27,6 +28,21 @@
 	const v = $derived(values ?? {});
 	// A fact can cite a source this list doesn't offer (another page's); the picker keeps it rather than silently uncite
 	let picked = $state(untrack(() => values?.source_id ?? ''));
+
+	// A save that made a source ("New source…") reports it. Forms that keep their fields after
+	// saving (the workbench, editing a fact) switch to it, so saving again cites it instead of
+	// making a copy. It may belong to another page (a workbench trace), so offer it here too.
+	let made = $state<SourceOption[]>([]);
+	const offered = $derived([...sources, ...made.filter((m) => !sources.some((s) => s.id === m.id))]);
+	$effect(() => {
+		const ns = (page.form as { newSource?: SourceOption } | null)?.newSource;
+		if (!ns?.id) return;
+		untrack(() => {
+			if (picked !== NEW_SOURCE) return;
+			if (!made.some((m) => m.id === ns.id)) made = [...made, ns];
+			picked = ns.id;
+		});
+	});
 </script>
 
 <div class="temporal">
@@ -63,7 +79,7 @@
 	<div class="fields">
 		<div class="source">
 			<label for="{idPrefix}-src">Source</label>
-			<SourcePicker id="{idPrefix}-src" name="source_id" {sources} {allowNew} bind:value={picked} resetValue={values?.source_id ?? ''} />
+			<SourcePicker id="{idPrefix}-src" name="source_id" sources={offered} {allowNew} bind:value={picked} resetValue={values?.source_id ?? ''} />
 		</div>
 		<div>
 			<label for="{idPrefix}-srcd">Page / detail</label>

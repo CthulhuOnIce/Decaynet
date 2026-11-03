@@ -1,7 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { newPagesPrivate, requirePermission } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, required, slugify, str } from '$lib/server/forms';
-import { librarySources, resolveInlineSource } from '$lib/server/sources';
+import { librarySources, madeSource, resolveInlineSource, type MadeSource } from '$lib/server/sources';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, parent }) => {
@@ -55,8 +55,9 @@ export const actions: Actions = {
 		const confidence = str(fd, 'confidence') ?? 'probable';
 		let entityId = str(fd, 'entity_id');
 		let slug: string | null = null;
+		let made: MadeSource | null = null;
 		// "New source…" belongs to the page the shape goes on
-		if (entityId) await resolveInlineSource(locals.supabase, fd, entityId);
+		if (entityId) made = await resolveInlineSource(locals.supabase, fd, entityId);
 		else {
 			const name = required(fd, 'name', 'Name');
 			const kind = required(fd, 'kind', 'Kind');
@@ -78,7 +79,7 @@ export const actions: Actions = {
 			check(ins);
 			entityId = ins.data!.id;
 			slug = ins.data!.slug;
-			await resolveInlineSource(locals.supabase, fd, entityId!);
+			made = await resolveInlineSource(locals.supabase, fd, entityId!);
 			const status = str(fd, 'status');
 			if (status)
 				check(
@@ -108,7 +109,8 @@ export const actions: Actions = {
 			})
 		);
 		if (!slug) slug = (await locals.supabase.from('entities').select('slug').eq('id', entityId).single()).data?.slug ?? null;
-		return { ok: 'Shape saved.', slug };
+		// the form keeps its fields for the next shape: it switches to this source instead of making another
+		return { ok: 'Shape saved.', slug, newSource: madeSource(made) };
 	}),
 
 	previewArea: wrap(async (fd, locals) => {

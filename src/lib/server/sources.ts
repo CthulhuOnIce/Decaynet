@@ -23,7 +23,7 @@ export function sourceFromForm(fd: FormData, prefix = 'ns_') {
 	const url = str(fd, `${prefix}url`);
 	if (url && !/^https?:\/\//i.test(url)) throw new FormError('The source URL should start with http:// or https://');
 	return {
-		title: title.slice(0, 300),
+		title: title.replace(/\s+/g, ' ').slice(0, 300),
 		kind: (SOURCE_KINDS as readonly string[]).includes(kind) ? kind : 'other',
 		author: str(fd, `${prefix}author`),
 		publisher: str(fd, `${prefix}publisher`),
@@ -33,9 +33,39 @@ export function sourceFromForm(fd: FormData, prefix = 'ns_') {
 	};
 }
 
-/** Create a source that belongs to one page. */
-export async function createPageSource(sb: SupabaseClient, fd: FormData, entityId: string, prefix = 'ns_'): Promise<SourceOption> {
+/** A source made from the "new source" fields; `reused` = an identical one already existed. */
+export type MadeSource = SourceOption & { reused?: boolean };
+
+const norm = (v: string | null | undefined) => (v ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+/**
+ * Create a source that belongs to one page, or reuse an identical one: the same title, link,
+ * kind, author, publisher and date, already on this page or in the library. Saving a form
+ * twice (the workbench and fact edits keep their fields after saving) or citing the same
+ * thing again no longer makes copies.
+ */
+export async function createPageSource(sb: SupabaseClient, fd: FormData, entityId: string, prefix = 'ns_'): Promise<MadeSource> {
 	const row = sourceFromForm(fd, prefix);
+	const like = row.title.replace(/[\\%_]/g, (c) => `\\${c}`);
+	const { data: near } = await sb
+		.from('sources')
+		.select(SOURCE_OPTION_COLUMNS)
+		.or(`entity_id.eq.${entityId},entity_id.is.null`)
+		.ilike('title', like)
+		.limit(20);
+	const same = ((near ?? []) as SourceOption[])
+		.filter(
+			(s) =>
+				norm(s.title) === norm(row.title) &&
+				norm(s.url) === norm(row.url) &&
+				(s.kind ?? 'other') === row.kind &&
+				norm(s.author) === norm(row.author) &&
+				norm(s.publisher) === norm(row.publisher) &&
+				(s.published_on ?? null) === row.published_on
+		)
+		.sort((a, b) => Number(!a.entity_id) - Number(!b.entity_id))[0]; // this page's own first
+	if (same) return { ...same, reused: true };
+
 	const { data, error } = await sb.from('sources').insert({ ...row, entity_id: entityId }).select(SOURCE_OPTION_COLUMNS).single();
 	if (error) throw new FormError(dbMessage(error));
 	if (row.url) queueArchive(data.id, sb);
@@ -43,18 +73,24 @@ export async function createPageSource(sb: SupabaseClient, fd: FormData, entityI
 }
 
 /**
- * If a fact form chose "New source…", create it for this page and point the
- * form's source_id at it. Returns the new source's id (so a failed save can
- * remove it again), or null when an existing source was picked.
+ * If a fact form chose "New source…", create it for this page (or reuse an identical one)
+ * and point the form's source_id at it. Returns it, or null when an existing source was picked.
  */
-export async function resolveInlineSource(sb: SupabaseClient, fd: FormData, entityId: string): Promise<string | null> {
+export async function resolveInlineSource(sb: SupabaseClient, fd: FormData, entityId: string): Promise<MadeSource | null> {
 	if (fd.get('source_id') !== NEW_SOURCE) return null;
 	const s = await createPageSource(sb, fd, entityId);
 	fd.set('source_id', s.id);
-	return s.id;
+	return s;
 }
 
-/** Undo resolveInlineSource after the fact itself couldn't be saved. */
-export async function discardSource(sb: SupabaseClient, id: string | null) {
-	if (id) await sb.from('sources').delete().eq('id', id);
+/** Undo resolveInlineSource after the fact itself couldn't be saved (only a source it created). */
+export async function discardSource(sb: SupabaseClient, s: MadeSource | null) {
+	if (s && !s.reused) await sb.from('sources').delete().eq('id', s.id);
 }
+
+/** What a form action hands back so the form can switch from "New source…" to the source it made. */
+export const madeSource = (s: MadeSource | null): SourceOption | undefined => {
+	if (!s) return undefined;
+	const { reused: _reused, ...option } = s;
+	return option;
+};
