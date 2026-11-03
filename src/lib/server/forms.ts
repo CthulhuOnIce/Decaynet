@@ -1,8 +1,21 @@
+import { readGeometry } from '$lib/geojson';
 import { NEW_SOURCE } from '$lib/sources';
 import { parseFuzzyDate } from '$lib/time';
 import { CONFIDENCES, PRECISIONS, type Confidence, type Precision } from '$lib/types';
 
 export class FormError extends Error {}
+
+/**
+ * The shape a form sends: GeoJSON pasted into "<name>_text" wins over the shape drawn on the map
+ * ("<name>"). Any GeoJSON form works (geometry, Feature, FeatureCollection). Null when neither is given.
+ */
+export function geometryFromForm(fd: FormData, name = 'geojson'): GeoJSON.Geometry | null {
+	const text = str(fd, `${name}_text`) ?? str(fd, name);
+	if (!text) return null;
+	const r = readGeometry(text);
+	if ('error' in r) throw new FormError(`The pasted shape can't be used: ${r.error}`);
+	return r.geometry;
+}
 
 export const str = (fd: FormData, key: string): string | null => {
 	const v = fd.get(key);

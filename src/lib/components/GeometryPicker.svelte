@@ -5,6 +5,7 @@
 	import type { GeoJSONSource, Map as MLMap } from 'maplibre-gl';
 	import { baseStyle, boundsOf, mapView } from '$lib/map/style';
 	import { loadView } from '$lib/mapMemory';
+	import { readGeometry } from '$lib/geojson';
 
 	type Mode = 'point' | 'line' | 'polygon';
 
@@ -61,10 +62,55 @@
 	});
 	const value = $derived(geometry ? JSON.stringify(geometry) : '');
 
+	// ---- pasted GeoJSON: a simple shape is loaded onto the map to adjust; anything else (several
+	// parts, holes) is kept as pasted and previewed. The server reads it the same way (readGeometry).
+	let pasteText = $state('');
+	let pasted = $state<GeoJSON.Geometry | null>(null);
+	let pasteNote = $state<string | null>(null);
+	let pasteError = $state<string | null>(null);
+	function onPaste() {
+		if (!pasteText.trim()) {
+			// emptied: drop a kept paste and its note, but keep "loaded onto the map" (the box is
+			// emptied on purpose then, and some browsers send another input event for it)
+			if (pasted || pasteError) pasteNote = null;
+			pasted = null;
+			pasteError = null;
+			return;
+		}
+		pasted = null;
+		pasteNote = pasteError = null;
+		const r = readGeometry(pasteText);
+		if ('error' in r) return void (pasteError = r.error);
+		const g = r.geometry;
+		const editable = g.type === 'Point' || g.type === 'LineString' || (g.type === 'Polygon' && g.coordinates.length === 1);
+		if (editable) {
+			mode = g.type === 'Point' ? 'point' : g.type === 'LineString' ? 'line' : 'polygon';
+			pts = pointsOf(g);
+			pasteText = ''; // the map now holds it, and edits made there are what gets saved
+			pasteNote = `Pasted ${g.type === 'Point' ? 'point' : g.type === 'LineString' ? 'line' : 'area'} is on the map; adjust it there if needed.`;
+		} else {
+			pts = []; // the pasted text is what's saved, so don't leave an older drawing beside it
+			pasted = g;
+			pasteNote = `${r.note ?? 'An area with holes, kept as pasted.'} Clear this box to draw on the map instead.`;
+		}
+		const b = boundsOf(g);
+		if (b && map) map.fitBounds(b, { padding: 60, maxZoom: 18, duration: 300 });
+	}
+	/** multi-part shapes as separate features, so the Polygon/Point layer filters catch every part */
+	const partsOf = (g: GeoJSON.Geometry): GeoJSON.Geometry[] =>
+		g.type === 'MultiPolygon'
+			? g.coordinates.map((c) => ({ type: 'Polygon', coordinates: c }))
+			: g.type === 'MultiLineString'
+				? g.coordinates.map((c) => ({ type: 'LineString', coordinates: c }))
+				: g.type === 'MultiPoint'
+					? g.coordinates.map((c) => ({ type: 'Point', coordinates: c }))
+					: [g];
+
 	function draw() {
 		if (!map || !ready) return;
 		const features: GeoJSON.Feature[] = pts.map((c) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: c }, properties: { vertex: true } }));
 		if (geometry && geometry.type !== 'Point') features.push({ type: 'Feature', geometry, properties: {} });
+		if (pasted) for (const g of partsOf(pasted)) features.push({ type: 'Feature', geometry: g, properties: {} });
 		(map.getSource('draft') as GeoJSONSource).setData({ type: 'FeatureCollection', features });
 	}
 
@@ -109,7 +155,7 @@
 	onDestroy(() => map?.remove());
 
 	$effect(() => {
-		void geometry;
+		void [geometry, pasted];
 		draw();
 	});
 </script>
@@ -129,13 +175,32 @@
 	</div>
 	<div class="map" style:height="{height}px" bind:this={el}></div>
 	<input type="hidden" {name} {value} />
-	<details>
-		<summary class="muted small">…or paste GeoJSON geometry</summary>
-		<textarea name="{name}_text" rows="4" placeholder={'{"type":"Polygon","coordinates":[[[-87.33,41.60],…]]}'}></textarea>
+	<details open={!!pasteText || !!pasteNote || !!pasteError}>
+		<summary class="muted small">…or paste GeoJSON (a shape copied from the workbench, or any GeoJSON file's contents)</summary>
+		<textarea
+			name="{name}_text"
+			rows="4"
+			bind:value={pasteText}
+			oninput={onPaste}
+			class:bad={!!pasteError}
+			placeholder={'{"type":"Polygon","coordinates":[[[-87.33,41.60],…]]}  or a Feature / FeatureCollection'}
+		></textarea>
+		{#if pasteError}<p class="small paste-error">{pasteError}</p>{:else if pasteNote}<p class="small paste-ok">{pasteNote}</p>{/if}
 	</details>
 </div>
 
 <style>
+	textarea.bad {
+		border-color: var(--rust, #c2562b);
+	}
+	.paste-error {
+		margin: 4px 0 0;
+		color: var(--rust, #e07a4f);
+	}
+	.paste-ok {
+		margin: 4px 0 0;
+		color: var(--moss);
+	}
 	.bar {
 		margin-bottom: 6px;
 	}

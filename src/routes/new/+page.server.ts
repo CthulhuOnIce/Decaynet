@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requireEditor } from '$lib/server/db';
-import { FormError, dbMessage, fuzzyPair, required, slugify, str } from '$lib/server/forms';
+import { FormError, dbMessage, fuzzyPair, geometryFromForm, required, slugify, str } from '$lib/server/forms';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -39,6 +39,8 @@ export const actions: Actions = {
 		const fd = await request.formData();
 		const values = Object.fromEntries([...fd.entries()].filter(([, v]) => typeof v === 'string'));
 		try {
+			// read a pasted shape first, so a bad one doesn't leave a half-made page
+			const geojson = geometryFromForm(fd);
 			const name = required(fd, 'name', 'Name');
 			const kind = required(fd, 'kind', 'Kind');
 			// Media pages need a file/URL, so they belong to the uploader.
@@ -71,11 +73,10 @@ export const actions: Actions = {
 			}
 
 			// Optional point dropped on the map
-			const geojson = str(fd, 'geojson_text') ?? str(fd, 'geojson');
 			if (geojson) {
 				const r = await locals.supabase.rpc('add_geometry', {
 					p_entity: entity.id,
-					p_geojson: JSON.parse(geojson),
+					p_geojson: geojson,
 					p_role: 'shape',
 					p_valid_from: life.from,
 					p_valid_from_precision: life.fromPrecision,

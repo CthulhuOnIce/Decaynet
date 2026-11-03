@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { entityBySlug, loadTags, requireEditor } from '$lib/server/db';
-import { FormError, dbMessage, fuzzyPair, required, slugify, str, temporalFromForm } from '$lib/server/forms';
+import { FormError, dbMessage, fuzzyPair, geometryFromForm, required, slugify, str, temporalFromForm } from '$lib/server/forms';
 import { discardSource, resolveInlineSource, sourceOptions } from '$lib/server/sources';
 import type { RelationRow, Space } from '$lib/types';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
@@ -198,15 +198,8 @@ export const actions: Actions = {
 	}),
 
 	addGeometry: action(async ({ fd, entityId, event }) => {
-		const text = str(fd, 'geojson_text') ?? str(fd, 'geojson');
-		if (!text) throw new FormError('Draw a shape on the map (or paste GeoJSON).');
-		let geom: { type?: string; geometry?: unknown };
-		try {
-			geom = JSON.parse(text);
-		} catch {
-			throw new FormError('That GeoJSON could not be parsed.');
-		}
-		if (geom.type === 'Feature') geom = geom.geometry as typeof geom;
+		const geom = geometryFromForm(fd);
+		if (!geom) throw new FormError('Draw a shape on the map (or paste GeoJSON).');
 		const t = temporalFromForm(fd);
 		check(
 			await event.locals.supabase.rpc('add_geometry', {
@@ -252,15 +245,8 @@ export const actions: Actions = {
 
 	/** Draw a space (storefront, suite, hall) inside this building's footprint. */
 	addSpace: action(async ({ fd, entityId, event }) => {
-		const geo = str(fd, 'geojson_text') ?? str(fd, 'geojson');
-		if (!geo) throw new FormError('Draw the space as a polygon inside the footprint.');
-		let geom: { type?: string; geometry?: unknown };
-		try {
-			geom = JSON.parse(geo);
-		} catch {
-			throw new FormError('That GeoJSON could not be parsed.');
-		}
-		if (geom.type === 'Feature') geom = geom.geometry as typeof geom;
+		const geom = geometryFromForm(fd);
+		if (!geom) throw new FormError('Draw the space as a polygon inside the footprint.');
 		const life = fuzzyPair(fd, 'valid_from', 'valid_to');
 		const floor = str(fd, 'floor');
 		check(

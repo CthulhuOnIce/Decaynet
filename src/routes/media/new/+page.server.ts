@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { loadTags, newPagesPrivate, requireEditor } from '$lib/server/db';
-import { FormError, dbMessage, fuzzyPair, required, slugify, str, temporalFromForm } from '$lib/server/forms';
+import { FormError, dbMessage, fuzzyPair, geometryFromForm, required, slugify, str, temporalFromForm } from '$lib/server/forms';
 import { librarySources, resolveInlineSource } from '$lib/server/sources';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -38,6 +38,8 @@ export const actions: Actions = {
 		const fd = await request.formData();
 		const sb = locals.supabase;
 		try {
+			// read a pasted shape first, so a bad one doesn't leave a half-made page
+			const view = geometryFromForm(fd);
 			let storagePath = str(fd, 'storage_path');
 			// No-JS fallback: the browser normally uploads straight to Storage
 			const file = fd.get('file');
@@ -120,11 +122,10 @@ export const actions: Actions = {
 			}
 
 			// Where the camera stood
-			const view = str(fd, 'geojson_text') ?? str(fd, 'geojson');
 			if (view) {
 				const r = await sb.rpc('add_geometry', {
 					p_entity: entity.id,
-					p_geojson: JSON.parse(view),
+					p_geojson: view,
 					p_role: 'viewpoint',
 					p_valid_from: captured.from,
 					p_valid_from_precision: captured.fromPrecision,
