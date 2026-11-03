@@ -30,20 +30,33 @@ export interface WaybackOptions {
 
 const https = (u: string) => u.replace(/^http:\/\//i, 'https://');
 
-/** Worth archiving: a public http(s) page, not a site's bare home page or a private address. */
-export function archivable(raw: string | null | undefined): boolean {
-	if (!raw) return false;
+/** File-sharing hosts whose links are often "anyone with the link": archiving one would make it public. */
+const SHARE_HOSTS = /(^|\.)(drive\.google\.com|docs\.google\.com|photos\.google\.com|dropbox\.com|dropboxusercontent\.com|onedrive\.live\.com|1drv\.ms|sharepoint\.com|box\.com|icloud\.com|mega\.nz|wetransfer\.com|we\.tl)$/;
+/** Query parameters that carry a credential or signed access. */
+const SECRET_PARAMS = /^(token|access_token|auth|key|api_key|apikey|sig|signature|x-amz-signature|x-goog-signature|se|sv|password|pwd|code|secret|session)$/i;
+
+/** Why a link isn't sent to the archive, or null if it can be. */
+export function notArchivable(raw: string | null | undefined): string | null {
+	if (!raw) return 'No link.';
 	let u: URL;
 	try {
 		u = new URL(raw);
 	} catch {
-		return false;
+		return "The link isn't a valid web address.";
 	}
-	if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+	if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'Only web (http/https) links are archived.';
 	const h = u.hostname.toLowerCase();
-	if (h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal') || !h.includes('.')) return false;
-	if (/^(127|10)\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || h.includes(':')) return false;
-	return (u.pathname !== '/' && u.pathname !== '') || u.search !== '';
+	if (h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal') || !h.includes('.')) return 'Not archived: a private address.';
+	if (/^(127|10)\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || h.includes(':')) return 'Not archived: a private address.';
+	if (SHARE_HOSTS.test(h) || u.username || u.password || [...u.searchParams.keys()].some((k) => SECRET_PARAMS.test(k)))
+		return 'Not archived: it looks like a private share link, which archiving would make public. Add an archived copy by hand if it is public.';
+	if ((u.pathname === '/' || u.pathname === '') && !u.search) return "Not archived: only specific pages are saved, not a site's home page.";
+	return null;
+}
+
+/** Worth archiving: a public http(s) page, not a site's bare home page, a private address or a share link. */
+export function archivable(raw: string | null | undefined): boolean {
+	return notArchivable(raw) === null;
 }
 
 let lastSave = 0;
@@ -94,19 +107,17 @@ export async function findOrCreateSnapshot(url: string, userAgent: string, opt: 
 /** Archive one source's link, if it has one and no archived copy yet. */
 export async function archiveSource(sb: SupabaseClient, id: string, opt: WaybackOptions = {}): Promise<'archived' | 'skipped' | 'failed'> {
 	const [{ data: s }, { data: st }] = await Promise.all([
-		sb.from('sources').select('id, url, archive_url, page:entities!sources_entity_id_fkey(is_private)').eq('id', id).maybeSingle(),
+		sb.from('sources').select('id, url, archive_url').eq('id', id).maybeSingle(),
 		sb.from('site_settings').select('archive_sources, site_name, source_code_url').single()
 	]);
 	if (!s?.url || s.archive_url || !st?.archive_sources) return 'skipped';
 	const mark = (fields: Record<string, unknown>) =>
 		sb.from('sources').update({ archive_checked_at: new Date().toISOString(), ...fields }).eq('id', id).is('archive_url', null);
-	// a private page's link would be announced publicly; wait until it's published (publishing queues it again)
-	if ((s.page as unknown as { is_private?: boolean } | null)?.is_private) {
-		await mark({ archive_error: 'Waiting until the page is published.' });
-		return 'skipped';
-	}
-	if (!archivable(s.url)) {
-		await mark({ archive_error: "Not archived: only specific pages are saved, not a site's home page or a private address." });
+	// Page sources (cited by one page's facts or article) and library sources alike; the link is
+	// someone else's page, and the archive doesn't record which page cited it.
+	const why = notArchivable(s.url);
+	if (why) {
+		await mark({ archive_error: why });
 		return 'skipped';
 	}
 	const ua = `${String(st.site_name).replace(/[^\w .-]/g, '')}/1.0 (Decaynet; ${st.source_code_url})`;
@@ -154,12 +165,6 @@ async function drain() {
 }
 
 let sweeping: ReturnType<typeof setInterval> | null = null;
-
-/** Queue a page's own sources (e.g. once it's published). */
-export async function queuePageSources(sb: SupabaseClient, entityId: string) {
-	const { data } = await sb.from('sources').select('id').eq('entity_id', entityId).not('url', 'is', null).is('archive_url', null);
-	for (const r of data ?? []) queueArchive(r.id, sb);
-}
 
 /** Every 15 minutes: queue sources still without an archived copy (new, or last tried over a day ago). */
 export function startArchiveSweep() {

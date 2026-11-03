@@ -132,7 +132,7 @@
 		<label class="check"><input type="checkbox" name="archive_sources" checked={s.archive_sources ?? true} /> Save source links to the Internet Archive automatically</label>
 		<p class="hint">
 			Each source's link is saved to the Wayback Machine in the background (a recent existing copy is reused), and the archived copy
-			is shown next to the link. Sources on private pages wait until the page is published; archive links typed in by hand are kept.
+			is shown next to the link. This covers library sources and sources made for one page (fact and article citations). Private share links (Google Drive, Dropbox…) are never sent, and archive links typed in by hand are kept.
 			{#if !data.hasServiceKey}Without <code>SUPABASE_SERVICE_ROLE_KEY</code> only new sources are archived, right after they're saved; set it to also catch up on older ones and retry failures daily.{/if}
 		</p>
 	</section>

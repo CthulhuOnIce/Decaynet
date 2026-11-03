@@ -1,6 +1,5 @@
 import { error, fail } from '@sveltejs/kit';
 import { entityBySlug, requirePermission } from '$lib/server/db';
-import { queuePageSources } from '$lib/server/archive';
 import { dbMessage } from '$lib/server/forms';
 import { renderArticle } from '$lib/server/markdown';
 import { extractCitations } from '$lib/sources';
@@ -97,7 +96,6 @@ export const actions: Actions = {
 		const makePrivate = fd.get('private') === 'true';
 		const { error: err } = await locals.supabase.from('entities').update({ is_private: makePrivate }).eq('id', entity.id);
 		if (err) return fail(400, { error: dbMessage(err) });
-		if (!makePrivate) await queuePageSources(locals.supabase, entity.id); // held back while it was private
 		return { ok: makePrivate ? 'Page is now private.' : 'Published: the page is now public.' };
 	},
 	/** Moderators: lock or unlock the article without opening the editor. */
