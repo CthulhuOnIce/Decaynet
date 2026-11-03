@@ -51,9 +51,15 @@ export const load: PageServerLoad = async ({ params, url, locals, parent }) => {
 
 	// For people who can clean up timelines: how many fixes this page has waiting
 	const { perms } = await parent();
-	const timelineFixes = (perms ?? []).includes('clean_timelines')
-		? (((await sb.rpc('timeline_plan', { p_entity: entity.id })).data ?? []) as { op: string; default: boolean }[]).filter((f) => f.op !== 'note' && f.default).length
-		: 0;
+	let timelineFixes = 0;
+	if ((perms ?? []).includes('clean_timelines')) {
+		const plan = (((await sb.rpc('timeline_plan', { p_entity: entity.id })).data ?? []) as { key: string; op: string; default: boolean }[]).filter(
+			(f) => f.op !== 'note' && f.default
+		);
+		// leave out what someone ignored (until the timeline changes); none before migration 0032
+		const ignored = plan.length ? (((await sb.rpc('timeline_dismissed_keys', { p_entity: entity.id })).data ?? []) as string[]) : [];
+		timelineFixes = plan.filter((f) => !ignored.includes(f.key)).length;
+	}
 
 	const geomFeatures: GeoJSON.Feature[] = (geoms.data ?? []).map((g) => ({
 		type: 'Feature',

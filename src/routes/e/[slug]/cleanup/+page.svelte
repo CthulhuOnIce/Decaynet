@@ -6,8 +6,12 @@
 	let { data, form } = $props();
 	const e = $derived(data.entity);
 
-	const actions = $derived(data.fixes.filter((f) => f.op !== 'note'));
-	const notes = $derived(data.fixes.filter((f) => f.op === 'note'));
+	// ignored items stay out of the way until the page's timeline changes (then they come back on their own)
+	const ignoredKeys = $derived(new Set(data.ignored));
+	const ignored = $derived(data.fixes.filter((f) => ignoredKeys.has(f.key)));
+	const live = $derived(data.fixes.filter((f) => !ignoredKeys.has(f.key)));
+	const actions = $derived(live.filter((f) => f.op !== 'note'));
+	const notes = $derived(live.filter((f) => f.op === 'note'));
 	const sections = $derived(
 		(Object.keys(TIMELINE_SECTIONS) as TimelineSection[])
 			.map((id) => ({ id, ...TIMELINE_SECTIONS[id], fixes: actions.filter((f) => f.section === id) }))
@@ -45,9 +49,14 @@
 					<h3>Needs a person</h3>
 					<ul class="plain-list">
 						{#each notes as n (n.key)}
-							<li>
-								{describeFix(n)}
-								{#if n.rule === 'rebuilt'}<a href="/e/{e.slug}/duplicate">Duplicate this page →</a>{/if}
+							<li class="item">
+								<span>
+									{describeFix(n)}
+									{#if n.rule === 'rebuilt'}<a href="/e/{e.slug}/duplicate">Duplicate this page →</a>{/if}
+								</span>
+								<form method="post" action="?/dismiss" use:enhance>
+									<button class="ignore" name="dismiss" value={n.key} title="Wrong here: hide it until this page's timeline changes">Ignore</button>
+								</form>
 							</li>
 						{/each}
 					</ul>
@@ -61,7 +70,9 @@
 					<p class="muted">
 						{notes.length
 							? 'Everything that can be fixed automatically already agrees with the lifespan.'
-							: 'The conditions, shapes, addresses and relations already agree with the lifespan.'}
+							: ignored.length
+								? 'Everything left was ignored (below). It comes back if this page’s timeline changes.'
+								: 'The conditions, shapes, addresses and relations already agree with the lifespan.'}
 					</p>
 					<a class="btn" href="/e/{e.slug}">Back to the page</a>
 				</div>
@@ -95,7 +106,7 @@
 							<ul class="plain-list">
 								{#each s.fixes as f (f.key)}
 									{@const change = fixChange(f)}
-									<li class:suggestion={!f.default}>
+									<li class="item" class:suggestion={!f.default}>
 										<label class="check">
 											<input type="checkbox" name="key" value={f.key} bind:group={picked} />
 											<span>
@@ -104,6 +115,13 @@
 												{#if change}<span class="change mono">{change}</span>{/if}
 											</span>
 										</label>
+										<button
+											class="ignore"
+											formaction="?/dismiss"
+											name="dismiss"
+											value={f.key}
+											title="Wrong here: hide it until this page's timeline changes">Ignore</button
+										>
 									</li>
 								{/each}
 							</ul>
@@ -117,9 +135,37 @@
 						<button class="primary" disabled={!picked.length || busy}>
 							{busy ? 'Applying…' : `Apply ${plural(picked.length, 'edit')}`}
 						</button>
+						<button
+							class="ghost"
+							formaction="?/dismiss"
+							disabled={!picked.length || busy}
+							title="Hide the ticked items until this page's timeline changes">Ignore ticked</button
+						>
 						<a class="btn ghost" href="/e/{e.slug}">Cancel</a>
 					</div>
 				</form>
+			{/if}
+
+			{#if ignored.length}
+				<details class="card ignored">
+					<summary>
+						{plural(ignored.length, 'ignored item')}
+						<span class="muted small">· hidden until this page's timeline changes</span>
+					</summary>
+					<ul class="plain-list">
+						{#each ignored as f (f.key)}
+							<li class="item">
+								<span class="muted">{describeFix(f)}</span>
+								<form method="post" action="?/restore" use:enhance>
+									<button class="ignore" name="restore" value={f.key}>Restore</button>
+								</form>
+							</li>
+						{/each}
+					</ul>
+					{#if ignored.length > 1}
+						<form method="post" action="?/restore" use:enhance><button class="ghost small">Restore all</button></form>
+					{/if}
+				</details>
 			{/if}
 		</div>
 
@@ -228,6 +274,45 @@
 		height: 9px;
 		border-radius: 50%;
 		flex: none;
+	}
+	.item {
+		display: flex;
+		gap: 10px;
+		align-items: flex-start;
+		justify-content: space-between;
+	}
+	.item > :first-child {
+		flex: 1;
+		min-width: 0;
+	}
+	.item form {
+		margin: 0;
+	}
+	button.ignore {
+		flex: none;
+		padding: 1px 8px;
+		font-size: 0.72rem;
+		background: none;
+		border: 1px solid var(--line-2);
+		border-radius: 999px;
+		color: var(--muted);
+		cursor: pointer;
+	}
+	button.ignore:hover {
+		color: var(--ink);
+		border-color: var(--muted);
+	}
+	.ignored summary {
+		cursor: pointer;
+	}
+	.ignored ul {
+		margin: 10px 0;
+	}
+	.ignored li > span {
+		font-size: 0.92rem;
+	}
+	.ignored li + li {
+		margin-top: 6px;
 	}
 	button.link {
 		background: none;
