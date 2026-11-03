@@ -6,7 +6,7 @@
 	const e = $derived(data.entity);
 	const p = $derived(data.preview && !data.preview.blocked ? data.preview : null);
 	const kinds = $derived(data.vocab.kinds.filter((k) => k.id !== e.kind && k.id !== 'media'));
-	const chosen = $derived(data.vocab.kinds.find((k) => k.id === data.to));
+	const chosen = $derived(data.to !== e.kind ? data.vocab.kinds.find((k) => k.id === data.to) : null);
 
 	/** "2 names, 1 tag" style counts for a list of items */
 	function counts(items: { what: string }[]) {
@@ -30,22 +30,24 @@
 	});
 </script>
 
-<svelte:head><title>Duplicate as another kind · {e.name}</title></svelte:head>
+<svelte:head><title>Duplicate · {e.name}</title></svelte:head>
 
 <div class="page narrow">
-	<div class="eyebrow">Duplicate as another kind</div>
+	<div class="eyebrow">Duplicate</div>
 	<h1><a href="/e/{e.slug}">{e.name}</a></h1>
 	<p class="muted">
-		Got the kind wrong, like a “building” that is really the business inside it? This makes a <strong>new page</strong> of the
-		right kind next to this one and copies everything that fits. <strong>This page isn't changed</strong>: once the copy looks
-		right, delete this one or keep both.
+		Makes a <strong>new page</strong> next to this one and copies everything that fits; <strong>this page isn't changed</strong>.
+		An exact copy splits a page that holds two things, like a building demolished and another built on the same spot. Another
+		kind fixes a page created as the wrong thing, like a “building” that is really the business inside it.
 	</p>
 
 	<form method="get" class="row pick">
-		<label for="to">New kind</label>
+		<label for="to">Copy as</label>
 		<select id="to" name="to" onchange={(ev) => goto(`?to=${(ev.currentTarget as HTMLSelectElement).value}`, { noScroll: true, keepFocus: true })}>
-			<option value="" selected={!data.to} disabled>Choose…</option>
-			{#each kinds as k (k.id)}<option value={k.id} selected={data.to === k.id}>{k.label}</option>{/each}
+			<option value={e.kind} selected={data.to === e.kind}>Same kind: exact copy</option>
+			<optgroup label="Another kind">
+				{#each kinds as k (k.id)}<option value={k.id} selected={data.to === k.id}>{k.label}</option>{/each}
+			</optgroup>
 		</select>
 		<noscript><button>Preview</button></noscript>
 	</form>
@@ -69,7 +71,7 @@
 		>
 			<input type="hidden" name="kind" value={p.to} />
 			<section class="card stack">
-				<h2>The new {p.to_label.toLowerCase()}</h2>
+				<h2>{p.same ? 'The copy' : `The new ${p.to_label.toLowerCase()}`}</h2>
 				<div><label for="name">Name</label><input id="name" name="name" bind:value={newName} required /></div>
 				{#if p.tie}
 					<p class="tie">
@@ -85,8 +87,14 @@
 					<p class="small">
 						Name, summary, lifespan and privacy{#if p.copied.length}; {counts(p.copied)}{/if}{#if p.article}; the article, as its first revision{/if}{#if p.sources};
 							{p.sources} source{p.sources === 1 ? '' : 's'} made for this page (citations point at the copies){/if}.
-						{#if p.event}It gets an event type of “Other” to change afterwards.{/if}
+						{#if p.event && !p.same}It gets an event type of “Other” to change afterwards.{/if}
 					</p>
+					{#if p.same}
+						<p class="small hint">
+							Splitting two buildings? Afterwards, remove the second building's facts from this page and the first one's from the
+							copy, give each its own dates, then run <em>Clean up timeline</em> on both.
+						</p>
+					{/if}
 					{#if p.copied.length}
 						<details>
 							<summary class="small">Show {p.copied.length} item{p.copied.length === 1 ? '' : 's'}</summary>
@@ -104,7 +112,7 @@
 				{/if}
 			</section>
 			<div class="row">
-				<button class="primary" disabled={busy}>{busy ? 'Creating…' : `Create the ${p.to_label.toLowerCase()}`}</button>
+				<button class="primary" disabled={busy}>{busy ? 'Creating…' : p.same ? 'Create the copy' : `Create the ${p.to_label.toLowerCase()}`}</button>
 				<a class="btn ghost" href="/e/{e.slug}">Cancel</a>
 			</div>
 		</form>

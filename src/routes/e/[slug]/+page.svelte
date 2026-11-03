@@ -157,7 +157,7 @@
 					{#if canEdit}
 						<a role="menuitem" href="/media/new?depicts={e.slug}">Add media</a>
 						{#if e.kind !== 'media'}
-							<a role="menuitem" href="/e/{e.slug}/duplicate" title="Make a new page of another kind from this one">Duplicate as another kind…</a>
+							<a role="menuitem" href="/e/{e.slug}/duplicate" title="Copy this page, as it is or as another kind">Duplicate…</a>
 						{/if}
 						{#if !e.is_private}
 							<form

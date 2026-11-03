@@ -282,9 +282,12 @@ At country or world scale, the map only fetches what's in view (plus a margin) a
 5. **Write the article** with **Edit article** (Markdown). Link pages with `[[slug]]` or `[[slug|label]]`; links to pages that don't exist yet show red. Set the article status (stub → draft → needs sources → needs review → good) and add an edit summary.
 6. **Add media** with **+ Media**. A photo has three dates: when it was taken, the period it shows, and when it was added. You can also mark where the camera stood.
 
-### Wrong kind? Duplicate as another kind
+### Two things in one page, or the wrong kind? Duplicate
 
-Imports and quick edits sometimes get the kind wrong: a "building" that is really the business inside it, a site that is a building, an event created as a place. *More → Duplicate as another kind…* makes a **new page** of the right kind next to the original and copies everything that fits: name, summary, lifespan, other names, tags, facts that apply to the new kind, links, the article (as its first revision) and the sources made for the page (citations point at the copies). **The original isn't changed**; review the copy, then delete the original or keep both.
+*More → Duplicate…* makes a **new page** next to the original and copies it; **the original isn't changed**.
+
+- **Exact copy** (the default): everything but map and Wikidata ids. Use it when one page holds two things, like a building demolished and another built on the same spot (the timeline cleanup flags that case). Then remove the second building's facts from the original and the first one's from the copy.
+- **As another kind**: for pages created as the wrong thing: a "building" that is really the business inside it, a site that is a building, an event created as a place. It copies everything that fits: name, summary, lifespan, other names, tags, facts that apply to the new kind, links, the article (as its first revision) and the sources made for the page (citations point at the copies). **The original isn't changed**; review the copy, then delete the original or keep both.
 
 When a place becomes an occupant (building → organization, person or event), its footprint, addresses, conditions and place links stay with the place, and the new page is linked to it: it *occupies*, *lived at* or *happened at* the original for its lifespan. An occupant becoming a place is linked the other way. Map and Wikidata ids stay with the original, since each belongs to one page. Media pages can't be duplicated as another kind.
 
@@ -489,9 +492,10 @@ Everyone can manage their own profile, email and password at **Account**.
 | Shapes | One footprint, point or line covers the whole lifespan; redrawn ones follow each other |
 | Addresses | A single address covers the building's lifespan; several (corner buildings) are kept within it |
 | Names, facts | Official renamings follow each other; dated names and facts stay within the lifespan |
-| Relations, spaces | Tenants, owners and locations end when either side does; storefronts and suites end with their building |
+| Relations | Occupants (and tenants of its storefronts and suites) end when the place stops being in use: the first vacant, closed, abandoned or demolished condition after they moved in; "designed by" / "built by" end at construction; links stay within both sides' lifespans. *Suggests* starting an undated occupancy or ownership with the place |
+| Spaces | Storefronts and suites end with their building |
 
-Fixes are ticked by default; suggestions are not. Dates are compared at their precision, so "until 1949" followed by "from 1950" is continuous, not a gap. Some things need a person and are only listed: several undated conditions, footprints that start together (wings drawn separately), a fact entirely outside the lifespan. Added conditions are marked *approximate* with a note, and every edit goes through the page history.
+Fixes are ticked by default; suggestions are not. Dates are compared at their precision, so "until 1949" followed by "from 1950" is continuous, not a gap. Some things need a person and are only listed: several undated conditions, footprints that start together (wings drawn separately), a fact entirely outside the lifespan, and a page that holds two buildings (in use again after *Demolished*), which links to *Duplicate*. Added conditions are marked *approximate* with a note, and every edit goes through the page history.
 
 **Changes** lists every edit to prose and facts. Each page's **History** shows its revisions, every fact change and its article status transitions.
 

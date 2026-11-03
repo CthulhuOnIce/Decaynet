@@ -15,8 +15,12 @@ export interface TimelineFix {
 	next?: string | null;
 	/** for inserted conditions */
 	status?: string;
-	/** reasons for a range change: start, end, open, overlap, gap, or condition rules */
+	/** reasons for a range change: start, end, open, overlap, gap, end_of_use, construction, or condition rules */
 	why?: string[];
+	/** relations: which end(s) the item changes */
+	sets?: ('start' | 'end')[];
+	/** relations ending with use: the condition that ends it ("Vacant") */
+	use?: string | null;
 	before?: FixRange;
 	after?: FixRange;
 	/** on by default; off = a suggestion a person should confirm */
@@ -39,7 +43,7 @@ export const TIMELINE_SECTIONS: Record<TimelineSection, { title: string; why: st
 	shapes: { title: 'Shapes', why: 'A single footprint, point or line covers the whole lifespan; redrawn ones follow each other.' },
 	addresses: { title: 'Addresses', why: 'A single address covers the lifespan; several are kept within it.' },
 	names: { title: 'Names', why: 'Official names follow each other; dated names stay within the lifespan.' },
-	relations: { title: 'Relations', why: 'Tenants, owners and locations end when either side does.' },
+	relations: { title: 'Relations', why: 'Tenants and occupants end when the place stops being in use; links stay within both sides’ lifespans; design and construction end when it’s built.' },
 	spaces: { title: 'Spaces', why: 'Storefronts, suites and halls end with their building.' },
 	facts: { title: 'Facts', why: 'Dated facts stay within the lifespan.' }
 };
@@ -100,6 +104,12 @@ export function describeFix(f: TimelineFix): string {
 		case 'extend_open':
 			return `Keep ${q(f.label)} running: it ends in ${to(b)} but nothing recorded follows.`;
 		// shapes, addresses, names, relations, spaces, facts
+		case 'end_with_use':
+			return `${f.label}: ends in ${to(a)}, when it's recorded as ${q(f.use)}.`;
+		case 'end_at_construction':
+			return `${f.label}: ends with construction, in ${to(a)}.`;
+		case 'start_with_place':
+			return `${f.label}: starts in ${from(a)}, when the place does.`;
 		case 'fit_shape':
 		case 'fit_address':
 		case 'fit_name':
@@ -117,6 +127,8 @@ export function describeFix(f: TimelineFix): string {
 			return `${q(f.label)} has no date. Add the year it happened by hand.`;
 		case 'concurrent':
 			return `Several ${f.label === 'area' ? 'footprints' : `${f.label ?? ''} shapes`} start on the same date (wings drawn separately, or a duplicate?), so they weren't chained.`;
+		case 'rebuilt':
+			return `Recorded as ${q(f.label)} in ${from(b)}, then ${q(f.next)} in ${to(b)}: two buildings in one page. Duplicate the page, then remove the later facts here and the earlier ones from the copy.`;
 		case 'outside':
 			return `${q(f.label)} (${range(b)}) lies outside the lifespan. Check its dates or the lifespan.`;
 		default:

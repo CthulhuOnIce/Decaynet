@@ -15,6 +15,8 @@ interface DuplicatePreview {
 	from_label: string;
 	to: string;
 	to_label: string;
+	/** an exact copy (same kind) */
+	same: boolean;
 	name: string;
 	article: boolean;
 	sources: number;
@@ -28,7 +30,8 @@ interface DuplicatePreview {
 export const load: PageServerLoad = async ({ params, locals, url }) => {
 	await requirePermission(locals, 'edit_content');
 	const entity = await entityBySlug(locals.supabase, params.slug);
-	const to = url.searchParams.get('to') ?? '';
+	// an exact copy unless another kind is asked for
+	const to = url.searchParams.get('to') || entity.kind;
 	let preview: DuplicatePreview | null = null;
 	if (to) {
 		const { data, error } = await locals.supabase.rpc('duplicate_as_kind_preview', { p_entity: entity.id, p_kind: to });

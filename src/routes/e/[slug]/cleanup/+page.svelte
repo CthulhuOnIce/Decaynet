@@ -44,7 +44,12 @@
 				<section class="card notes">
 					<h3>Needs a person</h3>
 					<ul class="plain-list">
-						{#each notes as n (n.key)}<li>{describeFix(n)}</li>{/each}
+						{#each notes as n (n.key)}
+							<li>
+								{describeFix(n)}
+								{#if n.rule === 'rebuilt'}<a href="/e/{e.slug}/duplicate">Duplicate this page →</a>{/if}
+							</li>
+						{/each}
 					</ul>
 					<a class="small" href="/e/{e.slug}/facts">Edit facts by hand →</a>
 				</section>
