@@ -60,6 +60,7 @@ export const actions: Actions = {
 				basemap_mode: str(fd, 'basemap_mode') ?? 'fade',
 				allow_signups: bool(fd, 'allow_signups'),
 				new_pages_private: bool(fd, 'new_pages_private'),
+				archive_sources: bool(fd, 'archive_sources'),
 				default_role: str(fd, 'default_role') ?? 'contributor',
 				tips_enabled: bool(fd, 'tips_enabled'),
 				tips_intro: str(fd, 'tips_intro') ?? '',

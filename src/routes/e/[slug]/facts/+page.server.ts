@@ -1,4 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
+import { queuePageSources } from '$lib/server/archive';
 import { entityBySlug, loadTags, requireEditor } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, required, slugify, str, temporalFromForm } from '$lib/server/forms';
 import { discardSource, resolveInlineSource, sourceOptions } from '$lib/server/sources';
@@ -122,6 +123,7 @@ export const actions: Actions = {
 				})
 				.eq('id', entityId)
 		);
+		if (fd.has('has_private') && fd.get('is_private') !== 'on') await queuePageSources(event.locals.supabase, entityId);
 		const eventType = str(fd, 'event_type');
 		if (eventType) {
 			check(await event.locals.supabase.from('event_details').upsert({ entity_id: entityId, event_type: eventType }));

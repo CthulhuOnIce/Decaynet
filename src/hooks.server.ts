@@ -4,10 +4,12 @@ import { env as priv } from '$env/dynamic/private';
 import { AUTH_COOKIE } from '$lib/supabaseConfig';
 import type { Handle, ServerInit } from '@sveltejs/kit';
 import { ensureBootstrapped } from '$lib/server/bootstrap';
+import { startArchiveSweep } from '$lib/server/archive';
 
-/** On startup: create the first admin from env, or print a /setup code. */
+/** On startup: create the first admin from env, or print a /setup code; start archiving source links. */
 export const init: ServerInit = async () => {
 	await ensureBootstrapped();
+	startArchiveSweep();
 };
 
 export const handle: Handle = async ({ event, resolve }) => {

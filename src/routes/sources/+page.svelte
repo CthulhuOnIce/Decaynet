@@ -70,7 +70,10 @@
 				<div><label for="a">Author</label><input id="a" name="author" /></div>
 				<div><label for="pub">Publisher</label><input id="pub" name="publisher" /></div>
 				<div><label for="u">URL</label><input id="u" name="url" type="url" /></div>
-				<div><label for="au">Archived copy URL</label><input id="au" name="archive_url" type="url" /></div>
+				<div>
+					<label for="au">Archived copy URL</label><input id="au" name="archive_url" type="url" placeholder="Leave blank to save it automatically" />
+					<p class="hint">Links are saved to the Internet Archive in the background. Fill this in only to use a copy kept elsewhere.</p>
+				</div>
 				<div class="fields">
 					<div><label for="r">Repository</label><input id="r" name="repository" placeholder="City or university archive" /></div>
 					<div><label for="c">Call number</label><input id="c" name="call_number" /></div>

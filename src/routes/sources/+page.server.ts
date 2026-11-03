@@ -1,4 +1,5 @@
 import { fail } from '@sveltejs/kit';
+import { queueArchive } from '$lib/server/archive';
 import { requireEditor } from '$lib/server/db';
 import { FormError, dbMessage, required, str } from '$lib/server/forms';
 import { parseFuzzyDate } from '$lib/time';
@@ -20,7 +21,8 @@ export const actions: Actions = {
 		const fd = await request.formData();
 		try {
 			const published = parseFuzzyDate(str(fd, 'published_on'));
-			const { error } = await locals.supabase.from('sources').insert({
+			const archiveUrl = str(fd, 'archive_url');
+			const { data, error } = await locals.supabase.from('sources').insert({
 				title: required(fd, 'title', 'Title'),
 				kind: str(fd, 'kind') ?? 'other',
 				author: str(fd, 'author'),
@@ -28,12 +30,13 @@ export const actions: Actions = {
 				published_on: published?.date ?? null,
 				published_precision: published?.precision ?? 'year',
 				url: str(fd, 'url'),
-				archive_url: str(fd, 'archive_url'),
+				archive_url: archiveUrl,
 				repository: str(fd, 'repository'),
 				call_number: str(fd, 'call_number'),
 				notes: str(fd, 'notes')
-			});
+			}).select('id, url').single();
 			if (error) throw new FormError(dbMessage(error));
+			if (data.url && !archiveUrl) queueArchive(data.id, locals.supabase);
 			return { ok: true };
 		} catch (e) {
 			if (e instanceof FormError || e instanceof Error) return fail(400, { error: e.message });

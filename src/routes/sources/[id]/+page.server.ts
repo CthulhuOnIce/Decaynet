@@ -1,4 +1,6 @@
 import { error, fail } from '@sveltejs/kit';
+import { archiveSource } from '$lib/server/archive';
+import { serviceClient } from '$lib/server/admin';
 import { requireEditor } from '$lib/server/db';
 import { dbMessage } from '$lib/server/forms';
 import type { Actions, PageServerLoad } from './$types';
@@ -35,5 +37,14 @@ export const actions: Actions = {
 		const { error: err } = await locals.supabase.from('sources').update({ entity_id: null }).eq('id', params.id);
 		if (err) return fail(400, { error: dbMessage(err) });
 		return { ok: 'Added to the library.' };
+	},
+	/** Archive the link now (or again, after a failure). Waits for the result, which can take a minute. */
+	archive: async ({ params, locals }) => {
+		await requireEditor(locals);
+		const sb = serviceClient() ?? locals.supabase;
+		const result = await archiveSource(sb, params.id);
+		if (result === 'archived') return { ok: 'Saved to the Internet Archive.' };
+		const { data } = await sb.from('sources').select('archive_error').eq('id', params.id).maybeSingle();
+		return fail(400, { error: data?.archive_error ?? "This source's link can't be archived (archiving may be turned off)." });
 	}
 };

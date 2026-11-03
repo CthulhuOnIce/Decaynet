@@ -123,6 +123,10 @@ export interface SourceRow {
 	published_precision: Precision;
 	url: string | null;
 	archive_url: string | null;
+	/** archive_url was saved automatically (migration 0029) */
+	archive_auto?: boolean;
+	archive_checked_at?: string | null;
+	archive_error?: string | null;
 	repository: string | null;
 	call_number: string | null;
 	notes: string | null;
@@ -388,6 +392,8 @@ export interface SiteSettings {
 	map_bounds: [number, number, number, number] | null;
 	setup_complete: boolean;
 	new_pages_private: boolean;
+	/** save source links to the Internet Archive (migration 0029) */
+	archive_sources?: boolean;
 	updated_at: string;
 }
 

@@ -6,6 +6,14 @@
 	let { data, form } = $props();
 	const s = $derived(data.source);
 	const owner = $derived(s.entity_id ? data.entities[s.entity_id] : null);
+	let archiving = $state(false);
+	/** "Internet Archive copy, 3 Nov 2026" from a web.archive.org/web/20261103…/ link */
+	function archivedOn(u: string) {
+		const m = u.match(/\/web\/(\d{4})(\d{2})(\d{2})\d*/);
+		if (!m) return u;
+		const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+		return `Internet Archive copy, ${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}`;
+	}
 </script>
 
 <svelte:head><title>{s.title} · Sources · {data.settings.site_name}</title></svelte:head>
@@ -33,7 +41,27 @@
 			{#if s.repository}<tr><th>Repository</th><td>{s.repository}</td></tr>{/if}
 			{#if s.call_number}<tr><th>Call number</th><td class="mono">{s.call_number}</td></tr>{/if}
 			{#if s.url}<tr><th>URL</th><td><a href={s.url} target="_blank" rel="noopener">{s.url}</a></td></tr>{/if}
-			{#if s.archive_url}<tr><th>Archived</th><td><a href={s.archive_url} target="_blank" rel="noopener">{s.archive_url}</a></td></tr>{/if}
+			{#if s.archive_url}
+				<tr>
+					<th>Archived</th>
+					<td>
+						<a href={s.archive_url} target="_blank" rel="noopener">{s.archive_auto ? archivedOn(s.archive_url) : s.archive_url}</a>
+						{#if s.archive_auto}<span class="muted small">· saved automatically</span>{/if}
+					</td>
+				</tr>
+			{:else if s.url}
+				<tr>
+					<th>Archived</th>
+					<td>
+						<span class="muted">{s.archive_error ?? (s.archive_checked_at ? 'Not yet' : 'Queued: the link is saved to the Internet Archive in the background.')}</span>
+						{#if data.user}
+							<form method="post" action="?/archive" class="inline" use:enhance={() => { archiving = true; return async ({ update }) => { await update(); archiving = false; }; }}>
+								<button class="ghost small" disabled={archiving}>{archiving ? 'Saving… (can take a minute)' : s.archive_checked_at ? 'Try again' : 'Archive now'}</button>
+							</form>
+						{/if}
+					</td>
+				</tr>
+			{/if}
 		</tbody>
 	</table>
 	{#if s.notes}<p>{s.notes}</p>{/if}
@@ -69,6 +97,10 @@
 </div>
 
 <style>
+	form.inline {
+		display: inline;
+		margin-left: 6px;
+	}
 	.owner {
 		display: flex;
 		align-items: center;

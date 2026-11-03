@@ -318,6 +318,7 @@
 							{#if s.publisher}. {s.publisher}{/if}
 							{#if s.published_on}, {formatFuzzy(s.published_on, s.published_precision)}{/if}
 							{#if s.url}· <a href={s.url} target="_blank" rel="noopener">link</a>{/if}
+							{#if s.archive_url}· <a href={s.archive_url} target="_blank" rel="noopener" title="Archived copy, in case the link stops working">archived</a>{/if}
 							{#if s.entity_id === data.entity.id}<span class="muted small">· this page's source</span>{/if}
 						</li>
 					{/each}
