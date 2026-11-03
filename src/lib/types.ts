@@ -209,6 +209,8 @@ export interface TimelineRow {
 	confidence: Confidence;
 	source_id: string | null;
 	color: string;
+	/** conditions: optional public context */
+	description: string | null;
 }
 
 export interface RelationRow {
@@ -245,6 +247,8 @@ export interface ChronologyRow {
 	label: string;
 	subtype: string | null;
 	color: string;
+	/** conditions: optional public context */
+	description: string | null;
 }
 
 export interface SearchHit {

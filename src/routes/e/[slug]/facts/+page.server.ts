@@ -76,6 +76,13 @@ const check = (res: { error: { message: string; code?: string } | null }) => {
 	if (res.error) throw new FormError(dbMessage(res.error));
 };
 
+/** A condition's public description: trimmed, at most 1000 characters (the database enforces it too). */
+function conditionDescription(fd: FormData): string | null {
+	const d = str(fd, 'description');
+	if (d && d.length > 1000) throw new FormError('Keep the description under 1000 characters.');
+	return d;
+}
+
 /** "office=Mayor, floor=2" or JSON → qualifiers object */
 function parseQualifiers(s: string | null): Record<string, string | number> {
 	if (!s) return {};
@@ -137,6 +144,7 @@ export const actions: Actions = {
 			await event.locals.supabase.from('entity_states').insert({
 				entity_id: entityId,
 				status: required(fd, 'status', 'Status'),
+				description: conditionDescription(fd),
 				...temporalFromForm(fd)
 			})
 		);
@@ -274,7 +282,9 @@ export const actions: Actions = {
 	updateFact: action(async ({ fd, event }) => {
 		const table = str(fd, 'table');
 		if (!isComponent(table)) throw new FormError('Unknown fact type.');
-		check(await event.locals.supabase.from(table).update(temporalFromForm(fd)).eq('id', required(fd, 'id')));
+		// conditions also carry a public description (an empty box clears it)
+		const extra = table === 'entity_states' && fd.has('description') ? { description: conditionDescription(fd) } : {};
+		check(await event.locals.supabase.from(table).update({ ...temporalFromForm(fd), ...extra }).eq('id', required(fd, 'id')));
 	}),
 
 	deleteFact: action(async ({ fd, event }) => {

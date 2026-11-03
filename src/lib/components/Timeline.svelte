@@ -43,6 +43,7 @@
 			{#if r.source_id && sourceIndex[r.source_id]}
 				<sup><a href="#source-{sourceIndex[r.source_id]}">[{sourceIndex[r.source_id]}]</a></sup>
 			{/if}
+			{#if r.description}<p class="desc">{r.description}</p>{/if}
 		</div>
 	</li>
 {/snippet}
@@ -96,6 +97,13 @@
 	}
 	li.lifespan .what {
 		font-weight: 600;
+	}
+	.desc {
+		margin: 3px 0 0;
+		font-size: 0.88rem;
+		line-height: 1.45;
+		color: var(--ink-2);
+		white-space: pre-line;
 	}
 	li.geometry,
 	li.attribute {

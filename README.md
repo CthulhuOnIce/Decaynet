@@ -278,9 +278,10 @@ At country or world scale, the map only fetches what's in view (plus a margin) a
    | `May 12, 1926`, `1926-05-12` | the day |
 
    Leave **Until** blank if something is still true.
-4. **Cite it.** Pick a source on any fact, with a page or frame number, or choose *+ New source…* to create one right there for that page. In an article, the **Cite** button inserts a numbered footnote the same way. Sources used across many pages (a city directory, a Sanborn atlas) belong in the shared library on the **Sources** page; a page's own source can be shared later with *Add to library*. Mark uncertain facts *approximate*, *speculative* or *disputed*.
-5. **Write the article** with **Edit article** (Markdown). Link pages with `[[slug]]` or `[[slug|label]]`; links to pages that don't exist yet show red. Set the article status (stub → draft → needs sources → needs review → good) and add an edit summary.
-6. **Add media** with **+ Media**. A photo has three dates: when it was taken, the period it shows, and when it was added. You can also mark where the camera stood.
+4. **Give conditions context.** A condition (vacant, closed, abandoned…) can have an optional **description**, shown under it on the page timeline and the city *Timeline*: "Closed after the 1953 fire; the owners moved to Chicago." The *internal note* on every fact stays for editors.
+5. **Cite it.** Pick a source on any fact, with a page or frame number, or choose *+ New source…* to create one right there for that page. In an article, the **Cite** button inserts a numbered footnote the same way. Sources used across many pages (a city directory, a Sanborn atlas) belong in the shared library on the **Sources** page; a page's own source can be shared later with *Add to library*. Mark uncertain facts *approximate*, *speculative* or *disputed*.
+6. **Write the article** with **Edit article** (Markdown). Link pages with `[[slug]]` or `[[slug|label]]`; links to pages that don't exist yet show red. Set the article status (stub → draft → needs sources → needs review → good) and add an edit summary.
+7. **Add media** with **+ Media**. A photo has three dates: when it was taken, the period it shows, and when it was added. You can also mark where the camera stood.
 
 ### Two things in one page, or the wrong kind? Duplicate
 

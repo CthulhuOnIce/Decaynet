@@ -49,6 +49,7 @@
 						<span class="label" style:color={r.color}>{r.label}</span>
 						<a href="/e/{r.slug}?y={r.at.slice(0, 4)}">{r.name}</a>
 						<a class="map muted small" href="/?y={r.at.slice(0, 4)}&sel={r.entity_id}" title="See it on the map">map ↗</a>
+						{#if r.description}<p class="desc">{r.description}</p>{/if}
 					</li>
 				{/each}
 			</ol>
@@ -88,6 +89,14 @@
 		margin: 0;
 		padding: 0 0 0 16px;
 		border-left: 2px solid var(--line);
+	}
+	.items .desc {
+		flex-basis: 100%;
+		margin: -4px 0 2px;
+		font-size: 0.86rem;
+		line-height: 1.45;
+		color: var(--ink-2);
+		white-space: pre-line;
 	}
 	.items li {
 		position: relative;

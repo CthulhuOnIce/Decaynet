@@ -100,7 +100,7 @@
 			<input id="{idPrefix}-srcd" name="source_detail" placeholder="p. 42, frame 7…" value={v.source_detail ?? ''} />
 		</div>
 		<div>
-			<label for="{idPrefix}-note">Note</label>
+			<label for="{idPrefix}-note" title="For editors; not shown on the timeline">Internal note</label>
 			<input id="{idPrefix}-note" name="note" value={v.note ?? ''} />
 		</div>
 	</div>

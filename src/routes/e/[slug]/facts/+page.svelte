@@ -59,7 +59,8 @@
 				<span class="date">{range(f)}</span>
 				<ConfidenceMark confidence={f.confidence} />
 				{#if f.source_id}<span class="muted small">· cited</span>{/if}
-				{#if f.note}<div class="muted small">{f.note}</div>{/if}
+				{#if table === 'entity_states' && f.description}<div class="desc small">{f.description}</div>{/if}
+				{#if f.note}<div class="muted small note">Note: {f.note}</div>{/if}
 			</div>
 			<div class="row">
 				<form method="post" action="?/deleteFact" use:enhance>
@@ -71,11 +72,17 @@
 			</div>
 		</div>
 		<details>
-			<summary class="muted small">Edit dates & citation</summary>
+			<summary class="muted small">{table === 'entity_states' ? 'Edit dates, description & citation' : 'Edit dates & citation'}</summary>
 			<form method="post" action="?/updateFact" use:enhance={() => async ({ update }) => update({ reset: false })}>
 				<input type="hidden" name="section" value={table} />
 				<input type="hidden" name="table" value={table} />
 				<input type="hidden" name="id" value={f.id} />
+				{#if table === 'entity_states'}
+					<div class="field">
+						<label for="u-{f.id}-desc">Description <span class="muted">(shown on the timeline)</span></label>
+						<textarea id="u-{f.id}-desc" name="description" rows="2" maxlength="1000">{f.description ?? ''}</textarea>
+					</div>
+				{/if}
 				<TemporalFields values={f} sources={data.sources} idPrefix="u-{f.id}" />
 				<button>Update</button>
 			</form>
@@ -215,6 +222,10 @@
 						{#each data.vocab.statuses as s (s.id)}<option value={s.id}>{s.label}</option>{/each}
 					</select>
 				</div>
+			</div>
+			<div class="field">
+				<label for="s-desc">Description <span class="muted">(optional, shown on the timeline)</span></label>
+				<textarea id="s-desc" name="description" rows="2" maxlength="1000" placeholder="Closed after the 1953 fire; the owners moved to Chicago."></textarea>
 			</div>
 			<TemporalFields sources={data.sources} idPrefix="s" />
 			<button>Add condition</button>
@@ -490,5 +501,16 @@
 	}
 	ul.plain-list {
 		margin-bottom: 12px;
+	}
+	.desc {
+		margin-top: 2px;
+		color: var(--ink-2);
+		white-space: pre-line;
+	}
+	.note {
+		font-style: italic;
+	}
+	textarea[name='description'] {
+		min-height: 56px;
 	}
 </style>
