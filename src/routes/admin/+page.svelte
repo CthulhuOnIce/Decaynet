@@ -15,12 +15,12 @@
 
 	const attention = $derived(
 		[
-			can('clean_timelines') &&
-				s.timelines !== null && {
+			can('clean_timelines') && {
 					href: '/admin/timelines',
 					title: 'Timelines',
 					text: 'Loose ends: no condition recorded, overlaps, tenants and addresses outliving a building, undated shapes.',
-					stat: s.timelines ? plural(s.timelines, 'page') + ' to review' : 'All tidy',
+					// null: still being worked out (it checks every page) — the count shows on the next visit
+					stat: s.timelines === null ? 'Review →' : s.timelines ? plural(s.timelines, 'page') + ' to review' : 'All tidy',
 					alert: !!s.timelines
 				},
 			can('review_tips') && {

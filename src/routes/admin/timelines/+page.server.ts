@@ -1,25 +1,21 @@
 import { requirePermission } from '$lib/server/db';
+import { reviewRows } from '$lib/server/timelineReview';
 import { dbFailure } from '$lib/server/schema';
 import type { PageServerLoad } from './$types';
 
-interface ReviewRow {
-	entity_id: string;
-	slug: string;
-	name: string;
-	kind: string;
-	fixes: number;
-	suggestions: number;
-	notes: number;
-	sections: string[];
-}
 
 export const load: PageServerLoad = async ({ locals, url }) => {
-	await requirePermission(locals, 'clean_timelines');
+	const user = await requirePermission(locals, 'clean_timelines');
 	const section = url.searchParams.get('section') ?? '';
-	const { data, error } = await locals.supabase.rpc('timeline_review', { p_limit: 2000 });
-	if (error) dbFailure(error, 'The Timelines list');
-	const rows = (data ?? []) as ReviewRow[];
+	// cached for a few minutes (it runs the planner on every page); ?refresh works it out again
+	let review;
+	try {
+		review = await reviewRows(locals.supabase, user.id, url.searchParams.has('refresh'));
+	} catch (e) {
+		dbFailure(e as { message: string; code?: string }, 'The Timelines list');
+	}
+	const rows = review!.rows;
 	const counts: Record<string, number> = {};
 	for (const r of rows) for (const x of r.sections) counts[x] = (counts[x] ?? 0) + 1;
-	return { rows: section ? rows.filter((r) => r.sections.includes(section)) : rows, total: rows.length, counts, section };
+	return { rows: section ? rows.filter((r) => r.sections.includes(section)) : rows, total: rows.length, counts, section, computedAt: review!.at };
 };

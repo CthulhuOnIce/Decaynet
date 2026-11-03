@@ -2,6 +2,7 @@ import { fail } from '@sveltejs/kit';
 import { entityBySlug, requirePermission } from '$lib/server/db';
 import { dbMessage } from '$lib/server/forms';
 import { dbFailure, isMissingFunction } from '$lib/server/schema';
+import { invalidateReview } from '$lib/server/timelineReview';
 import type { TimelineFix } from '$lib/timelineCleanup';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -44,6 +45,7 @@ export const actions: Actions = {
 		if (!keys.length) return fail(400, { error: 'Tick the items to ignore.' });
 		const { error } = await locals.supabase.rpc('dismiss_timeline_items', { p_entity: entity.id, p_keys: keys });
 		if (error) return fail(isMissingFunction(error) ? 503 : 400, { error: isMissingFunction(error) ? missing : dbMessage(error) });
+		invalidateReview();
 		return { ok: `Ignored ${keys.length === 1 ? 'it' : `${keys.length} items`} until this page's timeline changes.` };
 	},
 	/** Bring ignored items back (one, or all). */
@@ -53,6 +55,7 @@ export const actions: Actions = {
 		const keys = keysFrom(await request.formData(), 'restore');
 		const { error } = await locals.supabase.rpc('restore_timeline_items', { p_entity: entity.id, p_keys: keys.length ? keys : null });
 		if (error) return fail(isMissingFunction(error) ? 503 : 400, { error: isMissingFunction(error) ? missing : dbMessage(error) });
+		invalidateReview();
 		return { ok: keys.length === 1 ? 'Restored.' : 'Restored everything ignored on this page.' };
 	},
 	apply: async ({ request, params, locals }) => {
@@ -62,6 +65,7 @@ export const actions: Actions = {
 		if (!keys.length) return fail(400, { error: 'Tick at least one fix to apply.' });
 		const { data, error } = await locals.supabase.rpc('normalize_timeline', { p_entity: entity.id, p_keys: keys });
 		if (error) return fail(isMissingFunction(error) ? 503 : 400, { error: isMissingFunction(error) ? 'The database is behind this version of the app: an admin has to run the migrate step.' : dbMessage(error) });
+		invalidateReview();
 		const r = data as { applied: number; remaining: number };
 		return {
 			ok: `Applied ${r.applied} edit${r.applied === 1 ? '' : 's'}.${r.remaining ? ` ${r.remaining} more fix${r.remaining === 1 ? '' : 'es'} now proposed.` : ''}`

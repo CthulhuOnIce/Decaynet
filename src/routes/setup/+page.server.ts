@@ -8,6 +8,7 @@ import {
 	usesSetupCode
 } from '$lib/server/bootstrap';
 import { serviceClient } from '$lib/server/admin';
+import { invalidateSiteData } from '$lib/server/db';
 import { str } from '$lib/server/forms';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -61,6 +62,7 @@ export const actions: Actions = {
 			Object.entries({ site_name: values.site_name, tagline: values.tagline, region_name: values.region_name }).filter(([, v]) => v)
 		);
 		if (Object.keys(site).length) await (admin ?? locals.supabase).from('site_settings').update(site).eq('id', true);
+		invalidateSiteData();
 		redirect(303, '/admin/settings?welcome=1');
 	}
 };

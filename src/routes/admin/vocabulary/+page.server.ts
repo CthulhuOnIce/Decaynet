@@ -1,5 +1,5 @@
 import { error, fail } from '@sveltejs/kit';
-import { requirePermission } from '$lib/server/db';
+import { invalidateSiteData, requirePermission } from '$lib/server/db';
 import { dbMessage, str } from '$lib/server/forms';
 import { VOCABS, type VocabTable } from '$lib/vocabSchema';
 import type { Actions, PageServerLoad } from './$types';
@@ -39,6 +39,7 @@ export const actions: Actions = {
 		const fd = await request.formData();
 		const def = defOf(fd);
 		const { error: err } = await locals.supabase.from(def.table).update(readRow(def, fd)).eq('id', str(fd, 'id'));
+		invalidateSiteData();
 		if (err) return fail(400, { error: dbMessage(err) });
 		return { ok: `Saved “${str(fd, 'id')}”.` };
 	},
@@ -55,6 +56,7 @@ export const actions: Actions = {
 		if (def.table === 'relation_types') row.inverse_label ??= `${row.label} (reverse)`;
 		for (const f of def.fields) if (f.type === 'color' && !row[f.name]) row[f.name] = '#c2562b';
 		const { error: err } = await locals.supabase.from(def.table).insert({ id, ...row });
+		invalidateSiteData();
 		if (err) return fail(400, { error: dbMessage(err) });
 		return { ok: `Added “${id}”.` };
 	},
@@ -65,6 +67,7 @@ export const actions: Actions = {
 		const id = str(fd, 'id')!;
 		if (def.core.includes(id)) return fail(400, { error: `“${id}” is used by the application; relabel it instead of deleting.` });
 		const { error: err } = await locals.supabase.from(def.table).delete().eq('id', id);
+		invalidateSiteData();
 		if (err)
 			return fail(400, {
 				error: err.code === '23503' ? `“${id}” is still in use by some pages or facts. Change those first.` : dbMessage(err)

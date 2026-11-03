@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { env as priv } from '$env/dynamic/private';
 import { serviceClient } from './admin';
+import { invalidateSiteData } from './db';
 
 /**
  * First-admin bootstrap.
@@ -74,6 +75,7 @@ async function run() {
 	}
 	// From now on nobody becomes admin just by signing up first
 	await admin.from('site_settings').update({ admin_bootstrap: 'closed' }).eq('id', true);
+	invalidateSiteData();
 
 	const email = priv.ADMIN_EMAIL?.trim();
 	const password = priv.ADMIN_PASSWORD;

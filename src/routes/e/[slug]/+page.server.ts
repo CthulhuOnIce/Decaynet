@@ -7,14 +7,23 @@ import { yearToDate } from '$lib/time';
 import type { EntitySnapshot, EntityTag, RelationRow, SourceRow, Space, TimelineRow } from '$lib/types';
 import type { Actions, PageServerLoad } from './$types';
 
+/** Fixes the timeline cleanup would apply by default, leaving out what someone ignored (none before 0032). */
+async function waitingFixes(sb: App.Locals['supabase'], id: string): Promise<number> {
+	const [plan, ignored] = await Promise.all([sb.rpc('timeline_plan', { p_entity: id }), sb.rpc('timeline_dismissed_keys', { p_entity: id })]);
+	const skip = new Set(ignored.error ? [] : ((ignored.data ?? []) as string[]));
+	return ((plan.data ?? []) as { key: string; op: string; default: boolean }[]).filter((f) => f.op !== 'note' && f.default && !skip.has(f.key)).length;
+}
+
 export const load: PageServerLoad = async ({ params, url, locals, parent }) => {
 	const sb = locals.supabase;
-	const entity = await entityBySlug(sb, params.slug);
+	const [entity, { perms }] = await Promise.all([entityBySlug(sb, params.slug), parent()]);
 	const nowYear = new Date().getFullYear();
 	const yParam = Number(url.searchParams.get('y'));
 	const year = Number.isInteger(yParam) && yParam > 0 ? yParam : nowYear;
+	const canClean = (perms ?? []).includes('clean_timelines');
 
-	const [article, snapshot, timeline, relations, geoms, mediaItem, eventDetail, statusEvents, tags] = await Promise.all([
+	// Everything that only needs the page, in one round
+	const [article, snapshot, timeline, relations, geoms, mediaItem, eventDetail, statusEvents, tags, spacesRes, timelineFixes] = await Promise.all([
 		sb.from('articles').select('*, article_statuses(label, color, description)').eq('entity_id', entity.id).maybeSingle(),
 		sb.rpc('entity_snapshot', { p_entity: entity.id, p_at: yearToDate(year) }),
 		sb.rpc('entity_timeline', { p_entity: entity.id }),
@@ -23,43 +32,36 @@ export const load: PageServerLoad = async ({ params, url, locals, parent }) => {
 		sb.from('media_items').select('*').eq('entity_id', entity.id).maybeSingle(),
 		sb.from('event_details').select('*, event_types(label, color)').eq('entity_id', entity.id).maybeSingle(),
 		sb.from('article_status_events').select('*').eq('entity_id', entity.id).order('created_at', { ascending: false }).limit(10),
-		sb.rpc('tags_at', { p_entity: entity.id, p_at: null })
+		sb.rpc('tags_at', { p_entity: entity.id, p_at: null }),
+		['building', 'site'].includes(entity.kind)
+			? sb.rpc('building_spaces', { p_building: entity.id, p_at: yearToDate(year) })
+			: Promise.resolve({ data: [] }),
+		// for people who can clean up timelines: how many fixes this page has waiting
+		canClean ? waitingFixes(sb, entity.id) : Promise.resolve(0)
 	]);
 	for (const r of [snapshot, timeline, relations, geoms]) if (r.error) error(500, r.error.message);
 
 	const rels = (relations.data ?? []) as RelationRow[];
-	const { data: spaces } = ['building', 'site'].includes(entity.kind)
-		? await sb.rpc('building_spaces', { p_building: entity.id, p_at: yearToDate(year) })
-		: { data: [] };
+	const spaces = spacesRes.data;
 	const tl = (timeline.data ?? []) as TimelineRow[];
-
-	// Media that depicts this entity, for the gallery
-	const mediaIds = rels.filter((r) => r.other_kind === 'media' && r.predicate === 'depicts').map((r) => r.other_id);
-	const { data: gallery } = mediaIds.length
-		? await sb.from('entities').select('id, slug, name, exists_from, exists_from_precision, media_items(*)').in('id', mediaIds).order('exists_from', { nullsFirst: false })
-		: { data: [] };
-
-	// Footnotes: every source cited by any fact on this page or in its article
 	const body = article.data?.body ?? '';
+
+	// Then what depends on it: the gallery (media that depicts this page), and the footnotes
+	// (every source cited by a fact or the article) with the article rendered against them
+	const mediaIds = rels.filter((r) => r.other_kind === 'media' && r.predicate === 'depicts').map((r) => r.other_id);
 	const sourceIds = [
 		...new Set([...tl.map((r) => r.source_id), ...rels.map((r) => r.source_id), mediaItem.data?.source_id, ...extractCitations(body)].filter(Boolean))
 	] as string[];
-	const { data: sources } = sourceIds.length
-		? await sb.from('sources').select('*').in('id', sourceIds).order('title')
-		: { data: [] };
-	const footnote = Object.fromEntries((sources ?? []).map((s, i) => [s.id as string, i + 1]));
-
-	// For people who can clean up timelines: how many fixes this page has waiting
-	const { perms } = await parent();
-	let timelineFixes = 0;
-	if ((perms ?? []).includes('clean_timelines')) {
-		const plan = (((await sb.rpc('timeline_plan', { p_entity: entity.id })).data ?? []) as { key: string; op: string; default: boolean }[]).filter(
-			(f) => f.op !== 'note' && f.default
-		);
-		// leave out what someone ignored (until the timeline changes); none before migration 0032
-		const ignored = plan.length ? (((await sb.rpc('timeline_dismissed_keys', { p_entity: entity.id })).data ?? []) as string[]) : [];
-		timelineFixes = plan.filter((f) => !ignored.includes(f.key)).length;
-	}
+	const [{ data: gallery }, { sources, html }] = await Promise.all([
+		mediaIds.length
+			? sb.from('entities').select('id, slug, name, exists_from, exists_from_precision, media_items(*)').in('id', mediaIds).order('exists_from', { nullsFirst: false })
+			: Promise.resolve({ data: [] }),
+		(async () => {
+			const { data: sources } = sourceIds.length ? await sb.from('sources').select('*').in('id', sourceIds).order('title') : { data: [] };
+			const footnote = Object.fromEntries((sources ?? []).map((s, i) => [s.id as string, i + 1]));
+			return { sources, html: body ? await renderArticle(sb, body, footnote) : '' };
+		})()
+	]);
 
 	const geomFeatures: GeoJSON.Feature[] = (geoms.data ?? []).map((g) => ({
 		type: 'Feature',
@@ -77,7 +79,7 @@ export const load: PageServerLoad = async ({ params, url, locals, parent }) => {
 		entity,
 		year,
 		article: article.data,
-		html: body ? await renderArticle(sb, body, footnote) : '',
+		html,
 		snapshot: snapshot.data as EntitySnapshot,
 		timeline: tl,
 		relations: rels,

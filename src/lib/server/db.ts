@@ -9,7 +9,35 @@ export async function entityBySlug(supabase: SupabaseClient, slug: string): Prom
 	return data as Entity;
 }
 
-export async function loadVocabulary(supabase: SupabaseClient): Promise<Vocabulary> {
+/*
+ * Vocabulary and site settings are read on every page view (the root layout) but change only
+ * when an admin edits them, and every visitor sees the same rows. Kept in memory for a minute
+ * (so another app instance's edits show up soon); edits made here clear it at once.
+ */
+const SITE_DATA_TTL = 60_000;
+let vocabCache: { at: number; value: Promise<Vocabulary> } | null = null;
+let settingsCache: { at: number; value: Promise<SiteSettings> } | null = null;
+
+/** Call after changing site settings or the vocabulary. */
+export function invalidateSiteData() {
+	vocabCache = null;
+	settingsCache = null;
+}
+
+function cached<T>(slot: { at: number; value: Promise<T> } | null, set: (s: { at: number; value: Promise<T> } | null) => void, load: () => Promise<T>) {
+	if (slot && Date.now() - slot.at < SITE_DATA_TTL) return slot.value;
+	const value = load();
+	set({ at: Date.now(), value });
+	// a failure isn't kept: the next request tries again
+	value.catch(() => set(null));
+	return value;
+}
+
+export function loadVocabulary(supabase: SupabaseClient): Promise<Vocabulary> {
+	return cached(vocabCache, (s) => (vocabCache = s), () => fetchVocabulary(supabase));
+}
+
+async function fetchVocabulary(supabase: SupabaseClient): Promise<Vocabulary> {
 	const [kinds, statuses, relationTypes, eventTypes, attributeKeys, articleStatuses, tagFacets] = await Promise.all([
 		supabase.from('entity_kinds').select('*').order('sort'),
 		supabase.from('lifecycle_statuses').select('*').order('sort'),
@@ -55,11 +83,14 @@ export async function requirePermission(locals: App.Locals, permission: Permissi
 
 /** Whether pages created by tools (media, tips, workbench, import) start private. */
 export async function newPagesPrivate(supabase: SupabaseClient): Promise<boolean> {
-	const { data } = await supabase.from('site_settings').select('new_pages_private').single();
-	return !!data?.new_pages_private;
+	return !!(await loadSettings(supabase)).new_pages_private;
 }
 
-export async function loadSettings(supabase: SupabaseClient): Promise<SiteSettings> {
+export function loadSettings(supabase: SupabaseClient): Promise<SiteSettings> {
+	return cached(settingsCache, (s) => (settingsCache = s), () => fetchSettings(supabase));
+}
+
+async function fetchSettings(supabase: SupabaseClient): Promise<SiteSettings> {
 	const { data, error: err } = await supabase.from('site_settings').select('*').single();
 	if (err) error(500, `Could not load site settings: ${err.message}`);
 	return data as SiteSettings;

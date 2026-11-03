@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { requirePermission } from '$lib/server/db';
+import { invalidateSiteData, requirePermission } from '$lib/server/db';
 import { serviceClient } from '$lib/server/admin';
 import { dbMessage, str } from '$lib/server/forms';
 import type { Actions, PageServerLoad } from './$types';
@@ -75,6 +75,7 @@ export const actions: Actions = {
 			if (update.tips_captcha_provider !== 'none' && !update.tips_captcha_site_key)
 				throw new Error('A captcha provider needs a site key (and a secret below).');
 			const { error } = await locals.supabase.from('site_settings').update(update).eq('id', true);
+			invalidateSiteData();
 			if (error) throw new Error(dbMessage(error));
 			return { section: 'settings', ok: 'Settings saved.' };
 		} catch (e) {

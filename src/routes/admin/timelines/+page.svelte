@@ -3,6 +3,7 @@
 
 	let { data } = $props();
 	const sections = Object.keys(TIMELINE_SECTIONS) as TimelineSection[];
+	const minutesAgo = $derived(Math.max(0, Math.round((Date.now() - data.computedAt) / 60_000)));
 </script>
 
 <svelte:head><title>Timelines · Admin</title></svelte:head>
@@ -11,6 +12,10 @@
 <p class="muted">
 	Pages whose conditions, shapes, addresses or relations don't agree with their lifespan, or have loose ends: no condition
 	recorded, a tenant still listed after demolition, an undated point. Open one to review; nothing changes until you apply.
+</p>
+<p class="small muted">
+	Checked {minutesAgo ? `${minutesAgo} min ago` : 'just now'} (every page is checked, so the list is kept for a few minutes).
+	<a href="?{data.section ? `section=${data.section}&` : ''}refresh">Check again</a>
 </p>
 
 {#if data.total}
