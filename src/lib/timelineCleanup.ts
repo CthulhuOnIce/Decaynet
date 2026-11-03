@@ -21,6 +21,8 @@ export interface TimelineFix {
 	sets?: ('start' | 'end')[];
 	/** relations ending with use: the condition that ends it ("Vacant") */
 	use?: string | null;
+	/** undated relations: the page whose dates they take (an event, or the subject) */
+	source?: string | null;
 	before?: FixRange;
 	after?: FixRange;
 	/** on by default; off = a suggestion a person should confirm */
@@ -43,7 +45,7 @@ export const TIMELINE_SECTIONS: Record<TimelineSection, { title: string; why: st
 	shapes: { title: 'Shapes', why: 'A single footprint, point or line covers the whole lifespan; redrawn ones follow each other.' },
 	addresses: { title: 'Addresses', why: 'A single address covers the lifespan; several are kept within it.' },
 	names: { title: 'Names', why: 'Official names follow each other; dated names stay within the lifespan.' },
-	relations: { title: 'Relations', why: 'Tenants and occupants end when the place stops being in use; links stay within both sides’ lifespans; design and construction end when it’s built.' },
+	relations: { title: 'Relations', why: 'Links with no dates take them from their source (the event, or the subject); tenants and occupants end when the place stops being in use; links stay within both sides’ lifespans; design and construction end when it’s built.' },
 	spaces: { title: 'Spaces', why: 'Storefronts, suites and halls end with their building.' },
 	facts: { title: 'Facts', why: 'Dated facts stay within the lifespan.' }
 };
@@ -104,8 +106,12 @@ export function describeFix(f: TimelineFix): string {
 		case 'extend_open':
 			return `Keep ${q(f.label)} running: it ends in ${to(b)} but nothing recorded follows.`;
 		// shapes, addresses, names, relations, spaces, facts
+		case 'from_source':
+			return `${f.label}: no dates, so ${range(a)}, from ${f.source}.`;
 		case 'end_with_use':
-			return `${f.label}: ends in ${to(a)}, when it's recorded as ${q(f.use)}.`;
+			return f.why?.includes('from_source') && f.source
+				? `${f.label}: no dates, so from ${from(a)} like ${f.source}, ending in ${to(a)} when it's recorded as ${q(f.use)}.`
+				: `${f.label}: ends in ${to(a)}, when it's recorded as ${q(f.use)}.`;
 		case 'end_at_construction':
 			return `${f.label}: ends with construction, in ${to(a)}.`;
 		case 'start_with_place':
