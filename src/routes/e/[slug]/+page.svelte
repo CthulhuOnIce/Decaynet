@@ -285,6 +285,7 @@
 										<td>
 											{#if !sp.present}<span class="muted">not yet / no longer</span>
 											{:else if sp.tenants}{sp.tenants}
+											{:else if sp.in_use}{sp.name} <span class="muted small" title="Marked in use; the tenant has no page of its own (yet)">· no tenant page yet</span>
 											{:else}<span class="muted">vacant / unknown</span>{/if}
 										</td>
 									</tr>

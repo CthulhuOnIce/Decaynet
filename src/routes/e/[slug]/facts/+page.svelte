@@ -425,7 +425,7 @@
 								<td><a href="/e/{sp.slug}">{sp.name}</a>{#if sp.unit_label} <span class="muted small">#{sp.unit_label}</span>{/if}</td>
 								<td class="mono">{sp.floor ?? '–'}</td>
 								<td class="date">{formatRange(sp.exists_from, sp.exists_from_precision, sp.exists_to, sp.exists_to_precision) || 'undated'}</td>
-								<td>{sp.tenants ?? ''}</td>
+								<td>{sp.tenants ?? (sp.in_use ? `${sp.name} (in use, no tenant page)` : '')}</td>
 								<td><a class="btn ghost" href="/e/{sp.slug}/facts?rel=occupies&dir=in#relations">+ Tenant</a></td>
 							</tr>
 						{/each}

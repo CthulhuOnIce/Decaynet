@@ -412,6 +412,8 @@ export interface Space {
 	geojson: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
 	tenants: string | null;
 	present: boolean;
+	/** in use with no tenant linked: occupied by a tenant without a page (yet), not vacant (migration 0040) */
+	in_use?: boolean;
 	exists_from: string | null;
 	exists_from_precision: Precision;
 	exists_to: string | null;
