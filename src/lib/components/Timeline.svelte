@@ -227,9 +227,41 @@
 		font-size: 0.86rem;
 	}
 
-	@media (max-width: 600px) {
-		.when-col {
-			width: 8.5em;
+	/* sized by the column the timeline sits in (a sidebar, a phone, paper), not the screen */
+	.timeline-view {
+		container-type: inline-size;
+	}
+	/* narrow: the table stacks, date above its details, instead of two cramped columns */
+	@container (max-width: 30rem) {
+		.tl-table,
+		.tl-table tbody,
+		.tl-table tr,
+		.tl-table td {
+			display: block;
+			width: auto;
+		}
+		.tl-table colgroup {
+			display: none;
+		}
+		.tl-table tr {
+			padding: 6px 0;
+			border-bottom: 1px solid var(--line);
+		}
+		.tl-table td {
+			border-bottom: 0;
+			padding: 0 8px 0 22px;
+		}
+		.tl-table td.what {
+			padding-top: 2px;
+		}
+		.tl-table .when .dot {
+			top: 5px;
+		}
+		.tl-table tr.now {
+			background: rgba(224, 162, 58, 0.1);
+		}
+		.tl-table tr.now td {
+			background: none;
 		}
 		.bubble {
 			margin-left: 10px;
