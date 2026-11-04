@@ -169,6 +169,26 @@ export const actions: Actions = {
 		return { bulk: { ...(res.data as BulkResult), action: 'gone' as const, at: str(fd, 'at') } };
 	}),
 
+	/** Selected pages: in a condition from a year (e.g. abandoned in that year's aerial). */
+	bulkCondition: wrap(async (fd, locals) => {
+		await requirePermission(locals, 'edit_content');
+		const ids = fd.getAll('ids').map(String).filter(Boolean);
+		if (!ids.length) throw new FormError('Select some buildings first.');
+		const at = parseFuzzyDate(str(fd, 'at'));
+		if (!at?.date) throw new FormError('From when? Enter a year, like 1958.');
+		const status = str(fd, 'condition');
+		if (!status) throw new FormError('Pick a condition.');
+		const res = await locals.supabase.rpc('set_condition_pages', {
+			p_ids: ids,
+			p_status: status,
+			p_at: at.date,
+			p_precision: at.precision,
+			p_note: str(fd, 'note')
+		});
+		check(res);
+		return { bulk: { ...(res.data as BulkResult), action: 'condition' as const, at: str(fd, 'at'), status } };
+	}),
+
 	/** Selected pages marked gone that a later aerial shows still standing. */
 	bulkStanding: wrap(async (fd, locals) => {
 		await requirePermission(locals, 'edit_content');

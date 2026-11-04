@@ -528,13 +528,27 @@
 	let selecting = $state(false);
 	let boxMode = $state(false);
 	let box = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
-	let bulkResult = $state<{ action: 'gone' | 'standing'; at: string; done: number; skipped: { id: string; name: string; slug: string; reason: string }[] } | null>(null);
+	let bulkResult = $state<{
+		action: 'gone' | 'condition' | 'standing';
+		at: string;
+		status?: string;
+		done: number;
+		skipped: { id: string; name: string; slug: string; reason: string }[];
+	} | null>(null);
+	/** what the selection gets: gone by a year, a condition from a year, or still standing in a year */
+	let bulkMode = $state<'gone' | 'condition' | 'standing'>('gone');
+	let bulkCondition = $state('abandoned');
 	let bulkBusy = $state(false);
 	let bulkYearInput = $state<string | null>(null);
 	let bulkNoteInput = $state<string | null>(null);
 	const bulkYear = $derived(bulkYearInput ?? (/^\d{4}$/.test(depictsYear) ? depictsYear : String(year)));
-	const bulkNote = $derived(bulkNoteInput ?? `Not seen in the ${bulkYear} aerial`);
 	const goneStatuses = $derived(data.vocab.statuses.filter((st) => !st.is_extant && st.decay_level >= 5));
+	// conditions of something still standing (Abandoned, Vacant, Ruin, Active again…)
+	const standingStatuses = $derived(data.vocab.statuses.filter((st) => st.is_extant));
+	const statusLabel = (id: string | undefined) => data.vocab.statuses.find((st) => st.id === id)?.label ?? id ?? '';
+	const bulkNote = $derived(
+		bulkNoteInput ?? (bulkMode === 'condition' ? `${statusLabel(bulkCondition)} in the ${bulkYear} aerial` : `Not seen in the ${bulkYear} aerial`)
+	);
 
 	const pickedOf = (f: { properties: Record<string, unknown> | null }): Picked | null => {
 		const p = f.properties ?? {};
@@ -1374,7 +1388,15 @@
 	{#if form && form.tool === 'select' && 'error' in form && form.error}<p class="notice error small">{form.error}</p>{/if}
 	{#if bulkResult}
 		<div class="notice small {bulkResult.done ? 'ok' : 'error'}">
-			{bulkResult.done ? `${bulkResult.done} marked ${bulkResult.action === 'gone' ? `gone by ${bulkResult.at}` : `still standing in ${bulkResult.at}`}.` : 'Nothing changed.'}
+			{bulkResult.done
+				? `${bulkResult.done} marked ${
+						bulkResult.action === 'gone'
+							? `gone by ${bulkResult.at}`
+							: bulkResult.action === 'condition'
+								? `${statusLabel(bulkResult.status)} from ${bulkResult.at}`
+								: `still standing in ${bulkResult.at}`
+					}.`
+				: 'Nothing changed.'}
 			{#if bulkResult.skipped.length}
 				{bulkResult.skipped.length} skipped (still selected):
 				<ul class="skipped">
@@ -1401,32 +1423,57 @@
 				{/each}
 			</ul>
 		</details>
-		<form method="post" action="?/bulkGone" class="bulk" use:enhance={afterBulk}>
+		<form method="post" action={bulkMode === 'gone' ? '?/bulkGone' : bulkMode === 'condition' ? '?/bulkCondition' : '?/bulkStanding'} class="bulk" use:enhance={afterBulk}>
 			<input type="hidden" name="tool" value="select" />
 			{#each selected as x (x.id)}<input type="hidden" name="ids" value={x.id} />{/each}
+			<div class="seg bulk-mode" role="radiogroup" aria-label="What to record">
+				<button type="button" class:on={bulkMode === 'gone'} onclick={() => ((bulkMode = 'gone'), (bulkNoteInput = null))}>Gone by</button>
+				<button type="button" class:on={bulkMode === 'condition'} onclick={() => ((bulkMode = 'condition'), (bulkNoteInput = null))}>Condition from</button>
+				<button type="button" class:on={bulkMode === 'standing'} onclick={() => (bulkMode = 'standing')}>Still standing in</button>
+			</div>
 			<div class="bulk-fields">
 				<label>
-					<span>Gone by</span>
+					<span>{bulkMode === 'gone' ? 'Gone by' : bulkMode === 'condition' ? 'From' : 'Standing in'}</span>
 					<input name="at" value={bulkYear} oninput={(e) => (bulkYearInput = e.currentTarget.value)} inputmode="numeric" placeholder="1958" />
 				</label>
-				<label>
-					<span>Now</span>
-					<select name="status">{#each goneStatuses as st (st.id)}<option value={st.id} selected={st.id === 'demolished'}>{st.label}</option>{/each}</select>
-				</label>
+				{#if bulkMode === 'gone'}
+					<label>
+						<span>Now</span>
+						<select name="status">{#each goneStatuses as st (st.id)}<option value={st.id} selected={st.id === 'demolished'}>{st.label}</option>{/each}</select>
+					</label>
+				{:else if bulkMode === 'condition'}
+					<label>
+						<span>Condition</span>
+						<select name="condition" bind:value={bulkCondition} onchange={() => (bulkNoteInput = null)}>
+							{#each standingStatuses as st (st.id)}<option value={st.id}>{st.label}</option>{/each}
+						</select>
+					</label>
+				{/if}
 			</div>
-			<label class="bulk-note">
-				<span>Note</span>
-				<input name="note" value={bulkNote} oninput={(e) => (bulkNoteInput = e.currentTarget.value)} />
-			</label>
-			<button class="primary" disabled={bulkBusy}>Mark {selected.length} gone by {bulkYear}</button>
+			{#if bulkMode !== 'standing'}
+				<label class="bulk-note">
+					<span>Note</span>
+					<input name="note" value={bulkNote} oninput={(e) => (bulkNoteInput = e.currentTarget.value)} />
+				</label>
+			{/if}
+			<button class="primary" disabled={bulkBusy}>
+				{bulkMode === 'gone'
+					? `Mark ${selected.length} gone by ${bulkYear}`
+					: bulkMode === 'condition'
+						? `Mark ${selected.length} ${statusLabel(bulkCondition)} from ${bulkYear}`
+						: `Mark ${selected.length} still standing in ${bulkYear}`}
+			</button>
+			<p class="hint">
+				{#if bulkMode === 'gone'}
+					Ends each lifespan then, closes what was still running, and adds the condition (marked approximate). Pages with facts after
+					that year are skipped.
+				{:else if bulkMode === 'condition'}
+					Starts the condition then (approximate), up to the next recorded one; what's recorded later, like a demolition, stays.
+				{:else}
+					For ones marked gone that a later aerial still shows: reopens them, and removes a guessed demolition.
+				{/if}
+			</p>
 		</form>
-		<form method="post" action="?/bulkStanding" use:enhance={afterBulk}>
-			<input type="hidden" name="tool" value="select" />
-			<input type="hidden" name="at" value={bulkYear} />
-			{#each selected as x (x.id)}<input type="hidden" name="ids" value={x.id} />{/each}
-			<button class="ghost" disabled={bulkBusy} title="For ones you'd marked gone that a later aerial still shows">Still standing in {bulkYear}</button>
-		</form>
-		<p class="hint">Gone: ends each lifespan then, closes what was still running, and adds the condition (marked approximate). Pages with facts after that year are skipped.</p>
 	{/if}
 {/snippet}
 
@@ -1829,6 +1876,13 @@
 	.bulk {
 		display: grid;
 		gap: 6px;
+	}
+	.bulk-mode {
+		margin: 0;
+	}
+	.bulk-mode button {
+		font-size: 0.75rem;
+		text-transform: none;
 	}
 	.bulk-fields {
 		display: grid;
