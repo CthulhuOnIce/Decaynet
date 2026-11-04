@@ -1434,7 +1434,7 @@
 			<div class="bulk-fields">
 				<label>
 					<span>{bulkMode === 'gone' ? 'Gone by' : bulkMode === 'condition' ? 'From' : 'Standing in'}</span>
-					<input name="at" value={bulkYear} oninput={(e) => (bulkYearInput = e.currentTarget.value)} inputmode="numeric" placeholder="1958" />
+					<input name="at" value={bulkYear} oninput={(e) => (bulkYearInput = e.currentTarget.value)} placeholder="1958 · May 1958 · 1950s" title="A year, a month, a day, or a decade" />
 				</label>
 				{#if bulkMode === 'gone'}
 					<label>

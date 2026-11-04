@@ -5,6 +5,15 @@ import { librarySources, madeSource, resolveInlineSource, type MadeSource } from
 import { parseFuzzyDate } from '$lib/time';
 import type { Actions, PageServerLoad } from './$types';
 
+/** The bulk year box: "1958", "May 1958", "1950s"…; an unreadable date is a form error, not a crash. */
+function bulkDate(fd: FormData) {
+	try {
+		return parseFuzzyDate(str(fd, 'at'));
+	} catch (e) {
+		throw new FormError((e as Error).message);
+	}
+}
+
 interface BulkResult {
 	done: number;
 	skipped: { id: string; name: string; slug: string; reason: string }[];
@@ -156,7 +165,7 @@ export const actions: Actions = {
 		await requirePermission(locals, 'edit_content');
 		const ids = fd.getAll('ids').map(String).filter(Boolean);
 		if (!ids.length) throw new FormError('Select some buildings first.');
-		const at = parseFuzzyDate(str(fd, 'at'));
+		const at = bulkDate(fd);
 		if (!at?.date) throw new FormError('Gone by when? Enter a year, like 1958.');
 		const res = await locals.supabase.rpc('end_pages', {
 			p_ids: ids,
@@ -174,7 +183,7 @@ export const actions: Actions = {
 		await requirePermission(locals, 'edit_content');
 		const ids = fd.getAll('ids').map(String).filter(Boolean);
 		if (!ids.length) throw new FormError('Select some buildings first.');
-		const at = parseFuzzyDate(str(fd, 'at'));
+		const at = bulkDate(fd);
 		if (!at?.date) throw new FormError('From when? Enter a year, like 1958.');
 		const status = str(fd, 'condition');
 		if (!status) throw new FormError('Pick a condition.');
@@ -194,7 +203,7 @@ export const actions: Actions = {
 		await requirePermission(locals, 'edit_content');
 		const ids = fd.getAll('ids').map(String).filter(Boolean);
 		if (!ids.length) throw new FormError('Select some buildings first.');
-		const at = parseFuzzyDate(str(fd, 'at'));
+		const at = bulkDate(fd);
 		if (!at?.date) throw new FormError('Still standing in which year?');
 		const res = await locals.supabase.rpc('reopen_pages', { p_ids: ids, p_at: at.date });
 		check(res);
