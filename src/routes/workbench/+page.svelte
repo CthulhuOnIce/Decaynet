@@ -1593,7 +1593,8 @@
 				{:else if bulkMode === 'condition'}
 					Starts the condition then (approximate), up to the next recorded one; what's recorded later, like a demolition, stays.
 				{:else}
-					For ones marked gone that a later aerial still shows: reopens them, and removes a guessed demolition.
+					It was there then: a start after that year moves back to it, and ones marked gone by then reopen (a guessed demolition is
+					removed).
 				{/if}
 			</p>
 		</form>

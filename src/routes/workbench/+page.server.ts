@@ -205,7 +205,7 @@ export const actions: Actions = {
 		if (!ids.length) throw new FormError('Select some buildings first.');
 		const at = bulkDate(fd);
 		if (!at?.date) throw new FormError('Still standing in which year?');
-		const res = await locals.supabase.rpc('reopen_pages', { p_ids: ids, p_at: at.date });
+		const res = await locals.supabase.rpc('reopen_pages', { p_ids: ids, p_at: at.date, p_precision: at.precision });
 		check(res);
 		return { bulk: { ...(res.data as BulkResult), action: 'standing' as const, at: str(fd, 'at') } };
 	}),
