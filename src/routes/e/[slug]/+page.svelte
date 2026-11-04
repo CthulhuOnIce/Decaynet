@@ -75,6 +75,26 @@
 		moreOpen = !!moreEl?.open;
 	}
 	const exportFormats = $derived(exportsFor(e.kind));
+	/**
+	 * Keep an opened menu on screen: it hangs from its button's right edge, which runs off the
+	 * left of a phone when the buttons wrap; then it hangs from the left edge (and is nudged in
+	 * if even that doesn't fit).
+	 */
+	function placeMenu(ev: Event) {
+		const d = ev.currentTarget as HTMLDetailsElement;
+		const menu = d.querySelector<HTMLElement>('.more-menu');
+		if (!d.open || !menu) return;
+		menu.classList.remove('from-left');
+		menu.style.transform = '';
+		const pad = 8;
+		let r = menu.getBoundingClientRect();
+		if (r.left < pad) {
+			menu.classList.add('from-left');
+			r = menu.getBoundingClientRect();
+		}
+		const over = r.right - (window.innerWidth - pad);
+		if (over > 0) menu.style.transform = `translateX(${-Math.min(over, r.left - pad)}px)`;
+	}
 	// an export shows the page as you're viewing it (the same year)
 	const exportQuery = $derived(data.year !== new Date().getFullYear() ? `?y=${data.year}` : '');
 	// Footprint (grey) + spaces (highlighted) for the floor-plan minimap
@@ -154,7 +174,7 @@
 				<a class="btn" href="/e/{e.slug}/facts">Edit facts</a>
 			{/if}
 			{#if exportFormats.length}
-				<details class="more">
+				<details class="more" ontoggle={placeMenu}>
 					<summary class="btn ghost" aria-label="Export this page">Export ▾</summary>
 					<div class="more-menu export-menu" role="menu">
 						{#each exportFormats as x (x.id)}
@@ -166,7 +186,7 @@
 					</div>
 				</details>
 			{/if}
-			<details class="more" bind:open={moreOpen} bind:this={moreEl}>
+			<details class="more" bind:open={moreOpen} bind:this={moreEl} ontoggle={placeMenu}>
 				<summary class="btn ghost" aria-label="More actions">More ▾</summary>
 				<div class="more-menu" role="menu">
 					<a role="menuitem" href="/e/{e.slug}/history">History</a>
@@ -477,6 +497,7 @@
 		top: calc(100% + 4px);
 		z-index: 20;
 		min-width: 210px;
+		max-width: calc(100vw - 16px);
 		padding: 6px;
 		display: grid;
 		gap: 2px;
@@ -484,6 +505,10 @@
 		border: 1px solid var(--line-2);
 		border-radius: var(--radius);
 		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+	}
+	.more-menu:global(.from-left) {
+		right: auto;
+		left: 0;
 	}
 	.more-menu a,
 	.more-menu button {
