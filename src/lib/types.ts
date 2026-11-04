@@ -394,6 +394,8 @@ export interface SiteSettings {
 	new_pages_private: boolean;
 	/** save source links to the Internet Archive (migration 0029) */
 	archive_sources?: boolean;
+	/** how page timelines are drawn (migration 0034) */
+	timeline_style?: 'table' | 'bubbles';
 	updated_at: string;
 }
 

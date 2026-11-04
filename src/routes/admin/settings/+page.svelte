@@ -128,6 +128,22 @@
 	</section>
 
 	<section class="card">
+		<h2>Pages</h2>
+		<fieldset class="choice">
+			<legend>Timeline style</legend>
+			<label class="check">
+				<input type="radio" name="timeline_style" value="table" checked={(s.timeline_style ?? 'table') === 'table'} />
+				<span><strong>Table</strong> <span class="hint">Date and details in two columns; long dates and names wrap in place.</span></span>
+			</label>
+			<label class="check">
+				<input type="radio" name="timeline_style" value="bubbles" checked={s.timeline_style === 'bubbles'} />
+				<span><strong>Bubbles</strong> <span class="hint">A dot per entry with its date; the details sit in a bubble below it.</span></span>
+			</label>
+		</fieldset>
+		<p class="hint">Used on every page's timeline and in its printable export.</p>
+	</section>
+
+	<section class="card">
 		<h2>Sources</h2>
 		<label class="check"><input type="checkbox" name="archive_sources" checked={s.archive_sources ?? true} /> Save source links to the Internet Archive automatically</label>
 		<p class="hint">
@@ -220,6 +236,18 @@
 </section>
 
 <style>
+	.choice {
+		border: 0;
+		padding: 0;
+		margin: 0;
+		display: grid;
+		gap: 6px;
+	}
+	.choice legend {
+		font-weight: 600;
+		margin-bottom: 4px;
+	}
+
 	h2 {
 		margin-top: 0;
 	}

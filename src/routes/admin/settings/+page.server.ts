@@ -61,6 +61,7 @@ export const actions: Actions = {
 				allow_signups: bool(fd, 'allow_signups'),
 				new_pages_private: bool(fd, 'new_pages_private'),
 				archive_sources: bool(fd, 'archive_sources'),
+				timeline_style: str(fd, 'timeline_style') === 'bubbles' ? 'bubbles' : 'table',
 				default_role: str(fd, 'default_role') ?? 'contributor',
 				tips_enabled: bool(fd, 'tips_enabled'),
 				tips_intro: str(fd, 'tips_intro') ?? '',
