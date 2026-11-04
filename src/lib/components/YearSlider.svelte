@@ -6,7 +6,8 @@
 		min,
 		max,
 		density = [],
-		onchange
+		onchange,
+		compact = false
 	}: {
 		year: number;
 		min: number;
@@ -14,6 +15,8 @@
 		/** counts per year from min..max: drawn as a histogram of "things happening" */
 		density?: number[];
 		onchange?: (year: number) => void;
+		/** one slim row (‹ year › and the track): for small screens where the map needs the room */
+		compact?: boolean;
 	} = $props();
 
 	let playing = $state(false);
@@ -63,15 +66,15 @@
 
 <svelte:window onkeydown={onkey} />
 
-<div class="slider">
+<div class="slider" class:compact>
 	<div class="controls">
-		<button class="icon-btn" onclick={() => set(year - 10)} title="Back a decade (Shift+←)">«</button>
+		<button class="icon-btn wide" onclick={() => set(year - 10)} title="Back a decade (Shift+←)">«</button>
 		<button class="icon-btn" onclick={() => set(year - 1)} title="Back a year (←)">‹</button>
-		<button class="icon-btn play" onclick={toggle} title="Play / pause (Space)" aria-pressed={playing}>
+		<button class="icon-btn play wide" onclick={toggle} title="Play / pause (Space)" aria-pressed={playing}>
 			{playing ? '❚❚' : '▶'}
 		</button>
 		<button class="icon-btn" onclick={() => set(year + 1)} title="Forward a year (→)">›</button>
-		<button class="icon-btn" onclick={() => set(year + 10)} title="Forward a decade (Shift+→)">»</button>
+		<button class="icon-btn wide" onclick={() => set(year + 10)} title="Forward a decade (Shift+→)">»</button>
 	</div>
 
 	<div class="year" aria-live="polite">{year}</div>
@@ -184,5 +187,30 @@
 		.year {
 			font-size: 1.7rem;
 		}
+	}
+	/* compact: one slim row */
+	.slider.compact {
+		grid-template-columns: auto auto 1fr;
+		gap: 8px;
+		padding: 6px 12px 8px;
+	}
+	.slider.compact .controls {
+		grid-column: auto;
+		gap: 2px;
+	}
+	.slider.compact .wide,
+	.slider.compact .hist {
+		display: none;
+	}
+	.slider.compact .year {
+		font-size: 1.3rem;
+		order: -1;
+	}
+	.slider.compact .track {
+		padding-top: 0;
+	}
+	.slider.compact .controls button {
+		min-width: 30px;
+		padding: 4px 6px;
 	}
 </style>

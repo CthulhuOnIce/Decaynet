@@ -35,6 +35,10 @@
 	// stored. Alignments can be exported to a small JSON file and re-loaded.
 	let opacity = $state(0.7);
 	let overlayHidden = $state(false); // flicker (hold F)
+	// What the map shows (the View controls on the map, in every tool)
+	let showShapes = $state(true); // existing shapes: hide them to trace without the old footprint in the way (H)
+	let showBase = $state(true);
+	let scanOff = $state(false);
 	let compare = $state<'blend' | 'swipe'>('blend');
 	let swipe = $state(0.5);
 	let scan = $state<{ name: string; url: string; corners: Corners; width: number; height: number } | null>(null);
@@ -45,6 +49,8 @@
 	// "More options" brings the full panel back
 	let narrow = $state(false);
 	let panelOpen = $state(false);
+	// phones: fold the tool panel down to its tabs, so the map gets the screen (while tracing, say)
+	let panelHidden = $state(false);
 	let depictsYear = $state(''); // year the scan shows; pre-fills traced shapes
 	let markers: Marker[] = [];
 	let scanError = $state<string | null>(null);
@@ -91,7 +97,7 @@
 
 	function applyOpacity() {
 		const m = compare === 'swipe' ? top : map;
-		if (m?.getLayer('overlay')) m.setPaintProperty('overlay', 'raster-opacity', overlayHidden ? 0 : compare === 'swipe' ? 1 : opacity);
+		if (m?.getLayer('overlay')) m.setPaintProperty('overlay', 'raster-opacity', overlayHidden || scanOff ? 0 : compare === 'swipe' ? 1 : opacity);
 	}
 
 	function ensureTop() {
@@ -210,6 +216,14 @@
 		} catch (err) {
 			scanError = `Couldn't open that image: ${(err as Error).message}`;
 		}
+	}
+
+	/** "Remove scan": confirm when an alignment would be lost. */
+	function removeScan() {
+		const work = !!scan && (pins.length > 0 || aligning === false);
+		if (work && !confirm('Remove the scan from the map? Its alignment is lost unless you saved an alignment file.')) return;
+		closeScan();
+		tileUrl = '';
 	}
 
 	function closeScan() {
@@ -443,6 +457,8 @@
 	}
 
 	function snapshotVertices(): [number, number][] {
+		// hidden shapes aren't snapped to (you hid them to draw something different)
+		if (!showShapes) return [];
 		const out: [number, number][] = [];
 		const walk = (c: unknown): void => {
 			if (Array.isArray(c) && typeof c[0] === 'number') out.push([c[0] as number, c[1] as number]);
@@ -451,6 +467,17 @@
 		for (const f of lastSnap.features) if (f.geometry && 'coordinates' in f.geometry) walk(f.geometry.coordinates);
 		return out;
 	}
+
+	/** Show or hide the existing shapes and the base map (the View controls). */
+	function applyView() {
+		if (!map || !ready) return;
+		for (const l of snapshotLayers('snapshot')) if (map.getLayer(l.id)) map.setLayoutProperty(l.id, 'visibility', showShapes ? 'visible' : 'none');
+		if (map.getLayer('basemap')) map.setLayoutProperty('basemap', 'visibility', showBase ? 'visible' : 'none');
+	}
+	$effect(() => {
+		void [showShapes, showBase];
+		untrack(applyView);
+	});
 
 	function drawDraft() {
 		if (!map || !ready) return;
@@ -571,6 +598,8 @@
 	}
 	/** Click/tap: toggle the building under the pointer. */
 	function pickAt(x: number, y: number) {
+		// hidden shapes can't be picked: the first pick shows them again
+		if (!showShapes) return void (showShapes = true);
 		const hit = snapshotHits([x - 5, y - 5], [x + 5, y + 5])[0];
 		if (!hit) return;
 		bulkResult = null;
@@ -781,6 +810,7 @@
 			m.on('move', () => top?.jumpTo({ center: m.getCenter(), zoom: m.getZoom(), bearing: m.getBearing(), pitch: m.getPitch() }));
 			ready = true;
 			applyOverlay();
+			applyView();
 			refresh();
 		});
 	});
@@ -811,7 +841,7 @@
 		untrack(applyOverlay);
 	});
 	$effect(() => {
-		void [opacity, overlayHidden];
+		void [opacity, overlayHidden, scanOff];
 		untrack(applyOpacity);
 	});
 	$effect(() => {
@@ -863,6 +893,7 @@
 		const t = e.target as HTMLElement;
 		if (t.closest('input, textarea, select')) return;
 		if (e.key === 'f' && !e.repeat) overlayHidden = true;
+		if (e.key === 'h' && !e.repeat && !e.metaKey && !e.ctrlKey) showShapes = !showShapes;
 		if (drawing && e.key === 'Backspace') {
 			e.preventDefault();
 			pts = pts.slice(0, -1);
@@ -915,12 +946,24 @@
 <svelte:window onkeydown={onkey} onkeyup={onkeyup} onpointermove={swipeMove} onpointerup={() => (dragging = false)} />
 <svelte:head><title>Workbench · {data.settings.site_name}</title></svelte:head>
 
-<div class="wb" class:focus={focus || selectFocus}>
+<div class="wb" class:focus={focus || selectFocus} class:collapsed={narrow && panelHidden && !(focus || selectFocus)}>
 	<aside class="panel">
 		<div class="tabs">
 			{#each TOOLS.filter((t) => t.ok) as t (t.id)}
-				<button class:on={tool === t.id} onclick={() => ((tool = t.id), (pts = []))}>{t.label}</button>
+				<button
+					class:on={tool === t.id}
+					onclick={() => {
+						// a different tool starts a fresh drawing; the same tab (e.g. reopening the folded panel) keeps it
+						if (tool !== t.id) ((tool = t.id), (pts = []));
+						panelHidden = false;
+					}}>{t.label}</button
+				>
 			{/each}
+			{#if narrow}
+				<button class="ghost panel-toggle" aria-expanded={!panelHidden} onclick={() => (panelHidden = !panelHidden)} title={panelHidden ? 'Show the tool panel' : 'Fold the panel away to see more map'}>
+					{panelHidden ? 'Show ▾' : 'Hide ▴'}
+				</button>
+			{/if}
 		</div>
 
 		{#if !narrow && (selected.length || selecting || bulkResult)}
@@ -934,10 +977,12 @@
 
 		<!-- ======================= SCAN (session only) ======================= -->
 		{#if tool === 'overlay'}
-			<p class="hint">
-				Lay a Sanborn sheet, plat, aerial or any scanned map over the data to line things up and trace from it.
-				<strong>Scans stay in your browser for this session only</strong>: nothing is uploaded or published.
-			</p>
+			{#if !scan && !tileUrl}
+				<p class="hint">
+					Lay a Sanborn sheet, plat, aerial or any scanned map over the data to line things up and trace from it.
+					<strong>Scans stay in your browser for this session only</strong>: nothing is uploaded or published.
+				</p>
+			{/if}
 			{#if scanError}<p class="notice error small">{scanError}</p>{/if}
 
 			{#if !scan && !tileUrl}
@@ -951,32 +996,35 @@
 					<button onclick={useTiles}>Use</button>
 				</div>
 			{:else}
-				<div class="loaded">
-					<strong>{scan ? scan.name : 'Tile layer'}</strong>
-					<button class="ghost" onclick={() => { closeScan(); tileUrl = ''; }}>Close</button>
+				<div class="scan-card">
+					<div class="scan-head">
+						<strong class="scan-name">{scan ? scan.name : 'Tile layer'}</strong>
+						<span class="session" title="Not uploaded or saved anywhere; gone when you close the page">this session only</span>
+					</div>
+					<div class="row scan-actions">
+						{#if scan}
+							{#if aligning}
+								<button class="primary" onclick={() => (aligning = false)}>Finish aligning</button>
+							{:else}
+								<button onclick={() => ((aligning = true), (panelOpen = false))} title="Show the corner handles or pins to line the scan up">Align scan</button>
+							{/if}
+						{/if}
+						<button class="ghost danger-btn" onclick={removeScan} title="Take the scan off the map">Remove scan</button>
+					</div>
 				</div>
-				<div class="field">
-					<label for="op">Opacity {Math.round(opacity * 100)}%</label>
-					<input id="op" type="range" min="0" max="1" step="0.05" bind:value={opacity} disabled={compare === 'swipe'} />
-				</div>
-				<div class="seg">
-					<button class:on={compare === 'blend'} onclick={() => (compare = 'blend')}>Blend</button>
-					<button class:on={compare === 'swipe'} onclick={() => (compare = 'swipe')}>Swipe</button>
-				</div>
-				<p class="hint">Hold <kbd>F</kbd> to flicker the scan off and back on.</p>
 				<div class="field">
 					<label for="dy">Scan shows the year</label>
 					<input id="dy" bind:value={depictsYear} placeholder="1925" oninput={() => /^\d{4}$/.test(depictsYear) && (year = Number(depictsYear))} />
 					<p class="hint">Moves the time slider and pre-fills dates on traced shapes.</p>
 				</div>
 
-				{#if scan}
-					<hr />
-					<div class="spread">
-						<h3>Alignment</h3>
-						<label class="check"><input type="checkbox" bind:checked={aligning} /> show handles</label>
-					</div>
-					{#if aligning}
+				{#if scan && aligning}
+					<section class="aligning">
+						<h3>Aligning</h3>
+						<div class="field">
+							<label for="op">Scan opacity {Math.round(opacity * 100)}%</label>
+							<input id="op" type="range" min="0" max="1" step="0.05" bind:value={opacity} disabled={compare === 'swipe'} />
+						</div>
 						<div class="seg">
 							<button class:on={alignMode === 'corners'} onclick={() => (alignMode = 'corners')} title="Drag the sheet's corners into place">Drag corners</button>
 							<button class:on={alignMode === 'pins'} onclick={() => (alignMode = 'pins')} title="Pin matching spots on the scan and the map">Match pins</button>
@@ -1045,9 +1093,12 @@
 						{#if narrow}
 							<button class="primary" onclick={() => (panelOpen = false)}>Back to full-screen aligning</button>
 						{/if}
-						<button class={narrow ? 'ghost' : 'primary'} onclick={() => (aligning = false)}>Done aligning</button>
-					{/if}
-					<div class="row" style="margin-top: 10px">
+					</section>
+				{/if}
+				{#if scan}
+					<details class="align-file">
+						<summary>Alignment file</summary>
+					<div class="row">
 						<button class="ghost" onclick={exportAlignment} title="Download the corner positions as a small JSON file">Save alignment file</button>
 						<label class="btn ghost filebtn">
 							Load alignment
@@ -1055,40 +1106,84 @@
 						</label>
 					</div>
 					<p class="hint">Alignment files keep your work between sessions; the scan itself never leaves your computer.</p>
+					</details>
 				{/if}
-				<p class="hint">Next: switch to <button class="link" onclick={() => (tool = 'trace')}>Trace</button> to draw footprints and streets over it.</p>
+				{#if !(scan && aligning)}
+					<button class="primary start-tracing" onclick={() => (tool = 'trace')}>Start tracing →</button>
+					<p class="hint">Opacity, swipe and what's shown are under <strong>View</strong> on the map.</p>
+				{/if}
 			{/if}
 		{/if}
 
 		<!-- ======================= TRACE ======================= -->
 		{#if tool === 'trace'}
-			<p class="hint">
-				Click to place vertices over the overlay. Corners snap to existing shapes. Drag the <span class="sw move"></span> handle to move the
-				whole shape. <kbd>Backspace</kbd> undoes, <kbd>Esc</kbd> clears.
-			</p>
-			<div class="opacity">
-				{#if activeSource}
-					<div class="field">
-						<label for="tso">Scan opacity {compare === 'swipe' ? '(swipe mode)' : `${Math.round(opacity * 100)}%`}</label>
-						<input id="tso" type="range" min="0" max="1" step="0.05" bind:value={opacity} disabled={compare === 'swipe'} />
-					</div>
-				{/if}
-				<div class="field">
-					<label for="tsf">Shape fill {Math.round(shapeFill * 100)}%</label>
-					<input id="tsf" type="range" min="0" max="1" step="0.05" bind:value={shapeFill} />
-				</div>
-				<div class="field">
-					<label for="tsl">Shape outline {Math.round(shapeLine * 100)}%</label>
-					<input id="tsl" type="range" min="0.1" max="1" step="0.05" bind:value={shapeLine} />
-				</div>
-			</div>
 			<div class="seg">
 				{#each ['polygon', 'line', 'point'] as const as m (m)}
 					<button class:on={drawMode === m} onclick={() => ((drawMode = m), (pts = []))}>{m}</button>
 				{/each}
 			</div>
-			<p class="muted small">{pts.length} vertices {geometry ? '· ready' : ''}</p>
-			<h3>Export</h3>
+			<p class="hint">
+				{narrow ? 'Tap' : 'Click'} to add corners over the scan{showShapes ? '; they snap to existing shapes' : ''}. Drag the
+				<span class="sw move"></span> handle to move the whole shape.
+				{#if !narrow}<kbd>Backspace</kbd> undoes, <kbd>Esc</kbd> clears.{/if}
+				{#if showShapes}<button class="link" onclick={() => (showShapes = false)}>Hide existing shapes</button> to trace without them in the way.{/if}
+			</p>
+			<div class="row draw-status">
+				<span class="muted small">{pts.length} corner{pts.length === 1 ? '' : 's'}{geometry ? ' · ready to save' : ''}</span>
+				<span class="spacer"></span>
+				<button class="ghost small-btn" disabled={!pts.length} onclick={() => (pts = pts.slice(0, -1))}>Undo</button>
+				<button class="ghost small-btn" disabled={!pts.length} onclick={() => (pts = [])}>Clear</button>
+			</div>
+
+			<h3>Save to a page</h3>
+			<form method="post" action="?/trace" class="stack" use:enhance={() => after()}>
+				<input type="hidden" name="tool" value="trace" />
+				<input type="hidden" name="geojson" value={geojsonText} />
+				<div>
+					<label for="te">Add to existing page…</label>
+					<EntityPicker id="te" name="entity_id" />
+				</div>
+				<p class="muted small">…or create a new one:</p>
+				<div class="fields">
+					<div><label for="tn">Name</label><input id="tn" name="name" placeholder="Hardware store" bind:value={traceName} /></div>
+					<div>
+						<label for="tk">Kind</label>
+						<select id="tk" name="kind" bind:value={traceKind}>{#each spatialKinds as k (k.id)}<option value={k.id}>{k.label}</option>{/each}</select>
+					</div>
+					<div>
+						<label for="ts">Condition</label>
+						<select id="ts" name="status"><option value="">(unknown)</option>{#each data.vocab.statuses as s (s.id)}<option value={s.id}>{s.label}</option>{/each}</select>
+					</div>
+					<div>
+						<label for="tr">Role</label>
+						<select id="tr" name="role" bind:value={traceRole}>{#each ['footprint', 'shape', 'centerline', 'boundary', 'point'] as r (r)}<option>{r}</option>{/each}</select>
+					</div>
+				</div>
+				<TemporalFields
+					sources={data.sources}
+					idPrefix="tr"
+					values={{ valid_from: `${/^\d{4}$/.test(depictsYear) ? depictsYear : year}-01-01`, valid_from_precision: 'year', confidence: 'probable' }}
+					fromLabel="Seen from"
+					toLabel="Until"
+				/>
+				<button class="primary" disabled={!geometry}>Save shape</button>
+			</form>
+
+			<details class="fold">
+				<summary>Drawing style</summary>
+				<div class="opacity">
+					<div class="field">
+						<label for="tsf">Shape fill {Math.round(shapeFill * 100)}%</label>
+						<input id="tsf" type="range" min="0" max="1" step="0.05" bind:value={shapeFill} />
+					</div>
+					<div class="field">
+						<label for="tsl">Shape outline {Math.round(shapeLine * 100)}%</label>
+						<input id="tsl" type="range" min="0.1" max="1" step="0.05" bind:value={shapeLine} />
+					</div>
+				</div>
+			</details>
+			<details class="fold" open={kept.length > 0}>
+				<summary>Export as GeoJSON instead{kept.length ? ` (${kept.length} kept)` : ''}</summary>
 			<p class="hint">
 				Take the shape away as GeoJSON (lon/lat, EPSG:4326) without creating or changing a page. The name, kind and role below, and the
 				year, go in its properties.
@@ -1124,40 +1219,7 @@
 			{#if exportNote}<p class="notice ok small">{exportNote}</p>{/if}
 			<p class="hint">Kept shapes stay in this browser tab only and are gone when you leave the page.</p>
 
-			<hr />
-			<h3>…or save it to a page</h3>
-			<form method="post" action="?/trace" class="stack" use:enhance={() => after()}>
-				<input type="hidden" name="tool" value="trace" />
-				<input type="hidden" name="geojson" value={geojsonText} />
-				<div>
-					<label for="te">Add to existing page…</label>
-					<EntityPicker id="te" name="entity_id" />
-				</div>
-				<p class="muted small">…or create a new one:</p>
-				<div class="fields">
-					<div><label for="tn">Name</label><input id="tn" name="name" placeholder="Hardware store" bind:value={traceName} /></div>
-					<div>
-						<label for="tk">Kind</label>
-						<select id="tk" name="kind" bind:value={traceKind}>{#each spatialKinds as k (k.id)}<option value={k.id}>{k.label}</option>{/each}</select>
-					</div>
-					<div>
-						<label for="ts">Condition</label>
-						<select id="ts" name="status"><option value="">(unknown)</option>{#each data.vocab.statuses as s (s.id)}<option value={s.id}>{s.label}</option>{/each}</select>
-					</div>
-					<div>
-						<label for="tr">Role</label>
-						<select id="tr" name="role" bind:value={traceRole}>{#each ['footprint', 'shape', 'centerline', 'boundary', 'point'] as r (r)}<option>{r}</option>{/each}</select>
-					</div>
-				</div>
-				<TemporalFields
-					sources={data.sources}
-					idPrefix="tr"
-					values={{ valid_from: `${/^\d{4}$/.test(depictsYear) ? depictsYear : year}-01-01`, valid_from_precision: 'year', confidence: 'probable' }}
-					fromLabel="Seen from"
-					toLabel="Until"
-				/>
-				<button class="primary" disabled={!geometry}>Save shape</button>
-			</form>
+			</details>
 		{/if}
 
 		<!-- ======================= AREA ======================= -->
@@ -1288,7 +1350,7 @@
 		{/if}
 		<div class="mapwrap" class:await={pinning && pinStep.where === 'map'}>
 			<div class="map" bind:this={mapEl}></div>
-			<div class="top" bind:this={topEl} class:hidden={compare !== 'swipe' || !activeSource} style:clip-path="inset(0 {100 - swipe * 100}% 0 0)"></div>
+			<div class="top" bind:this={topEl} class:hidden={compare !== 'swipe' || !activeSource || scanOff} style:clip-path="inset(0 {100 - swipe * 100}% 0 0)"></div>
 			{#if compare === 'swipe' && activeSource}
 				<div class="swipe" style:left="{swipe * 100}%" onpointerdown={() => (dragging = true)} role="slider" aria-valuenow={Math.round(swipe * 100)} aria-label="Swipe position" tabindex="0">
 					<span>⇔</span>
@@ -1306,15 +1368,49 @@
 			<div class="map-tl">
 				{#if can('edit_content')}
 					<button
-						class="select-btn"
+						class="chip select-btn"
 						class:on={selecting}
-						onclick={() => (selecting ? stopSelecting() : ((selecting = true), (aligning = false)))}
+						onclick={() => (selecting ? stopSelecting() : ((selecting = true), (aligning = false), (showShapes = true)))}
 						title={narrow ? 'Tap buildings to select them for bulk edits' : 'Click buildings to select them for bulk edits (or Shift-click / Shift-drag any time)'}
 					>
-						{selecting ? 'Done selecting' : selected.length ? `Select (${selected.length})` : 'Select'}
+						{selecting ? 'Stop selecting' : selected.length ? `Select (${selected.length})` : 'Select'}
 					</button>
 				{/if}
-				{#if activeSource}<div class="session-badge" title="Not uploaded or saved; gone when you close the page">session-only scan</div>{/if}
+				<!-- what the map shows, in every tool -->
+				<button
+					class="chip"
+					class:off={!showShapes}
+					aria-pressed={showShapes}
+					onclick={() => (showShapes = !showShapes)}
+					title="Show or hide the existing shapes (H): hide them to trace a new footprint without the old one in the way"
+				>
+					{@render eye(showShapes)} Shapes
+				</button>
+				{#if activeSource}
+					<button class="chip" class:off={scanOff} aria-pressed={!scanOff} onclick={() => (scanOff = !scanOff)} title="Show or hide the scan (hold F to flicker it)">
+						{@render eye(!scanOff)} Scan
+					</button>
+				{/if}
+				<details class="viewmenu">
+					<summary class="chip" title="Layers and opacity">View</summary>
+					<div class="viewpanel">
+						<label class="check"><input type="checkbox" bind:checked={showShapes} /> Existing shapes <kbd>H</kbd></label>
+						<p class="hint">Hidden: only the base map and scan show, and new corners don't snap to the old shapes.</p>
+						{#if activeSource}
+							<label class="check"><input type="checkbox" checked={!scanOff} onchange={(e) => (scanOff = !e.currentTarget.checked)} /> Scan</label>
+							<div class="field">
+								<label for="vop">Scan opacity {compare === 'swipe' ? '(swipe)' : `${Math.round(opacity * 100)}%`}</label>
+								<input id="vop" type="range" min="0" max="1" step="0.05" bind:value={opacity} disabled={compare === 'swipe' || scanOff} />
+							</div>
+							<div class="seg">
+								<button class:on={compare === 'blend'} onclick={() => (compare = 'blend')}>Blend</button>
+								<button class:on={compare === 'swipe'} onclick={() => (compare = 'swipe')}>Swipe</button>
+							</div>
+							<p class="hint">Hold <kbd>F</kbd> to flicker the scan.</p>
+						{/if}
+						<label class="check"><input type="checkbox" bind:checked={showBase} /> Base map</label>
+					</div>
+				</details>
 			</div>
 			{#if box}
 				<div
@@ -1326,7 +1422,7 @@
 				></div>
 			{/if}
 			<div class="dock">
-				<YearSlider bind:year min={Math.min(data.minYear, data.settings.min_year)} max={data.maxYear} />
+				<YearSlider bind:year min={Math.min(data.minYear, data.settings.min_year)} max={data.maxYear} compact={narrow} />
 			</div>
 		</div>
 	</div>
@@ -1337,7 +1433,7 @@
 					<button class:on={alignMode === 'corners'} onclick={() => (alignMode = 'corners')}>Corners</button>
 					<button class:on={alignMode === 'pins'} onclick={() => (alignMode = 'pins')}>Pins</button>
 				</div>
-				<button class="primary" onclick={() => (aligning = false)}>Done</button>
+				<button class="primary" onclick={() => (aligning = false)}>Finish aligning</button>
 			</div>
 			{#if alignMode === 'corners'}
 				<p class="bar-tip">Drag the <span class="sw corner"></span> corners onto matching street corners; drag <span class="sw move"></span> to move the sheet.</p>
@@ -1375,6 +1471,13 @@
 	{/if}
 </div>
 
+{#snippet eye(on: boolean)}
+	<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" class="eye">
+		<path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="2" />
+		{#if on}<circle cx="12" cy="12" r="3" fill="currentColor" />{:else}<path d="M4 20 20 4" stroke="currentColor" stroke-width="2" />{/if}
+	</svg>
+{/snippet}
+
 {#snippet selectionUI()}
 	<div class="bar-row">
 		<strong class="sel-count">{selected.length} selected</strong>
@@ -1383,7 +1486,7 @@
 			<button class="ghost small-btn" class:on={boxMode} onclick={() => (boxMode = !boxMode)} title="Drag a box to select everything in it">Box</button>
 		{/if}
 		{#if selected.length}<button class="ghost small-btn" onclick={() => ((selected = []), (bulkResult = null))}>Clear</button>{/if}
-		<button class="ghost small-btn" onclick={() => ((selected = []), (bulkResult = null), stopSelecting())}>Done</button>
+		<button class="ghost small-btn" onclick={() => ((selected = []), (bulkResult = null), stopSelecting())}>Stop selecting</button>
 	</div>
 	{#if form && form.tool === 'select' && 'error' in form && form.error}<p class="notice error small">{form.error}</p>{/if}
 	{#if bulkResult}
@@ -1508,6 +1611,9 @@
 		justify-content: center;
 		padding: 6px 4px;
 		font-size: 0.8rem;
+	}
+	/* polygon / line / point */
+	.seg button {
 		text-transform: capitalize;
 	}
 	.tabs button.on,
@@ -1691,7 +1797,7 @@
 	}
 	.banner {
 		position: absolute;
-		top: 10px;
+		top: 50px; /* below the map's chips */
 		left: 50%;
 		transform: translateX(-50%);
 		background: rgba(242, 193, 78, 0.95);
@@ -1701,27 +1807,6 @@
 		font-size: 0.8rem;
 		font-weight: 600;
 		z-index: 3;
-	}
-	.session-badge {
-		position: absolute;
-		top: 10px;
-		left: 10px;
-		z-index: 3;
-		font-family: var(--mono);
-		font-size: 0.7rem;
-		padding: 2px 8px;
-		border-radius: 999px;
-		background: rgba(20, 17, 15, 0.85);
-		color: var(--amber);
-		border: 1px solid var(--amber);
-	}
-	.loaded {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 8px;
-		margin-bottom: 10px;
-		word-break: break-all;
 	}
 	.filebtn {
 		position: relative;
@@ -1816,14 +1901,135 @@
 		align-items: center;
 		gap: 8px;
 	}
-	.map-tl .session-badge {
-		position: static;
+	.map-tl {
+		flex-wrap: wrap;
+		right: 60px; /* clear of the zoom buttons */
+		pointer-events: none;
 	}
-	.select-btn {
-		padding: 5px 12px;
+	.map-tl > * {
+		pointer-events: auto;
+	}
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 5px 11px;
 		font-size: 0.8rem;
 		background: rgba(20, 17, 15, 0.9);
-		border-color: var(--line-2);
+		border: 1px solid var(--line-2);
+		border-radius: 999px;
+		color: var(--ink);
+		cursor: pointer;
+		list-style: none;
+	}
+	.chip::-webkit-details-marker {
+		display: none;
+	}
+	.chip.off {
+		color: var(--muted);
+		border-style: dashed;
+	}
+	.eye {
+		flex: none;
+	}
+	/* the panel hangs from the chip row's left edge (the map's), so it stays on screen on a phone */
+	.viewmenu {
+		position: static;
+	}
+	.viewmenu[open] > .chip {
+		border-color: var(--ink-2);
+	}
+	.viewpanel {
+		position: absolute;
+		top: calc(100% + 6px);
+		left: 0;
+		z-index: 6;
+		width: min(270px, calc(100vw - 40px));
+		display: grid;
+		gap: 6px;
+		padding: 10px 12px;
+		background: var(--bg-2);
+		border: 1px solid var(--line-2);
+		border-radius: var(--radius);
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+		font-size: 0.85rem;
+	}
+	.viewpanel .hint {
+		margin: -2px 0 4px 22px;
+	}
+	.viewpanel .field,
+	.viewpanel .seg {
+		margin: 0 0 0 22px;
+	}
+	.scan-card {
+		display: grid;
+		gap: 8px;
+		padding: 10px 12px;
+		margin-bottom: 12px;
+		border: 1px solid var(--line-2);
+		border-radius: var(--radius);
+		background: var(--panel);
+	}
+	.scan-head {
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.scan-name {
+		overflow-wrap: anywhere;
+	}
+	.session {
+		font-family: var(--mono);
+		font-size: 0.68rem;
+		color: var(--amber);
+	}
+	.scan-actions {
+		gap: 6px;
+		flex-wrap: wrap;
+	}
+	.danger-btn {
+		color: var(--danger);
+		border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+	}
+	.danger-btn:hover {
+		background: color-mix(in srgb, var(--danger) 12%, transparent);
+	}
+	.aligning {
+		padding: 10px 0 4px;
+		border-top: 1px solid var(--line);
+	}
+	.aligning h3 {
+		margin-top: 0;
+	}
+	.align-file,
+	.fold {
+		margin: 10px 0;
+		border-top: 1px solid var(--line);
+		padding-top: 8px;
+	}
+	.align-file summary,
+	.fold summary {
+		cursor: pointer;
+		color: var(--ink-2);
+		font-weight: 600;
+	}
+	.align-file[open] summary,
+	.fold[open] summary {
+		margin-bottom: 8px;
+	}
+	.start-tracing {
+		width: 100%;
+		justify-content: center;
+		margin-top: 6px;
+	}
+	.draw-status {
+		align-items: center;
+		gap: 6px;
+		margin: 4px 0 10px;
+	}
+	.draw-status .spacer {
+		flex: 1;
 	}
 	.select-btn.on,
 	.small-btn.on {
@@ -1962,6 +2168,24 @@
 		.wb {
 			grid-template-columns: 1fr;
 			grid-template-rows: 45% 1fr;
+		}
+		/* the panel folded down to its tabs */
+		.wb.collapsed {
+			grid-template-rows: auto minmax(0, 1fr);
+		}
+		.wb.collapsed .panel {
+			overflow: hidden;
+			padding-bottom: 6px;
+		}
+		.wb.collapsed .panel > :not(.tabs) {
+			display: none;
+		}
+		.wb.collapsed .tabs {
+			margin-bottom: 0;
+		}
+		.panel-toggle {
+			flex: 0 0 auto !important;
+			padding: 6px 10px !important;
 		}
 		/* full-screen aligning: the scan/map above, the control bar below */
 		.wb.focus {
