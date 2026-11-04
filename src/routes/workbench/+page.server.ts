@@ -2,7 +2,13 @@ import { fail, redirect } from '@sveltejs/kit';
 import { newPagesPrivate, requirePermission } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, required, slugify, str } from '$lib/server/forms';
 import { librarySources, madeSource, resolveInlineSource, type MadeSource } from '$lib/server/sources';
+import { parseFuzzyDate } from '$lib/time';
 import type { Actions, PageServerLoad } from './$types';
+
+interface BulkResult {
+	done: number;
+	skipped: { id: string; name: string; slug: string; reason: string }[];
+}
 
 export const load: PageServerLoad = async ({ locals, parent }) => {
 	const { user, perms } = await parent();
@@ -143,6 +149,36 @@ export const actions: Actions = {
 		});
 		check(res);
 		return { ok: `Retired ${res.data} feature${res.data === 1 ? '' : 's'}.` };
+	}),
+
+	/** Selected pages: gone by a year (e.g. missing from that year's aerial). */
+	bulkGone: wrap(async (fd, locals) => {
+		await requirePermission(locals, 'edit_content');
+		const ids = fd.getAll('ids').map(String).filter(Boolean);
+		if (!ids.length) throw new FormError('Select some buildings first.');
+		const at = parseFuzzyDate(str(fd, 'at'));
+		if (!at?.date) throw new FormError('Gone by when? Enter a year, like 1958.');
+		const res = await locals.supabase.rpc('end_pages', {
+			p_ids: ids,
+			p_at: at.date,
+			p_precision: at.precision,
+			p_status: str(fd, 'status') ?? 'demolished',
+			p_note: str(fd, 'note')
+		});
+		check(res);
+		return { bulk: { ...(res.data as BulkResult), action: 'gone' as const, at: str(fd, 'at') } };
+	}),
+
+	/** Selected pages marked gone that a later aerial shows still standing. */
+	bulkStanding: wrap(async (fd, locals) => {
+		await requirePermission(locals, 'edit_content');
+		const ids = fd.getAll('ids').map(String).filter(Boolean);
+		if (!ids.length) throw new FormError('Select some buildings first.');
+		const at = parseFuzzyDate(str(fd, 'at'));
+		if (!at?.date) throw new FormError('Still standing in which year?');
+		const res = await locals.supabase.rpc('reopen_pages', { p_ids: ids, p_at: at.date });
+		check(res);
+		return { bulk: { ...(res.data as BulkResult), action: 'standing' as const, at: str(fd, 'at') } };
 	}),
 
 	import: wrap(async (fd, locals) => {

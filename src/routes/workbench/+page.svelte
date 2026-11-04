@@ -511,6 +511,84 @@
 
 	// ---------------------------------------------------------------- area preview
 	let previewIds = $state<string[]>([]);
+
+	// ---------------------------------------------------------------- bulk selection
+	// Shift-click a building to select it (Shift-drag selects a box); on a phone, the map's
+	// Select button turns taps into selection. The selected pages can then be marked gone by a
+	// year, or still standing in one, in one go.
+	interface Picked {
+		id: string;
+		name: string;
+		slug: string;
+		kind: string;
+		status: string | null;
+		ghost: boolean;
+	}
+	let selected = $state<Picked[]>([]);
+	let selecting = $state(false);
+	let boxMode = $state(false);
+	let box = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+	let bulkResult = $state<{ action: 'gone' | 'standing'; at: string; done: number; skipped: { id: string; name: string; slug: string; reason: string }[] } | null>(null);
+	let bulkBusy = $state(false);
+	let bulkYearInput = $state<string | null>(null);
+	let bulkNoteInput = $state<string | null>(null);
+	const bulkYear = $derived(bulkYearInput ?? (/^\d{4}$/.test(depictsYear) ? depictsYear : String(year)));
+	const bulkNote = $derived(bulkNoteInput ?? `Not seen in the ${bulkYear} aerial`);
+	const goneStatuses = $derived(data.vocab.statuses.filter((st) => !st.is_extant && st.decay_level >= 5));
+
+	const pickedOf = (f: { properties: Record<string, unknown> | null }): Picked | null => {
+		const p = f.properties ?? {};
+		if (!p.id) return null;
+		return { id: String(p.id), name: String(p.name ?? 'Unnamed'), slug: String(p.slug ?? ''), kind: String(p.kind ?? ''), status: (p.status_label as string) ?? null, ghost: !!p.ghost };
+	};
+	function snapshotHits(a: [number, number], b: [number, number]): Picked[] {
+		if (!map) return [];
+		const layers = snapshotLayers('snapshot').map((l) => l.id).filter((id) => map!.getLayer(id));
+		const seen = new Set<string>();
+		const out: Picked[] = [];
+		for (const f of map.queryRenderedFeatures([a, b], { layers })) {
+			const p = pickedOf(f as unknown as { properties: Record<string, unknown> });
+			if (p && !seen.has(p.id)) {
+				seen.add(p.id);
+				out.push(p);
+			}
+		}
+		return out;
+	}
+	/** Click/tap: toggle the building under the pointer. */
+	function pickAt(x: number, y: number) {
+		const hit = snapshotHits([x - 5, y - 5], [x + 5, y + 5])[0];
+		if (!hit) return;
+		bulkResult = null;
+		selected = selected.some((s) => s.id === hit.id) ? selected.filter((s) => s.id !== hit.id) : [...selected, hit];
+	}
+	/** Box: add everything inside it. */
+	function pickBox(b: { x0: number; y0: number; x1: number; y1: number }) {
+		const hits = snapshotHits([Math.min(b.x0, b.x1), Math.min(b.y0, b.y1)], [Math.max(b.x0, b.x1), Math.max(b.y0, b.y1)]);
+		const have = new Set(selected.map((s) => s.id));
+		bulkResult = null;
+		selected = [...selected, ...hits.filter((h) => !have.has(h.id))];
+	}
+	function stopSelecting() {
+		selecting = false;
+		boxMode = false;
+	}
+	/** After a bulk action: show what happened, reload the map, start a fresh selection. */
+	function afterBulk() {
+		bulkBusy = true;
+		return async ({ result, update }: { result: { type: string; data?: Record<string, unknown> }; update: (o?: { reset?: boolean }) => Promise<void> }) => {
+			await update({ reset: false });
+			bulkBusy = false;
+			if (result.type === 'success' && result.data?.bulk) {
+				bulkResult = result.data.bulk as typeof bulkResult;
+				const skippedIds = new Set(bulkResult!.skipped.map((x) => x.id));
+				// keep the ones that were skipped selected, so they can be looked at
+				selected = selected.filter((x) => skippedIds.has(x.id));
+				// the year and note stay: the next buildings missing from the same aerial get the same
+				refreshKey++;
+			}
+		};
+	}
 	$effect(() => {
 		const p = form && 'preview' in form ? form.preview : null;
 		previewIds = p ? p.map((r) => r.id) : [];
@@ -573,7 +651,7 @@
 		if (!res.ok) return;
 		lastSnap = await res.json();
 		(map.getSource('snapshot') as GeoJSONSource).setData(lastSnap);
-		highlight(previewIds);
+		highlight(highlightIds);
 	}
 
 	onMount(() => {
@@ -599,13 +677,51 @@
 		});
 		const mm = map;
 		// The map shares the stage with the scan pane while pinning, so follow its size
+		let lastW = 0;
+		let lastH = 0;
+		let lastLayout = '';
 		resizeObs = new ResizeObserver(() => {
+			const w = mapEl.clientWidth;
+			const h = mapEl.clientHeight;
+			const layout = `${focus}|${selectFocus}|${pinning}`;
 			map?.resize();
 			top?.resize();
+			// Only the bottom bar grew or shrank (same layout, same width): resizing keeps the centre,
+			// which would shift everything on screen by half the change; keep it where it was
+			if (map && lastH && layout === lastLayout && w === lastW && h !== lastH) map.panBy([0, -(lastH - h) / 2], { duration: 0 });
+			lastW = w;
+			lastH = h;
+			lastLayout = layout;
 		});
 		resizeObs.observe(mapEl);
 		mm.addControl(new maplibre.NavigationControl(), 'top-right');
 		mm.doubleClickZoom.disable();
+		// Shift-drag selects a box of buildings here (instead of zooming to it); so does a drag in Box mode
+		mm.boxZoom.disable();
+		const box0 = (e: PointerEvent) => {
+			if (!(e.shiftKey || boxMode) || e.button !== 0) return;
+			if ((e.target as HTMLElement).closest('.maplibregl-marker, .maplibregl-ctrl')) return;
+			const r = mapEl.getBoundingClientRect();
+			mm.dragPan.disable();
+			box = { x0: e.clientX - r.left, y0: e.clientY - r.top, x1: e.clientX - r.left, y1: e.clientY - r.top };
+			const moveBox = (ev: PointerEvent) => {
+				if (box) box = { ...box, x1: ev.clientX - r.left, y1: ev.clientY - r.top };
+			};
+			const endBox = () => {
+				window.removeEventListener('pointermove', moveBox);
+				window.removeEventListener('pointerup', endBox);
+				window.removeEventListener('pointercancel', endBox);
+				mm.dragPan.enable();
+				const b = box;
+				box = null;
+				// a box, not a click (the click handler takes those)
+				if (b && Math.hypot(b.x1 - b.x0, b.y1 - b.y0) > 6) pickBox(b);
+			};
+			window.addEventListener('pointermove', moveBox);
+			window.addEventListener('pointerup', endBox);
+			window.addEventListener('pointercancel', endBox);
+		};
+		mapEl.addEventListener('pointerdown', box0, true);
 		mm.on('load', () => {
 			const m = map!;
 			m.setPaintProperty('basemap', 'raster-opacity', 0.45);
@@ -625,6 +741,12 @@
 			m.addLayer({ id: 'draft-pt', type: 'circle', source: 'draft', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 4.5, 'circle-color': '#f2c14e', 'circle-stroke-color': '#17130f', 'circle-stroke-width': 1.5 } });
 
 			m.on('click', (e) => {
+				// Shift-click (or a tap in Select mode) picks buildings for bulk edits
+				if (e.originalEvent.shiftKey || selecting) {
+					if ((e.originalEvent.target as HTMLElement | null)?.closest('.maplibregl-marker')) return;
+					pickAt(e.point.x, e.point.y);
+					return;
+				}
 				if (!drawing && !pinning) return;
 				// clicking a handle isn't a new vertex
 				if ((e.originalEvent.target as HTMLElement | null)?.closest('.maplibregl-marker')) return;
@@ -713,12 +835,14 @@
 		void [shapeFill, shapeLine, ready];
 		untrack(applyShapeOpacity);
 	});
+	// the area preview and the bulk selection share the map's "selected" look
+	const highlightIds = $derived([...new Set([...previewIds, ...selected.map((x) => x.id)])]);
 	$effect(() => {
-		void previewIds;
-		untrack(() => highlight(previewIds));
+		const ids = highlightIds;
+		untrack(() => highlight(ids));
 	});
 	$effect(() => {
-		if (map) map.getCanvas().style.cursor = drawing || pinning ? 'crosshair' : '';
+		if (map) map.getCanvas().style.cursor = drawing || pinning || boxMode ? 'crosshair' : selecting ? 'pointer' : '';
 	});
 
 	function onkey(e: KeyboardEvent) {
@@ -730,6 +854,10 @@
 			pts = pts.slice(0, -1);
 		}
 		if (drawing && e.key === 'Escape') pts = [];
+		else if (e.key === 'Escape' && (selected.length || selecting) && !(e.target as HTMLElement).closest('input, select, textarea')) {
+			selected = [];
+			stopSelecting();
+		}
 		if (pinning && e.key === 'Backspace' && pins.length) {
 			e.preventDefault();
 			removePin(pins[pins.length - 1].id);
@@ -764,20 +892,26 @@
 		{ id: 'import', label: 'Import', ok: can('bulk_edit') }
 	]);
 	const msg = $derived(form && form.tool === tool ? form : null);
-	const focus = $derived(narrow && tool === 'overlay' && !!scan && aligning && !panelOpen);
+	// on a phone, selecting takes the screen like aligning does (the bar holds the bulk actions)
+	const selectFocus = $derived(narrow && (selecting || selected.length > 0));
+	const focus = $derived(!selectFocus && narrow && tool === 'overlay' && !!scan && aligning && !panelOpen);
 	const spatialKinds = $derived(data.vocab.kinds.filter((k) => !['person', 'organization', 'event', 'media'].includes(k.id)));
 </script>
 
 <svelte:window onkeydown={onkey} onkeyup={onkeyup} onpointermove={swipeMove} onpointerup={() => (dragging = false)} />
 <svelte:head><title>Workbench · {data.settings.site_name}</title></svelte:head>
 
-<div class="wb" class:focus>
+<div class="wb" class:focus={focus || selectFocus}>
 	<aside class="panel">
 		<div class="tabs">
 			{#each TOOLS.filter((t) => t.ok) as t (t.id)}
 				<button class:on={tool === t.id} onclick={() => ((tool = t.id), (pts = []))}>{t.label}</button>
 			{/each}
 		</div>
+
+		{#if !narrow && (selected.length || selecting || bulkResult)}
+			<section class="selection card">{@render selectionUI()}</section>
+		{/if}
 
 		{#if msg && 'error' in msg && msg.error}<p class="notice error small">{msg.error}</p>{/if}
 		{#if msg && 'ok' in msg && msg.ok}
@@ -1155,7 +1289,28 @@
 					{/if}
 				</div>
 			{/if}
-			{#if activeSource}<div class="session-badge" title="Not uploaded or saved; gone when you close the page">session-only scan</div>{/if}
+			<div class="map-tl">
+				{#if can('edit_content')}
+					<button
+						class="select-btn"
+						class:on={selecting}
+						onclick={() => (selecting ? stopSelecting() : ((selecting = true), (aligning = false)))}
+						title={narrow ? 'Tap buildings to select them for bulk edits' : 'Click buildings to select them for bulk edits (or Shift-click / Shift-drag any time)'}
+					>
+						{selecting ? 'Done selecting' : selected.length ? `Select (${selected.length})` : 'Select'}
+					</button>
+				{/if}
+				{#if activeSource}<div class="session-badge" title="Not uploaded or saved; gone when you close the page">session-only scan</div>{/if}
+			</div>
+			{#if box}
+				<div
+					class="select-box"
+					style:left="{Math.min(box.x0, box.x1)}px"
+					style:top="{Math.min(box.y0, box.y1)}px"
+					style:width="{Math.abs(box.x1 - box.x0)}px"
+					style:height="{Math.abs(box.y1 - box.y0)}px"
+				></div>
+			{/if}
 			<div class="dock">
 				<YearSlider bind:year min={Math.min(data.minYear, data.settings.min_year)} max={data.maxYear} />
 			</div>
@@ -1201,7 +1356,79 @@
 			<button class="link more" onclick={() => (panelOpen = true)}>More options (fit, alignment files, year…)</button>
 		</div>
 	{/if}
+	{#if selectFocus}
+		<div class="alignbar selectbar">{@render selectionUI()}</div>
+	{/if}
 </div>
+
+{#snippet selectionUI()}
+	<div class="bar-row">
+		<strong class="sel-count">{selected.length} selected</strong>
+		<span class="spacer"></span>
+		{#if selecting || narrow}
+			<button class="ghost small-btn" class:on={boxMode} onclick={() => (boxMode = !boxMode)} title="Drag a box to select everything in it">Box</button>
+		{/if}
+		{#if selected.length}<button class="ghost small-btn" onclick={() => ((selected = []), (bulkResult = null))}>Clear</button>{/if}
+		<button class="ghost small-btn" onclick={() => ((selected = []), (bulkResult = null), stopSelecting())}>Done</button>
+	</div>
+	{#if form && form.tool === 'select' && 'error' in form && form.error}<p class="notice error small">{form.error}</p>{/if}
+	{#if bulkResult}
+		<div class="notice small {bulkResult.done ? 'ok' : 'error'}">
+			{bulkResult.done ? `${bulkResult.done} marked ${bulkResult.action === 'gone' ? `gone by ${bulkResult.at}` : `still standing in ${bulkResult.at}`}.` : 'Nothing changed.'}
+			{#if bulkResult.skipped.length}
+				{bulkResult.skipped.length} skipped (still selected):
+				<ul class="skipped">
+					{#each bulkResult.skipped as k (k.id)}<li><span><a href="/e/{k.slug}" target="_blank" rel="noopener">{k.name}</a>{': ' + k.reason}</span></li>{/each}
+				</ul>
+			{/if}
+		</div>
+	{/if}
+	{#if !selected.length}
+		<p class="hint">
+			{narrow || selecting ? 'Tap' : 'Shift-click'} buildings to select them{boxMode ? ', or drag a box' : narrow ? '; Box selects a whole area' : ', or Shift-drag a box'}. Then mark
+			them gone by a year (missing from an aerial), or still standing.
+		</p>
+	{:else}
+		<details class="sel-list">
+			<summary>{selected.map((x) => x.name).slice(0, 3).join(', ')}{selected.length > 3 ? ` and ${selected.length - 3} more` : ''}</summary>
+			<ul>
+				{#each selected as x (x.id)}
+					<li>
+						<a href="/e/{x.slug}" target="_blank" rel="noopener">{x.name}</a>
+						<span class="muted small">{x.ghost ? 'gone' : (x.status ?? x.kind)}</span>
+						<button class="ghost x" title="Unselect" onclick={() => (selected = selected.filter((y) => y.id !== x.id))}>✕</button>
+					</li>
+				{/each}
+			</ul>
+		</details>
+		<form method="post" action="?/bulkGone" class="bulk" use:enhance={afterBulk}>
+			<input type="hidden" name="tool" value="select" />
+			{#each selected as x (x.id)}<input type="hidden" name="ids" value={x.id} />{/each}
+			<div class="bulk-fields">
+				<label>
+					<span>Gone by</span>
+					<input name="at" value={bulkYear} oninput={(e) => (bulkYearInput = e.currentTarget.value)} inputmode="numeric" placeholder="1958" />
+				</label>
+				<label>
+					<span>Now</span>
+					<select name="status">{#each goneStatuses as st (st.id)}<option value={st.id} selected={st.id === 'demolished'}>{st.label}</option>{/each}</select>
+				</label>
+			</div>
+			<label class="bulk-note">
+				<span>Note</span>
+				<input name="note" value={bulkNote} oninput={(e) => (bulkNoteInput = e.currentTarget.value)} />
+			</label>
+			<button class="primary" disabled={bulkBusy}>Mark {selected.length} gone by {bulkYear}</button>
+		</form>
+		<form method="post" action="?/bulkStanding" use:enhance={afterBulk}>
+			<input type="hidden" name="tool" value="select" />
+			<input type="hidden" name="at" value={bulkYear} />
+			{#each selected as x (x.id)}<input type="hidden" name="ids" value={x.id} />{/each}
+			<button class="ghost" disabled={bulkBusy} title="For ones you'd marked gone that a later aerial still shows">Still standing in {bulkYear}</button>
+		</form>
+		<p class="hint">Gone: ends each lifespan then, closes what was still running, and adds the condition (marked approximate). Pages with facts after that year are skipped.</p>
+	{/if}
+{/snippet}
 
 <style>
 	.wb {
@@ -1533,6 +1760,95 @@
 			font-size: 0.8rem;
 		}
 	}
+	.map-tl {
+		position: absolute;
+		top: 10px;
+		left: 10px;
+		z-index: 3;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.map-tl .session-badge {
+		position: static;
+	}
+	.select-btn {
+		padding: 5px 12px;
+		font-size: 0.8rem;
+		background: rgba(20, 17, 15, 0.9);
+		border-color: var(--line-2);
+	}
+	.select-btn.on,
+	.small-btn.on {
+		background: #f2c14e;
+		border-color: #f2c14e;
+		color: #17130f;
+	}
+	.select-box {
+		position: absolute;
+		z-index: 4;
+		border: 2px dashed #f2c14e;
+		background: rgba(242, 193, 78, 0.12);
+		pointer-events: none;
+	}
+	.selection {
+		display: grid;
+		gap: 8px;
+		margin-bottom: 12px;
+		border-color: #f2c14e;
+	}
+	.sel-count {
+		font-size: 0.95rem;
+	}
+	.small-btn {
+		padding: 3px 10px;
+		font-size: 0.78rem;
+	}
+	.sel-list summary {
+		cursor: pointer;
+		color: var(--ink-2);
+	}
+	.sel-list ul,
+	.skipped {
+		margin: 6px 0 0;
+		padding-left: 0;
+		list-style: none;
+		max-height: 160px;
+		overflow-y: auto;
+	}
+	.sel-list li,
+	.skipped li {
+		display: flex;
+		gap: 6px;
+		align-items: baseline;
+		padding: 2px 0;
+	}
+	.sel-list li button {
+		margin-left: auto;
+	}
+	.bulk {
+		display: grid;
+		gap: 6px;
+	}
+	.bulk-fields {
+		display: grid;
+		grid-template-columns: 1fr 1.4fr;
+		gap: 8px;
+	}
+	.bulk label {
+		display: grid;
+		gap: 2px;
+		margin: 0;
+		font-size: 0.78rem;
+		color: var(--muted);
+	}
+	.selectbar {
+		/* of the screen: a percentage would be of its own (content-sized) row */
+		max-height: 48vh;
+		max-height: 48dvh;
+		overflow-y: auto;
+		border-top-color: #f2c14e;
+	}
 	.alignbar {
 		display: grid;
 		gap: 6px;
@@ -1601,6 +1917,9 @@
 		.wb.focus .dock,
 		.wb.focus .banner {
 			display: none;
+		}
+		.wb.focus {
+			grid-template-rows: minmax(0, 1fr) auto;
 		}
 		.banner {
 			top: 42px;
