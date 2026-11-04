@@ -1,15 +1,8 @@
 <script lang="ts">
 	import 'maplibre-gl/dist/maplibre-gl.css';
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, untrack } from 'svelte';
 	import type { GeoJSONSource, Map as MLMap, MapGeoJSONFeature, Popup } from 'maplibre-gl';
-	import {
-		baseStyle,
-		boundsOf,
-		mapView,
-		interactiveLayers,
-		momentLayers,
-		snapshotLayers
-	} from '$lib/map/style';
+	import { baseStyle, boundsOf, mapView, interactiveLayers, momentLayers, snapshotLayers, colorFeatures, type ColorBy } from '$lib/map/style';
 	import { yearToDate } from '$lib/time';
 	import type { Picked } from '$lib/types';
 	import { page } from '$app/state';
@@ -23,6 +16,7 @@
 		moments = true,
 		tag = null,
 		basemap = 'fade',
+		colorBy = 'condition',
 		selected = null,
 		center = undefined,
 		zoom = undefined,
@@ -44,6 +38,8 @@
 		tag?: string | null;
 		/** fade: modern map fades as you go back · always · hidden */
 		basemap?: 'fade' | 'always' | 'hidden';
+		/** colour features by their condition or by their article's status */
+		colorBy?: ColorBy;
 		selected?: string | null;
 		/** defaults to Site settings */
 		center?: [number, number];
@@ -70,6 +66,14 @@
 	let lastSelected: string | null = null;
 	let fetchedBox: number[] = [];
 	let fitNext = false;
+	let lastFc: GeoJSON.FeatureCollection | null = null;
+	// switching what the map is coloured by re-colours what's loaded (no refetch)
+	$effect(() => {
+		const by = colorBy;
+		untrack(() => {
+			if (map && lastFc && map.getSource('snapshot')) (map.getSource('snapshot') as GeoJSONSource).setData(colorFeatures(lastFc, by));
+		});
+	});
 
 	/** Current view expanded by half its size on each side, rounded so cache keys repeat. */
 	function paddedBounds(): number[] {
@@ -114,7 +118,8 @@
 			]);
 			if (ctrl.signal.aborted) return;
 			const fc = snap as GeoJSON.FeatureCollection;
-			(map.getSource('snapshot') as GeoJSONSource).setData(fc);
+			lastFc = fc;
+			(map.getSource('snapshot') as GeoJSONSource).setData(colorFeatures(fc, colorBy));
 			// A neutral install has no configured view; frame its data instead of the whole world.
 			if (fitNext) {
 				fitNext = false;

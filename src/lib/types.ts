@@ -394,6 +394,8 @@ export interface SiteSettings {
 	new_pages_private: boolean;
 	/** save source links to the Internet Archive (migration 0029) */
 	archive_sources?: boolean;
+	/** map colour for plotted buildings with no condition yet; null = off (migration 0038) */
+	unstated_color?: string | null;
 	/** how page timelines are drawn (migration 0034) */
 	timeline_style?: 'table' | 'bubbles';
 	updated_at: string;

@@ -8,7 +8,7 @@
 	import TemporalFields from '$lib/components/TemporalFields.svelte';
 	import ScanPinView from '$lib/components/ScanPinView.svelte';
 	import { apply, cornersFor, fit, fromMerc, metres, minPins, toMerc, type FitKind, type XY } from '$lib/map/georef';
-	import { baseStyle, mapView, snapshotLayers } from '$lib/map/style';
+	import { baseStyle, colorFeatures, mapView, snapshotLayers, type ColorBy } from '$lib/map/style';
 	import { loadView, saveView, loadYear, saveYear } from '$lib/mapMemory';
 	import { can } from '$lib/perms';
 	import { yearToDate } from '$lib/time';
@@ -39,6 +39,8 @@
 	let showShapes = $state(true); // existing shapes: hide them to trace without the old footprint in the way (H)
 	let showBase = $state(true);
 	let scanOff = $state(false);
+	// condition (with "no condition yet" in the site's colour) or article status: shows the work left
+	let colorBy = $state<ColorBy>('condition');
 	let compare = $state<'blend' | 'swipe'>('blend');
 	let swipe = $state(0.5);
 	let scan = $state<{ name: string; url: string; corners: Corners; width: number; height: number } | null>(null);
@@ -478,6 +480,13 @@
 		void [showShapes, showBase];
 		untrack(applyView);
 	});
+	// re-colour what's loaded when the colouring changes
+	$effect(() => {
+		const by = colorBy;
+		untrack(() => {
+			if (map && ready && map.getSource('snapshot')) (map.getSource('snapshot') as GeoJSONSource).setData(colorFeatures(lastSnap, by));
+		});
+	});
 
 	function drawDraft() {
 		if (!map || !ready) return;
@@ -693,7 +702,7 @@
 		const res = await fetch(`/api/snapshot?at=${yearToDate(year)}&ghosts=1&_=${refreshKey}`);
 		if (!res.ok) return;
 		lastSnap = await res.json();
-		(map.getSource('snapshot') as GeoJSONSource).setData(lastSnap);
+		(map.getSource('snapshot') as GeoJSONSource).setData(colorFeatures(lastSnap, colorBy));
 		highlight(highlightIds);
 	}
 
@@ -1396,6 +1405,17 @@
 					<div class="viewpanel">
 						<label class="check"><input type="checkbox" bind:checked={showShapes} /> Existing shapes <kbd>H</kbd></label>
 						<p class="hint">Hidden: only the base map and scan show, and new corners don't snap to the old shapes.</p>
+						<div class="seg color-by" role="radiogroup" aria-label="Colour the shapes by">
+							<button class:on={colorBy === 'condition'} role="radio" aria-checked={colorBy === 'condition'} onclick={() => (colorBy = 'condition')}>Condition</button>
+							<button class:on={colorBy === 'article'} role="radio" aria-checked={colorBy === 'article'} onclick={() => (colorBy = 'article')}>Article status</button>
+						</div>
+						{#if colorBy === 'condition' && data.settings.unstated_color}
+							<p class="hint"><span class="sw" style:background={data.settings.unstated_color}></span> No condition yet for {year}</p>
+						{:else if colorBy === 'article'}
+							<p class="hint legend-row">
+								{#each data.vocab.articleStatuses as st (st.id)}<span><span class="sw" style:background={st.color}></span> {st.label}</span>{/each}
+							</p>
+						{/if}
 						{#if activeSource}
 							<label class="check"><input type="checkbox" checked={!scanOff} onchange={(e) => (scanOff = !e.currentTarget.checked)} /> Scan</label>
 							<div class="field">
@@ -1956,6 +1976,11 @@
 	}
 	.viewpanel .hint {
 		margin: -2px 0 4px 22px;
+	}
+	.legend-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 2px 10px;
 	}
 	.viewpanel .field,
 	.viewpanel .seg {

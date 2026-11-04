@@ -6,7 +6,7 @@
 	import YearSlider from '$lib/components/YearSlider.svelte';
 	import TagSelect from '$lib/components/TagSelect.svelte';
 	import EntityPanel from '$lib/components/EntityPanel.svelte';
-	import { hasConfiguredView } from '$lib/map/style';
+	import { hasConfiguredView, type ColorBy } from '$lib/map/style';
 	import { loadView, saveView, loadYear, saveYear } from '$lib/mapMemory';
 	import { formatFuzzy, yearToDate } from '$lib/time';
 	import type { EntitySnapshot, Picked } from '$lib/types';
@@ -19,6 +19,8 @@
 		untrack(() => Math.max(data.minYear, Math.min(data.maxYear, Number(params.get('y')) || loadYear() || data.settings.default_year)))
 	);
 	let basemap = $state(untrack(() => data.settings.basemap_mode));
+	/** what the map's colours mean: each place's condition, or its article's status (where the writing is) */
+	let colorBy = $state<ColorBy>('condition');
 	let selected = $state<string | null>(params.get('sel'));
 	const c = params.get('c')?.split(',').map(Number);
 	const urlView =
@@ -159,6 +161,7 @@
 			moments={showMoments}
 			{selected}
 			{basemap}
+			{colorBy}
 			center={initialView?.center}
 			zoom={initialView?.zoom}
 			autoFit={!initialView && !selected}
@@ -215,10 +218,25 @@
 				</div>
 
 				<div class="group legend">
-					<div class="eyebrow">Condition in {year}</div>
-					{#each data.vocab.statuses.filter((s) => ['active', 'restored', 'declining', 'vacant', 'abandoned', 'ruin', 'demolished'].includes(s.id)) as s (s.id)}
-						<div class="leg"><span class="sw round" style:background={s.color}></span>{s.label}</div>
-					{/each}
+					<div class="seg color-by" role="radiogroup" aria-label="Colour the map by">
+						<button class:on={colorBy === 'condition'} role="radio" aria-checked={colorBy === 'condition'} onclick={() => (colorBy = 'condition')}>Condition</button>
+						<button class:on={colorBy === 'article'} role="radio" aria-checked={colorBy === 'article'} onclick={() => (colorBy = 'article')}>Article status</button>
+					</div>
+					{#if colorBy === 'article'}
+						<div class="eyebrow">Article status</div>
+						{#each data.vocab.articleStatuses as s (s.id)}
+							<div class="leg"><span class="sw round" style:background={s.color}></span>{s.label}</div>
+						{/each}
+						<p class="hint">Where the writing is: stubs and drafts show what still needs an article.</p>
+					{:else}
+						<div class="eyebrow">Condition in {year}</div>
+						{#each data.vocab.statuses.filter((s) => ['active', 'restored', 'declining', 'vacant', 'abandoned', 'ruin', 'demolished'].includes(s.id)) as s (s.id)}
+							<div class="leg"><span class="sw round" style:background={s.color}></span>{s.label}</div>
+						{/each}
+						{#if data.settings.unstated_color}
+							<div class="leg" title="On the map, but no condition recorded for {year}"><span class="sw round" style:background={data.settings.unstated_color}></span>No condition yet</div>
+						{/if}
+					{/if}
 				</div>
 
 				{#if showMoments}
@@ -344,6 +362,9 @@
 		background: var(--rust);
 		border-color: var(--rust);
 		color: #fff;
+	}
+	.color-by {
+		margin-bottom: 8px;
 	}
 	.legend .leg {
 		display: flex;

@@ -58,6 +58,7 @@ export const actions: Actions = {
 				basemap_url: basemap,
 				basemap_attribution: str(fd, 'basemap_attribution') ?? '',
 				basemap_mode: str(fd, 'basemap_mode') ?? 'fade',
+				unstated_color: bool(fd, 'unstated_on') && /^#[0-9a-f]{6}$/i.test(str(fd, 'unstated_color') ?? '') ? str(fd, 'unstated_color') : null,
 				allow_signups: bool(fd, 'allow_signups'),
 				new_pages_private: bool(fd, 'new_pages_private'),
 				archive_sources: bool(fd, 'archive_sources'),

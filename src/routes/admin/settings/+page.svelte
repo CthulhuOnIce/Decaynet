@@ -105,6 +105,14 @@
 			</div>
 		</div>
 		<div class="field"><label for="ba">Basemap attribution (HTML)</label><input id="ba" name="basemap_attribution" value={s.basemap_attribution} /></div>
+		<div class="field">
+			<label class="check">
+				<input type="checkbox" name="unstated_on" checked={s.unstated_color !== null} />
+				Highlight buildings with no condition yet in
+				<input type="color" name="unstated_color" value={s.unstated_color ?? '#b86bd6'} aria-label="Colour for buildings with no condition" class="swatch-input" />
+			</label>
+			<p class="hint">Plotted buildings, sites and infrastructure with no condition recorded for the year shown are drawn in this colour, so the gaps stand out. Untick to use their kind's colour.</p>
+		</div>
 	</section>
 
 	<section class="card">
@@ -236,6 +244,13 @@
 </section>
 
 <style>
+	.swatch-input {
+		width: 34px;
+		height: 24px;
+		padding: 0 2px;
+		vertical-align: middle;
+		cursor: pointer;
+	}
 	.choice {
 		border: 0;
 		padding: 0;

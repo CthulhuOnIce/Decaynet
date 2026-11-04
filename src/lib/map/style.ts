@@ -358,3 +358,17 @@ export function boundsOf(geojson: GeoJSON.Geometry | GeoJSON.FeatureCollection):
 	for (const g of geoms) if (g && 'coordinates' in g) visit(g.coordinates);
 	return Number.isFinite(w) ? [[w, s], [e, n]] : null;
 }
+
+export type ColorBy = 'condition' | 'article';
+
+/**
+ * What the map colours by: a feature's condition (map_snapshot's `color`, with buildings that have
+ * no condition yet in the site's "work to do" colour), or its article's status (`article_color`).
+ */
+export function colorFeatures(fc: GeoJSON.FeatureCollection, by: ColorBy): GeoJSON.FeatureCollection {
+	if (by !== 'article') return fc;
+	return {
+		...fc,
+		features: fc.features.map((f) => ({ ...f, properties: { ...f.properties, color: f.properties?.article_color ?? f.properties?.color } }))
+	};
+}
