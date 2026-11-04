@@ -43,6 +43,28 @@
 
 	onDestroy(() => clearInterval(timer));
 
+	// The big year is a box you can type into: Enter (or leaving it) jumps there, Esc puts it back
+	let draft = $state<string | null>(null);
+	function commit() {
+		if (draft == null) return;
+		const n = Number(draft.trim());
+		if (Number.isInteger(n) && /^\d{1,4}$/.test(draft.trim())) set(n);
+		draft = null;
+	}
+	function yearKey(e: KeyboardEvent & { currentTarget: HTMLInputElement }) {
+		if (e.key === 'Enter') {
+			commit();
+			e.currentTarget.blur();
+		} else if (e.key === 'Escape') {
+			draft = null;
+			e.currentTarget.blur();
+		} else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+			e.preventDefault();
+			draft = null;
+			set(year + (e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 10 : 1));
+		}
+	}
+
 	const ticks = $derived.by(() => {
 		const out: number[] = [];
 		const step = max - min > 120 ? 20 : 10;
@@ -77,7 +99,22 @@
 		<button class="icon-btn wide" onclick={() => set(year + 10)} title="Forward a decade (Shift+→)">»</button>
 	</div>
 
-	<div class="year" aria-live="polite">{year}</div>
+	<input
+		class="year"
+		type="text"
+		inputmode="numeric"
+		maxlength="4"
+		aria-label="Year: type one and press Enter"
+		title="Type a year and press Enter (↑ ↓ step it)"
+		value={draft ?? String(year)}
+		onfocus={(e) => {
+			if (playing) toggle();
+			e.currentTarget.select();
+		}}
+		oninput={(e) => (draft = e.currentTarget.value.replace(/\D/g, ''))}
+		onkeydown={yearKey}
+		onblur={commit}
+	/>
 
 	<div class="track">
 		{#if density.length}
@@ -134,10 +171,27 @@
 		font-family: var(--serif);
 		font-size: 2.3rem;
 		font-weight: 700;
-		min-width: 4ch;
+		width: 4.2ch;
+		min-width: 0;
 		line-height: 1;
 		color: var(--ink);
 		font-variant-numeric: tabular-nums;
+		/* an input that looks like the big year until you point at it */
+		padding: 0 2px;
+		margin: 0;
+		background: transparent;
+		border: 0;
+		border-bottom: 2px solid transparent;
+		border-radius: 0;
+		box-shadow: none;
+		cursor: text;
+	}
+	.year:hover {
+		border-bottom-color: var(--line-2);
+	}
+	.year:focus {
+		outline: none;
+		border-bottom-color: var(--rust);
 	}
 	.track {
 		position: relative;
