@@ -44,6 +44,17 @@
 		building's old name still finds it.
 	</p>
 
+	{#if data.q && data.external.length}
+		<!-- where the address is today: always here, however many results follow -->
+		<div class="today">
+			<span class="eyebrow">Today</span>
+			<strong>{data.external[0].label}</strong>
+			{#if data.external[0].locality}<span class="muted">· {data.external[0].locality}</span>{/if}
+			<a href={externalMapHref(data.external[0])}>Show on the map →</a>
+			{#if data.external.length > 1}<a class="muted small" href="#osm">{data.external.length - 1} more match{data.external.length === 2 ? '' : 'es'} ↓</a>{/if}
+		</div>
+	{/if}
+
 	{#if data.q}
 		<ul class="plain-list results">
 			{#each data.hits as h (h.id)}
@@ -82,16 +93,16 @@
 		{/if}
 
 		{#if data.external.length}
-			<h2>Addresses from OpenStreetMap</h2>
+			<h2 id="osm">Where it is today (OpenStreetMap)</h2>
 			<ul class="plain-list results addresses">
 				{#each data.external as e (e.place_id)}
 					<li>
 						<strong>{e.label}</strong>
 						{#if e.locality}<span class="muted">· {e.locality}</span>{/if}
 						<div class="row small">
-							<span class="badge">not yet a page</span>
+							<span class="badge">{e.known ? 'also in the wiki' : 'not yet a page'}</span>
 							<a href={externalMapHref(e)}>Show on the map →</a>
-							{#if data.user}
+							{#if data.user && !e.known}
 								<a href={createAtHref(e.label, e.lat, e.lon)}>Create a page here →</a>
 							{/if}
 						</div>
@@ -119,6 +130,21 @@
 	}
 	.addresses {
 		margin-top: 8px;
+	}
+	.today {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 4px 10px;
+		margin-top: 14px;
+		padding: 10px 12px;
+		border: 1px solid var(--line-2);
+		border-left: 3px solid var(--sky);
+		border-radius: var(--radius);
+		background: var(--panel);
+	}
+	.today .eyebrow {
+		color: var(--sky);
 	}
 	.badge {
 		padding: 1px 7px;

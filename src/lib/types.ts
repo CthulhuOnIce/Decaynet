@@ -285,6 +285,8 @@ export interface AddressHit {
 
 /** An address geocoded from OpenStreetMap that may not exist in this wiki yet. */
 export interface GeoAddressHit {
+	/** the wiki already has this address (same text, or a point within ~50 m): no "create a page" */
+	known?: boolean;
 	place_id: number;
 	/** Short form: "577 Washington St" */
 	label: string;

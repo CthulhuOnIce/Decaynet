@@ -20,18 +20,19 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const hits = (entityData ?? []) as SearchHit[];
 	const addresses = (addressData ?? []) as AddressHit[];
 
-	// Addresses the wiki does not know yet: ask OpenStreetMap, but only when the
-	// query actually looks like a street address.
+	// Where the address is today, from OpenStreetMap, when the query looks like a street address.
+	// Always kept (it's how you cross-reference a historic address with today's map), whatever the
+	// wiki also found; ones the wiki already has are marked so they don't offer "create a page".
 	let external: GeoAddressHit[] = [];
 	if (looksLikeAddress(q)) {
 		const settings = await loadSettings(locals.supabase);
 		const found = await geocodeAddresses(q, settings, url.origin);
-		external = found.filter(
-			(e) =>
-				!addresses.some(
-					(a) => a.lon !== null && a.lat !== null && nearby({ lon: a.lon, lat: a.lat }, e)
-				) && !addresses.some((a) => a.formatted.toLowerCase() === e.label.toLowerCase())
-		);
+		external = found.map((e) => ({
+			...e,
+			known:
+				addresses.some((a) => a.lon !== null && a.lat !== null && nearby({ lon: a.lon, lat: a.lat }, e)) ||
+				addresses.some((a) => a.formatted.toLowerCase() === e.label.toLowerCase())
+		}));
 	}
 
 	// Exact title hit and nothing else close: go straight there, like a wiki
