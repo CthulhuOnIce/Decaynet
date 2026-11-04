@@ -41,6 +41,10 @@
 	let tileUrl = $state('');
 	let tileInput = $state('');
 	let aligning = $state(true); // show corner handles
+	// Phones: aligning takes the whole screen (scan and/or map) with a compact control bar;
+	// "More options" brings the full panel back
+	let narrow = $state(false);
+	let panelOpen = $state(false);
 	let depictsYear = $state(''); // year the scan shows; pre-fills traced shapes
 	let markers: Marker[] = [];
 	let scanError = $state<string | null>(null);
@@ -189,6 +193,7 @@
 			};
 			tileUrl = '';
 			aligning = true;
+			panelOpen = false;
 			clearPins();
 			scan = {
 				name: file.name,
@@ -240,6 +245,12 @@
 	const rms = $derived(residuals.size ? Math.sqrt([...residuals.values()].reduce((s, r) => s + r * r, 0) / residuals.size) : null);
 	const waitingImg = $derived(pins.find((p) => !p.img)?.id ?? null);
 	const waitingMap = $derived(pins.find((p) => !p.map)?.id ?? null);
+	/** Where the next tap goes while pinning: a pin's scan spot, or its map spot. */
+	const pinStep = $derived.by((): { where: 'scan' | 'map'; id: number } => {
+		if (waitingMap != null && pins.find((p) => p.id === waitingMap)?.img) return { where: 'map', id: waitingMap };
+		if (waitingImg != null) return { where: 'scan', id: waitingImg };
+		return { where: 'scan', id: pinSeq + 1 };
+	});
 
 	function addImgPin(img: XY) {
 		const p = pins.find((x) => !x.img);
@@ -565,6 +576,14 @@
 		highlight(previewIds);
 	}
 
+	onMount(() => {
+		const mq = window.matchMedia('(max-width: 800px)');
+		narrow = mq.matches;
+		const onChange = (e: MediaQueryListEvent) => (narrow = e.matches);
+		mq.addEventListener('change', onChange);
+		return () => mq.removeEventListener('change', onChange);
+	});
+
 	onMount(async () => {
 		maplibre = ((await import('maplibre-gl')) as unknown as { default: typeof import('maplibre-gl') }).default;
 		map = new maplibre.Map({
@@ -745,13 +764,14 @@
 		{ id: 'import', label: 'Import', ok: can('bulk_edit') }
 	]);
 	const msg = $derived(form && form.tool === tool ? form : null);
+	const focus = $derived(narrow && tool === 'overlay' && !!scan && aligning && !panelOpen);
 	const spatialKinds = $derived(data.vocab.kinds.filter((k) => !['person', 'organization', 'event', 'media'].includes(k.id)));
 </script>
 
 <svelte:window onkeydown={onkey} onkeyup={onkeyup} onpointermove={swipeMove} onpointerup={() => (dragging = false)} />
 <svelte:head><title>Workbench · {data.settings.site_name}</title></svelte:head>
 
-<div class="wb">
+<div class="wb" class:focus>
 	<aside class="panel">
 		<div class="tabs">
 			{#each TOOLS.filter((t) => t.ok) as t (t.id)}
@@ -874,7 +894,10 @@
 							</div>
 							{#if pins.length}<button class="ghost" onclick={clearPins}>Clear pins</button>{/if}
 						{/if}
-						<button class="primary" onclick={() => (aligning = false)}>Done aligning</button>
+						{#if narrow}
+							<button class="primary" onclick={() => (panelOpen = false)}>Back to full-screen aligning</button>
+						{/if}
+						<button class={narrow ? 'ghost' : 'primary'} onclick={() => (aligning = false)}>Done aligning</button>
 					{/if}
 					<div class="row" style="margin-top: 10px">
 						<button class="ghost" onclick={exportAlignment} title="Download the corner positions as a small JSON file">Save alignment file</button>
@@ -1103,7 +1126,7 @@
 
 	<div class="stage" class:split={pinning}>
 		{#if pinning && scan}
-			<div class="scanpane">
+			<div class="scanpane" class:await={pinStep.where === 'scan'}>
 				<ScanPinView
 					url={scan.url}
 					width={scan.width}
@@ -1115,7 +1138,7 @@
 				/>
 			</div>
 		{/if}
-		<div class="mapwrap">
+		<div class="mapwrap" class:await={pinning && pinStep.where === 'map'}>
 			<div class="map" bind:this={mapEl}></div>
 			<div class="top" bind:this={topEl} class:hidden={compare !== 'swipe' || !activeSource} style:clip-path="inset(0 {100 - swipe * 100}% 0 0)"></div>
 			{#if compare === 'swipe' && activeSource}
@@ -1138,6 +1161,46 @@
 			</div>
 		</div>
 	</div>
+	{#if focus && scan}
+		<div class="alignbar">
+			<div class="bar-row">
+				<div class="seg">
+					<button class:on={alignMode === 'corners'} onclick={() => (alignMode = 'corners')}>Corners</button>
+					<button class:on={alignMode === 'pins'} onclick={() => (alignMode = 'pins')}>Pins</button>
+				</div>
+				<button class="primary" onclick={() => (aligning = false)}>Done</button>
+			</div>
+			{#if alignMode === 'corners'}
+				<p class="bar-tip">Drag the <span class="sw corner"></span> corners onto matching street corners; drag <span class="sw move"></span> to move the sheet.</p>
+				<label class="bar-op">
+					<span>Opacity</span>
+					<input type="range" min="0" max="1" step="0.05" bind:value={opacity} aria-label="Scan opacity" />
+				</label>
+				<div class="bar-nudges">
+					<button title="Rotate left" onclick={() => transform(-1, 1)}>⟲ 1°</button>
+					<button title="Rotate right" onclick={() => transform(1, 1)}>⟳ 1°</button>
+					<button title="Rotate left a little" onclick={() => transform(-0.2, 1)}>⟲ .2°</button>
+					<button title="Rotate right a little" onclick={() => transform(0.2, 1)}>⟳ .2°</button>
+					<button title="Shrink" onclick={() => transform(0, 0.98)}>− 2%</button>
+					<button title="Grow" onclick={() => transform(0, 1.02)}>+ 2%</button>
+				</div>
+			{:else}
+				<p class="bar-next">
+					<span class="pin-no">{pinStep.id}</span>
+					<span>{#if pinStep.where === 'map'}Now tap the same spot on the <strong>map</strong> ↓{:else}Tap a recognisable spot on the <strong>scan</strong> ↑{/if}</span>
+				</p>
+				<div class="bar-row">
+					<span class="muted small">
+						{#if pinFit}{pairs.length} pins{#if rms != null} · typical error {rms.toFixed(1)} m{/if}{:else}{Math.max(0, minPins(fitKind) - pairs.length)} more matched pin{minPins(fitKind) - pairs.length === 1 ? '' : 's'} to fit{/if}
+					</span>
+					<span class="spacer"></span>
+					<button class="ghost" disabled={!pins.length} onclick={() => removePin(pins[pins.length - 1].id)}>Undo pin</button>
+					<button class="ghost" disabled={!pins.length} onclick={clearPins}>Clear</button>
+				</div>
+			{/if}
+			<button class="link more" onclick={() => (panelOpen = true)}>More options (fit, alignment files, year…)</button>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -1145,6 +1208,8 @@
 		display: grid;
 		grid-template-columns: 330px 1fr;
 		height: calc(100vh - var(--header-h));
+		/* phones: the visible height, not the height behind the browser's address bar */
+		height: calc(100dvh - var(--header-h));
 	}
 	.panel {
 		overflow-y: auto;
@@ -1441,10 +1506,106 @@
 	:global(.handle.pin.half) {
 		opacity: 0.75;
 	}
+	/* where the next pin tap goes */
+	.scanpane.await::after,
+	.mapwrap.await::after {
+		content: '';
+		position: absolute;
+		inset: 0;
+		box-shadow: inset 0 0 0 3px #e0574a;
+		pointer-events: none;
+		z-index: 2;
+	}
+	/* fingers need bigger handles */
+	@media (pointer: coarse) {
+		:global(.handle.corner) {
+			width: 30px;
+			height: 30px;
+			border-radius: 5px;
+		}
+		:global(.handle.move) {
+			width: 36px;
+			height: 36px;
+		}
+		:global(.handle.pin) {
+			width: 32px;
+			height: 32px;
+			font-size: 0.8rem;
+		}
+	}
+	.alignbar {
+		display: grid;
+		gap: 6px;
+		padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+		background: var(--bg-2);
+		border-top: 2px solid var(--amber);
+		font-size: 0.85rem;
+	}
+	.alignbar .seg {
+		margin: 0;
+		flex: 1;
+	}
+	.bar-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.bar-row .spacer {
+		flex: 1;
+	}
+	.bar-tip,
+	.bar-next {
+		margin: 0;
+		color: var(--ink-2);
+	}
+	.bar-next {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		color: var(--ink);
+	}
+	.bar-op {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		margin: 0;
+		color: var(--ink-2);
+	}
+	.bar-op input {
+		flex: 1;
+	}
+	.bar-nudges {
+		display: grid;
+		grid-template-columns: repeat(6, 1fr);
+		gap: 4px;
+	}
+	.bar-nudges button {
+		justify-content: center;
+		padding: 8px 0;
+		font-size: 0.78rem;
+	}
+	.alignbar .more {
+		justify-self: start;
+		font-size: 0.8rem;
+	}
 	@media (max-width: 800px) {
 		.wb {
 			grid-template-columns: 1fr;
 			grid-template-rows: 45% 1fr;
+		}
+		/* full-screen aligning: the scan/map above, the control bar below */
+		.wb.focus {
+			grid-template-rows: 1fr auto;
+		}
+		.wb.focus .panel,
+		.wb.focus .dock,
+		.wb.focus .banner {
+			display: none;
+		}
+		.banner {
+			top: 42px;
+			max-width: calc(100% - 90px);
+			text-align: center;
 		}
 		.stage.split {
 			grid-template-columns: 1fr;

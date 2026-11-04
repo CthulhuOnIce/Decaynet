@@ -1,6 +1,7 @@
 <!--
 	Zoomable, pannable view of a scan for placing control-point pins.
-	Click (without dragging) to drop a pin; drag a pin to move it; scroll to zoom; drag to pan.
+	Click or tap (without dragging) to drop a pin; drag a pin to move it; scroll or pinch to zoom;
+	drag to pan.
 	Pin positions are in the image's natural pixel coordinates.
 -->
 <script lang="ts">
@@ -89,19 +90,46 @@
 		scale = next;
 	}
 
-	// Pan, or click-to-pin when the pointer barely moved
+	// Pan, or click-to-pin when the pointer barely moved; two fingers pinch-zoom
 	let drag: { x: number; y: number; tx: number; ty: number; moved: boolean; pin: number | null } | null = null;
+	const fingers = new Map<number, { x: number; y: number }>();
+	let pinch: { d: number; ix: number; iy: number; scale: number } | null = null;
+	const midpoint = () => {
+		const [a, b] = [...fingers.values()];
+		const r = el.getBoundingClientRect();
+		return { d: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), x: (a.x + b.x) / 2 - r.left, y: (a.y + b.y) / 2 - r.top };
+	};
 	function down(e: PointerEvent, pin: number | null = null) {
 		if (e.button !== 0) return;
 		e.stopPropagation();
 		el.setPointerCapture(e.pointerId);
+		fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+		if (fingers.size === 2) {
+			// a second finger: pinch around the midpoint (and never drop a pin)
+			const m = midpoint();
+			pinch = { d: m.d, ix: (m.x - tx) / scale, iy: (m.y - ty) / scale, scale };
+			drag = null;
+			return;
+		}
+		if (fingers.size > 2) return;
 		drag = { x: e.clientX, y: e.clientY, tx, ty, moved: false, pin };
 	}
 	function move(e: PointerEvent) {
+		if (fingers.has(e.pointerId)) fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+		if (pinch && fingers.size >= 2) {
+			const m = midpoint();
+			const next = Math.max(0.02, Math.min(40, (pinch.scale * m.d) / pinch.d));
+			// keep the image spot that started under the fingers under them
+			tx = m.x - pinch.ix * next;
+			ty = m.y - pinch.iy * next;
+			scale = next;
+			return;
+		}
 		if (!drag) return;
 		const dx = e.clientX - drag.x;
 		const dy = e.clientY - drag.y;
-		if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+		// a fingertip wobbles more than a mouse before a tap becomes a drag
+		if (!drag.moved && Math.hypot(dx, dy) < (e.pointerType === 'touch' ? 9 : 4)) return;
 		drag.moved = true;
 		if (drag.pin != null) {
 			const p = toImg(e.clientX, e.clientY);
@@ -112,6 +140,12 @@
 		}
 	}
 	function up(e: PointerEvent) {
+		fingers.delete(e.pointerId);
+		if (pinch) {
+			if (fingers.size < 2) pinch = null;
+			drag = null;
+			return;
+		}
 		if (!drag) return;
 		const d = drag;
 		drag = null;
@@ -135,9 +169,13 @@
 	onpointerdown={(e) => down(e)}
 	onpointermove={move}
 	onpointerup={up}
-	onpointercancel={() => (drag = null)}
+	onpointercancel={(e) => {
+		fingers.delete(e.pointerId);
+		pinch = null;
+		drag = null;
+	}}
 	role="application"
-	aria-label="Scan: click to place a pin"
+	aria-label="Scan: click or tap to place a pin; pinch or scroll to zoom"
 >
 	<img src={url} alt="" draggable="false" style:width="{width * scale}px" style:height="{height * scale}px" style:transform="translate({tx}px, {ty}px)" />
 	{#each pins as p (p.id)}
@@ -160,7 +198,7 @@
 		<button type="button" title="Zoom out" onpointerdown={(e) => e.stopPropagation()} onclick={() => zoomBy(1 / 1.5)}>−</button>
 		<button type="button" title="Fit the whole scan" onpointerdown={(e) => e.stopPropagation()} onclick={fitView}>⤢</button>
 	</div>
-	{#if waiting != null}<div class="tip">Click the spot for pin {waiting} on the scan</div>{/if}
+	{#if waiting != null}<div class="tip">Tap the spot for pin {waiting} on the scan</div>{/if}
 </div>
 
 <style>
@@ -222,6 +260,18 @@
 		padding: 0;
 		justify-content: center;
 		font-weight: 700;
+	}
+	/* fingers need bigger targets */
+	@media (pointer: coarse) {
+		.pin {
+			width: 32px;
+			height: 32px;
+			font-size: 0.8rem;
+		}
+		.tools button {
+			width: 40px;
+			height: 40px;
+		}
 	}
 	.tip {
 		position: absolute;
