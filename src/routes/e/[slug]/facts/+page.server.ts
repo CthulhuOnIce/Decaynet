@@ -2,7 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { entityBySlug, loadTags, requireEditor } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, geometryFromForm, required, slugify, str, temporalFromForm } from '$lib/server/forms';
 import { discardSource, madeSource, resolveInlineSource, sourceOptions, type MadeSource } from '$lib/server/sources';
-import { readAreas } from '$lib/geojson';
+import { areaProp, readAreas } from '$lib/geojson';
 import type { RelationRow, Space } from '$lib/types';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
 
@@ -247,53 +247,63 @@ export const actions: Actions = {
 	}),
 
 	/** Draw a space (storefront, suite, hall) inside this building's footprint; pasted GeoJSON
-	 *  with several areas makes one space each (named from the features when they carry names). */
+	 *  with several areas makes one space each, with the title, first name, address, unit and
+	 *  floor from its row (prefilled from the features' properties). */
 	addSpace: action(async ({ fd, entityId, event }) => {
 		const life = fuzzyPair(fd, 'valid_from', 'valid_to');
-		const floor = str(fd, 'floor');
+		const floorOf = (v: string | null | undefined) => (v != null && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+		const floor = floorOf(str(fd, 'floor'));
 		const pastedText = str(fd, 'geojson_text');
 		const areas = pastedText ? readAreas(pastedText) : null;
+		let spaces: { name: string; geojson: GeoJSON.Geometry; floor: number | null; unit_label: string | null; first_name: string | null; address: string | null }[];
 		if (areas && 'areas' in areas && areas.areas.length > 1) {
-			const base = required(fd, 'space_name', 'Space name');
-			const prop = (p: Record<string, unknown>, keys: string[]) => {
-				for (const k of Object.keys(p)) if (keys.includes(k.toLowerCase()) && p[k] != null && String(p[k]).trim()) return String(p[k]).trim();
-				return null;
-			};
-			const spaces = areas.areas.map((a, i) => {
-				const f = prop(a.props, ['floor', 'level', 'storey']);
+			let rows: Record<string, string>[] = [];
+			try {
+				rows = JSON.parse(str(fd, 'spaces_json') ?? '[]');
+			} catch {
+				rows = [];
+			}
+			const base = str(fd, 'space_name') ?? 'Space';
+			spaces = areas.areas.map((a, i) => {
+				const row = rows[i] ?? {};
+				const pick = (field: 'name' | 'first_name' | 'address' | 'unit' | 'floor') => (row[field] ?? '').trim() || areaProp(a.props, field);
+				const first = pick('first_name');
+				const address = pick('address');
 				return {
-					name: prop(a.props, ['name', 'label', 'title', 'tenant']) ?? `${base} ${i + 1}`,
+					// a space with no title of its own goes by its first name, its address, or a number
+					name: pick('name') ?? first ?? address ?? `${base} ${i + 1}`,
 					geojson: a.geometry,
-					floor: f != null && Number.isFinite(Number(f)) ? Number(f) : floor == null ? null : Number(floor),
-					unit_label: prop(a.props, ['unit', 'unit_label', 'suite', 'number', 'no'])
+					floor: floorOf(pick('floor')) ?? floor,
+					unit_label: pick('unit'),
+					first_name: first,
+					address
 				};
 			});
-			const res = await event.locals.supabase.rpc('add_spaces', {
+		} else {
+			const geom = geometryFromForm(fd);
+			if (!geom) throw new FormError('Draw the space as a polygon inside the footprint.');
+			spaces = [
+				{
+					name: required(fd, 'space_name', 'Space name'),
+					geojson: geom,
+					floor,
+					unit_label: str(fd, 'unit_label'),
+					first_name: str(fd, 'first_name'),
+					address: str(fd, 'address')
+				}
+			];
+		}
+		check(
+			await event.locals.supabase.rpc('add_spaces', {
 				p_building: entityId,
 				p_spaces: spaces,
 				p_from: life.from,
 				p_from_precision: life.fromPrecision,
 				p_to: life.to,
 				p_to_precision: life.toPrecision
-			});
-			check(res);
-			return `Added ${spaces.length} spaces: ${spaces.map((x) => x.name).join(', ')}.`;
-		}
-		const geom = geometryFromForm(fd);
-		if (!geom) throw new FormError('Draw the space as a polygon inside the footprint.');
-		check(
-			await event.locals.supabase.rpc('add_space', {
-				p_building: entityId,
-				p_name: required(fd, 'space_name', 'Space name'),
-				p_geojson: geom,
-				p_floor: floor == null ? null : Number(floor),
-				p_unit_label: str(fd, 'unit_label'),
-				p_from: life.from,
-				p_from_precision: life.fromPrecision,
-				p_to: life.to,
-				p_to_precision: life.toPrecision
 			})
 		);
+		if (spaces.length > 1) return `Added ${spaces.length} spaces: ${spaces.map((x) => x.name).join(', ')}.`;
 	}),
 
 	/** Every component shares the temporal header, so one action edits them all. */

@@ -5,13 +5,19 @@
 	let {
 		prefix = 'ns_',
 		idPrefix = 'ns',
-		form = undefined
+		form = undefined,
+		note = 'Saved with this page only. Use <em>Add to library</em> on the source\'s page to share it with other pages.',
+		kind = 'newspaper'
 	}: {
 		/** form field name prefix (server: sourceFromForm(fd, prefix)) */
 		prefix?: string;
 		idPrefix?: string;
 		/** id of the <form> these inputs belong to, when they sit outside it */
 		form?: string;
+		/** the line under the fields (HTML) */
+		note?: string;
+		/** kind picked to start with */
+		kind?: string;
 	} = $props();
 </script>
 
@@ -24,7 +30,7 @@
 		<div>
 			<label for="{idPrefix}-kind">Kind</label>
 			<select id="{idPrefix}-kind" name="{prefix}kind" {form}>
-				{#each SOURCE_KINDS as k (k)}<option value={k} selected={k === 'newspaper'}>{k.replace('_', ' ')}</option>{/each}
+				{#each SOURCE_KINDS as k (k)}<option value={k} selected={k === kind}>{k.replace('_', ' ')}</option>{/each}
 			</select>
 		</div>
 		<div>
@@ -44,7 +50,8 @@
 			<input id="{idPrefix}-url" name="{prefix}url" {form} type="url" placeholder="https://…" />
 		</div>
 	</div>
-	<p class="hint">Saved with this page only. Use <em>Add to library</em> on the source's page to share it with other pages.</p>
+	<!-- eslint-disable-next-line svelte/no-at-html-tags -- a fixed string from the caller -->
+	<p class="hint">{@html note}</p>
 </div>
 
 <style>

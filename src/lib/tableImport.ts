@@ -24,7 +24,8 @@ export const TABLE_FIELDS: TableField[] = [
 	{ id: 'tags', label: 'Tags', hint: 'separate with ;', match: ['tags', 'tag', 'category', 'categories', 'type', 'business type', 'trade', 'classification'] },
 	{ id: 'names', label: 'Other names', hint: 'separate with ;', match: ['aka', 'also known as', 'other names', 'alias', 'aliases', 'dba', 'formerly'] },
 	{ id: 'summary', label: 'Summary', match: ['summary', 'description', 'about', 'details'] },
-	{ id: 'note', label: 'Note', hint: 'on the link', match: ['note', 'notes', 'comment', 'comments', 'remarks', 'source note'] },
+	{ id: 'note', label: 'Note', hint: 'on the link', match: ['note', 'notes', 'comment', 'comments', 'remarks'] },
+	{ id: 'source_detail', label: 'Source detail', hint: 'page, entry: cited with it', match: ['page', 'p', 'pg', 'pp', 'page no', 'entry', 'citation', 'source detail', 'source page', 'ref', 'reference', 'folio', 'frame'] },
 	{ id: 'lat', label: 'Latitude', match: ['lat', 'latitude'] },
 	{ id: 'lon', label: 'Longitude', match: ['lon', 'lng', 'long', 'longitude'] }
 ];
@@ -113,10 +114,10 @@ export function unitFromAddress(address: string): { address: string; unit: strin
 }
 
 export const TEMPLATE_CSV = [
-	'Name,Address,Unit,Listed in,From,Until,Category,Other names,Note',
-	'"Kresge\'s",512 Broadway,,1925,,,Retail,"S. S. Kresge Co.",City directory p. 214',
-	'Joe\'s Diner,520 Broadway,2,1925,,,Food & drink,,',
-	'Gary Hotel,600 Broadway,,,1927,1975,Lodging,Hotel Gary,'
+	'Name,Address,Unit,Listed in,From,Until,Category,Other names,Page,Note',
+	'"Kresge\'s",512 Broadway,,1925,,,Retail,"S. S. Kresge Co.",214,',
+	'Joe\'s Diner,520 Broadway,2,1925,,,Food & drink,,214,Lunch counter',
+	'Gary Hotel,600 Broadway,,,1927,1975,Lodging,Hotel Gary,231,'
 ].join('\n');
 
 /** What the preview sends back for each row, and what can be changed before applying. */
@@ -151,7 +152,7 @@ export interface SheetOptions {
 	kind: string;
 	year: string;
 	link_as: string;
-	/** '' for none */
+	/** the document the sheet was made from (required to import; NEW_SOURCE = the fields below it) */
 	source_id: string;
 	confidence: string;
 	points: boolean;

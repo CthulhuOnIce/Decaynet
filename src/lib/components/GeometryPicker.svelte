@@ -3,7 +3,7 @@
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import type { GeoJSONSource, Map as MLMap } from 'maplibre-gl';
-	import { baseStyle, boundsOf, mapView } from '$lib/map/style';
+	import { FONT, baseStyle, boundsOf, mapView } from '$lib/map/style';
 	import { loadView } from '$lib/mapMemory';
 	import { readGeometry } from '$lib/geojson';
 
@@ -16,7 +16,8 @@
 		height = 360,
 		snap = true,
 		initial = null,
-		each = null
+		each = null,
+		pasteText = $bindable('')
 	}: {
 		name?: string;
 		mode?: Mode;
@@ -29,6 +30,8 @@
 		initial?: GeoJSON.Geometry | null;
 		/** several pasted areas each become one of these (e.g. "space"), rather than one shape */
 		each?: string | null;
+		/** the pasted GeoJSON text (bind it to read the pasted areas) */
+		pasteText?: string;
 	} = $props();
 
 	function pointsOf(g: GeoJSON.Geometry | null): [number, number][] {
@@ -67,7 +70,6 @@
 
 	// ---- pasted GeoJSON: a simple shape is loaded onto the map to adjust; anything else (several
 	// parts, holes) is kept as pasted and previewed. The server reads it the same way (readGeometry).
-	let pasteText = $state('');
 	let pasted = $state<GeoJSON.Geometry | null>(null);
 	let pasteNote = $state<string | null>(null);
 	let pasteError = $state<string | null>(null);
@@ -116,7 +118,8 @@
 		if (!map || !ready) return;
 		const features: GeoJSON.Feature[] = pts.map((c) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: c }, properties: { vertex: true } }));
 		if (geometry && geometry.type !== 'Point') features.push({ type: 'Feature', geometry, properties: {} });
-		if (pasted) for (const g of partsOf(pasted)) features.push({ type: 'Feature', geometry: g, properties: {} });
+		// several pasted areas that each become a page are numbered, to match them with their rows
+		if (pasted) partsOf(pasted).forEach((g, i) => features.push({ type: 'Feature', geometry: g, properties: each ? { n: String(i + 1) } : {} }));
 		(map.getSource('draft') as GeoJSONSource).setData({ type: 'FeatureCollection', features });
 	}
 
@@ -136,6 +139,14 @@
 			m.addLayer({ id: 'draft-fill', type: 'fill', source: 'draft', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#c2562b', 'fill-opacity': 0.35 } });
 			m.addLayer({ id: 'draft-line', type: 'line', source: 'draft', filter: ['!=', ['geometry-type'], 'Point'], paint: { 'line-color': '#e07a4f', 'line-width': 3 } });
 			m.addLayer({ id: 'draft-pt', type: 'circle', source: 'draft', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#f2c14e', 'circle-stroke-color': '#17130f', 'circle-stroke-width': 1.5 } });
+			m.addLayer({
+				id: 'draft-num',
+				type: 'symbol',
+				source: 'draft',
+				filter: ['all', ['==', ['geometry-type'], 'Polygon'], ['has', 'n']],
+				layout: { 'text-field': ['get', 'n'], 'text-font': FONT, 'text-size': 15, 'text-allow-overlap': true },
+				paint: { 'text-color': '#fff', 'text-halo-color': '#17130f', 'text-halo-width': 2 }
+			});
 			const b = context.length ? boundsOf({ type: 'FeatureCollection', features: context }) : null;
 			if (b) m.fitBounds(b, { padding: 60, maxZoom: 17, duration: 0 });
 			else if (pts.length) m.jumpTo({ center: pts[0], zoom: Math.max(m.getZoom(), 16) });

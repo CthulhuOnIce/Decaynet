@@ -32,6 +32,7 @@ interface Norm {
 	names: string[];
 	summary: string | null;
 	note: string | null;
+	source_detail: string | null;
 	attributes: { key: string; value: unknown }[];
 	lat: number | null;
 	lon: number | null;
@@ -139,6 +140,8 @@ export function normalize(sheet: Sheet, vocab: Vocabulary): Norm[] {
 			names: splitList(at(r, 'names')),
 			summary: at(r, 'summary'),
 			note: at(r, 'note'),
+			// a bare page number reads as one: "214" → "p. 214"
+			source_detail: ((d) => (d && /^\d+[a-z]?$/i.test(d) ? `p. ${d}` : d))(at(r, 'source_detail')),
 			attributes,
 			lat,
 			lon,
@@ -280,6 +283,7 @@ export function applyRows(sheet: Sheet, vocab: Vocabulary, choices: Record<strin
 			at_to: d(r.at.to),
 			at_to_p: p(r.at.to),
 			note: r.note,
+			source_detail: r.source_detail,
 			address: r.address,
 			unit: r.unit,
 			lat: c.lat ?? r.lat,

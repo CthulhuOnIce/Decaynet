@@ -9,6 +9,7 @@
 	import Badge from '$lib/components/Badge.svelte';
 	import TagSelect from '$lib/components/TagSelect.svelte';
 	import { formatRange, toFuzzyInput } from '$lib/time';
+	import { areaProp, readAreas } from '$lib/geojson';
 	import { PRECISIONS, CONFIDENCES, type TemporalFact } from '$lib/types';
 
 	let { data, form } = $props();
@@ -37,6 +38,32 @@
 		...footprints.map((g) => ({ type: 'Feature' as const, geometry: g.geojson, properties: {} })),
 		...data.spaces.filter((s) => s.geojson).map((s) => ({ type: 'Feature' as const, geometry: s.geojson!, properties: {} }))
 	]);
+	// several areas pasted under Spaces: one row each, prefilled from the GeoJSON's properties
+	let spacePaste = $state('');
+	let spaceName = $state('');
+	let spaceFloor = $state('1');
+	const spaceAreas = $derived.by(() => {
+		if (!spacePaste.trim()) return [];
+		const r = readAreas(spacePaste);
+		return 'areas' in r && r.areas.length > 1 ? r.areas : [];
+	});
+	type SpaceRow = { name: string; first_name: string; address: string; unit: string; floor: string };
+	let spaceRows = $state<SpaceRow[]>([]);
+	let rowsFor = '';
+	$effect.pre(() => {
+		const key = JSON.stringify(spaceAreas);
+		if (key === rowsFor) return;
+		rowsFor = key;
+		spaceRows = spaceAreas.map((a) => ({
+			name: areaProp(a.props, 'name') ?? '',
+			first_name: areaProp(a.props, 'first_name') ?? '',
+			address: areaProp(a.props, 'address') ?? '',
+			unit: areaProp(a.props, 'unit') ?? '',
+			floor: areaProp(a.props, 'floor') ?? ''
+		}));
+	});
+	/** what a row will be called: its title, else its first name or address, else numbered */
+	const spaceTitle = (r: SpaceRow, i: number) => r.name.trim() || r.first_name.trim() || r.address.trim() || `${spaceName.trim() || 'Space'} ${i + 1}`;
 	const tagById = $derived(Object.fromEntries(data.tags.map((t) => [t.id, t])));
 	const tagFacets = $derived(data.vocab.tagFacets.filter((f) => applies(f.applies_to)).map((f) => f.id));
 	const msg = (section: string) => (form?.section === section ? form : null);
@@ -433,20 +460,68 @@
 				</table>
 			{/if}
 			{#if footprints.length}
-				<form method="post" action="?/addSpace" use:enhance>
+				<form
+					method="post"
+					action="?/addSpace"
+					use:enhance={() =>
+						async ({ result, update }) => {
+							await update();
+							// saved: the next block of storefronts starts from a clean box
+							if (result.type === 'success') spacePaste = '';
+						}}
+				>
 					<input type="hidden" name="section" value="spaces" />
-					<GeometryPicker mode="polygon" context={spaceContext} height={340} each="space" />
+					<GeometryPicker mode="polygon" context={spaceContext} height={340} each="space" bind:pasteText={spacePaste} />
+					{#if spaceAreas.length}
+						<input type="hidden" name="spaces_json" value={JSON.stringify(spaceRows)} />
+						<div class="space-rows">
+							<table>
+								<thead>
+									<tr>
+										<th>#</th>
+										<th>Page title</th>
+										<th>First name <span class="muted">if different</span></th>
+										<th>Address <span class="muted">its own</span></th>
+										<th>Unit</th>
+										<th>Floor</th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each spaceRows as r, i (i)}
+										<tr>
+											<td class="mono">{i + 1}</td>
+											<td><input aria-label="Space {i + 1} page title" bind:value={r.name} placeholder={spaceTitle(r, i)} /></td>
+											<td><input aria-label="Space {i + 1} first name" bind:value={r.first_name} placeholder={i === 0 ? "Kresge's store" : ''} /></td>
+											<td><input aria-label="Space {i + 1} address" bind:value={r.address} placeholder={i === 0 ? '514 Broadway' : ''} /></td>
+											<td><input aria-label="Space {i + 1} unit" class="short" bind:value={r.unit} placeholder={i === 0 ? '101' : ''} /></td>
+											<td><input aria-label="Space {i + 1} floor" class="short" bind:value={r.floor} placeholder={spaceFloor} /></td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+						<p class="hint">
+							The numbers match the areas on the map. A first name is recorded as the space's name from its start (a later rename in
+							the workbench's <em>Name from</em> takes over from it); an address lets the spreadsheet import find the storefront by its
+							number.
+						</p>
+					{/if}
 					<div class="fields" style="margin-top: 8px">
 						<div style="grid-column: span 2">
-							<label for="sp-name">Space name</label><input id="sp-name" name="space_name" required placeholder="North storefront" />
-							<span class="hint">Pasted several areas? Each becomes its own space, named from the GeoJSON's <code>name</code> (and <code>unit</code>, <code>floor</code>) or numbered after this.</span>
+							<label for="sp-name">{spaceAreas.length ? 'Name for the numbered ones' : 'Space name'}</label>
+							<input id="sp-name" name="space_name" required={!spaceAreas.length} bind:value={spaceName} placeholder={spaceAreas.length ? 'Storefront' : 'North storefront'} />
+							{#if !spaceAreas.length}<span class="hint">Pasted several areas? Each becomes its own space, with a row each to name them.</span>{/if}
 						</div>
-						<div><label for="sp-floor">Floor</label><input id="sp-floor" name="floor" type="number" step="1" value="1" /></div>
-						<div><label for="sp-unit">Unit / suite</label><input id="sp-unit" name="unit_label" placeholder="101" /></div>
+						<div><label for="sp-floor">Floor</label><input id="sp-floor" name="floor" type="number" step="1" bind:value={spaceFloor} /></div>
+						{#if !spaceAreas.length}
+							<div><label for="sp-unit">Unit / suite</label><input id="sp-unit" name="unit_label" placeholder="101" /></div>
+							<div><label for="sp-first">First name <span class="muted">if different</span></label><input id="sp-first" name="first_name" placeholder="Kresge's store" /></div>
+							<div><label for="sp-addr">Address <span class="muted">its own</span></label><input id="sp-addr" name="address" placeholder="514 Broadway" /></div>
+						{/if}
 						<div><label for="sp-from">From</label><input id="sp-from" name="valid_from" placeholder="same as building" /></div>
 						<div><label for="sp-to">Until</label><input id="sp-to" name="valid_to" placeholder="blank = still there" /></div>
 					</div>
-					<button>Add space</button>
+					<button>{spaceAreas.length ? `Add ${spaceAreas.length} spaces` : 'Add space'}</button>
 				</form>
 			{:else}
 				<p class="notice small">Trace the building's footprint as a polygon in <a href="#geometry">Location & shape</a> first (or in the <a href="/workbench">workbench</a> over a Sanborn sheet).</p>
@@ -515,5 +590,32 @@
 	}
 	textarea[name='description'] {
 		min-height: 56px;
+	}
+	.space-rows {
+		overflow-x: auto;
+		margin-top: 8px;
+	}
+	.space-rows table {
+		width: 100%;
+		border-collapse: collapse;
+	}
+	.space-rows th {
+		font-size: 0.75rem;
+		font-weight: 500;
+		text-align: left;
+		color: var(--ink-2);
+		padding: 2px 4px;
+		white-space: nowrap;
+	}
+	.space-rows td {
+		padding: 2px 4px;
+	}
+	.space-rows input {
+		width: 100%;
+		min-width: 8rem;
+	}
+	.space-rows input.short {
+		min-width: 3.5rem;
+		width: 4.5rem;
 	}
 </style>

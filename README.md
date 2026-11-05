@@ -319,7 +319,13 @@ Buildings are polygons, not dots. To record who occupied which part:
 
 1. Give the building a **footprint**: trace it in the workbench, or draw it under **Edit facts → Location & shape**.
 2. Under **Edit facts → Spaces**, draw each storefront, suite or hall *inside* the footprint. Corners snap to the footprint, and a space that pokes out more than 2 m is rejected.
-   Or paste GeoJSON: with several polygons (a FeatureCollection of storefronts traced in the workbench, or a MultiPolygon) **each polygon becomes its own space**. A feature's `name`, `unit` and `floor` properties are used when it has them; otherwise the spaces are numbered after the name you typed ("Storefront 1", "Storefront 2"…). They're added together or not at all: if one pokes outside the footprint, the message says which and nothing is added.
+   Or paste GeoJSON: with several polygons (a FeatureCollection of storefronts traced in the workbench, or a MultiPolygon) **each polygon becomes its own space**. The areas are numbered on the map, with a row each to fill in:
+   - **Page title**: if left blank, the space goes by its first name, then its address, then a number after the name you typed ("Storefront 3").
+   - **First name** *(if different)*: recorded as the space's official name from its start. A later rename (the workbench's *Name from*) takes over from it, so the map shows each name in its own years.
+   - **Address** *(its own)*: a storefront's own number, matched to the street. It lets the spreadsheet import find the storefront by address.
+   - **Unit** and **floor**.
+
+   Rows are prefilled from each feature's `name`, `first_name`, `address`, `unit` and `floor` properties. The spaces are added together or not at all: if one pokes outside the footprint, the message says which and nothing is added. The single-space form has the same optional *First name* and *Address* fields.
 3. Click **+ Tenant** on a space to add who occupied it and when (a business, a congregation, a resident).
 
 On the building's page you'll see a floor plan and a "tenant in YEAR" table. On the map, zoom past ~16 to see spaces labelled with their tenants. Tagging a tenant (say *Food & drink*) lights up the space it occupied when you filter the map by that tag.
@@ -382,15 +388,17 @@ Bulk tools (area change and import) need the *Bulk map tools* permission.
 
 **Import → Spreadsheet** (`/import/spreadsheet`, needs *Bulk map tools* and *Edit content*) turns a list into pages, each linked to the building it was in. For example, every business on Broadway from the 1925 city directory, typed into a spreadsheet:
 
-| Name | Address | Unit | Listed in | Category | Other names | Note |
+| Name | Address | Unit | Listed in | Category | Other names | Page |
 |---|---|---|---|---|---|---|
-| Kresge's | 512 Broadway | | 1925 | Retail | S. S. Kresge Co. | p. 214 |
-| Joe's Diner | 520 Broadway, Suite 2 | | 1925 | Food & drink | | |
-| Gary Hotel | 600 Broadway | | | Lodging | Hotel Gary | |
+| Kresge's | 512 Broadway | | 1925 | Retail | S. S. Kresge Co. | 214 |
+| Joe's Diner | 520 Broadway, Suite 2 | | 1925 | Food & drink | | 214 |
+| Gary Hotel | 600 Broadway | | | Lodging | Hotel Gary | 231 |
 
-1. **The sheet.** Choose a CSV or TSV file, or paste cells straight from a spreadsheet. *Download a template* gives you the columns above.
-2. **Columns.** Each column is guessed from its header (*Name*, *Address*, *Unit / suite*, *Building*, *Listed in*, *From*, *Until*, *Kind*, *Link as*, *Tags*, *Other names*, *Summary*, *Note*, *Latitude*, *Longitude*, or any fact such as *Employees* or *Website*); change any of them, or set one to *Ignore*.
-3. **For every row.** What the pages are (organizations by default; people, or even buildings, work too), the directory's year (*Listed in*: the link holds in that year, for rows without dates of their own), how they're linked (*occupies*, *owns*, *lived at*…), a confidence level and **one source**, which is cited on every link, name, tag and fact the import adds.
+1. **The sheet.** Choose a CSV or TSV file, or paste cells straight from a spreadsheet. *Download a template* gives you the columns above. The sheet is only read: it isn't uploaded as a file or kept anywhere (the import's record holds counts and ids, none of its rows), and it's cleared once imported.
+2. **Columns.** Each column is guessed from its header (*Name*, *Address*, *Unit / suite*, *Building*, *Listed in*, *From*, *Until*, *Kind*, *Link as*, *Tags*, *Other names*, *Summary*, *Note*, *Source detail*, *Latitude*, *Longitude*, or any fact such as *Employees* or *Website*); change any of them, or set one to *Ignore*. The next sheet with the same columns keeps your choices.
+3. **For every row.**
+   - **Made from** *(required)*: the document you typed the sheet from (the directory, census or map), never the sheet itself. Pick it from the source library or make it right there with *New source…*; a new one goes into the library and stays picked for the next sheet. It is cited on every link, name, tag and fact the import adds, with each row's **Source detail** (a *Page* column of `214` reads as "p. 214").
+   - What the pages are (organizations by default; people, or even buildings, work too), the directory's year (*Listed in*: the link holds in that year, for rows without dates of their own), how they're linked (*occupies*, *owns*, *lived at*…) and a confidence level.
 4. **Preview, check, import.** Each row is matched before anything is written:
    - **The page:** an existing page with that name (or that name among its other names) is used instead of making a second one. A close spelling is offered but not chosen for you.
    - **The building:** one named in a *Building* column (a name, a slug or a `/e/…` link), or the building that had that **address in that year**. House numbers are matched against every name the street has had, so "512 Main St." finds a building on a street since renamed Broadway, and "W. 5th Avenue" equals "West 5th Ave". An address recorded only in other years is flagged.
@@ -572,7 +580,7 @@ Key RPCs:
 | `move_shapes(...)` / `name_pages(...)` / `redraw_shape(...)` | Workbench selection: move in place, name from a year, new shape from a year |
 | `match_import_candidates(...)` / `apply_import(...)` / `undo_import(...)` | OHM / Wikidata import: match, apply a reviewed plan, undo |
 | `match_table_rows(...)` / `apply_table_import(...)` | Spreadsheet import: match rows to pages, buildings (by address in a year) and storefronts; write the reviewed rows as one undoable import |
-| `add_spaces(building, spaces)` | Several spaces at once (one per pasted polygon), all or none |
+| `add_spaces(building, spaces)` | Spaces in one go (one per pasted polygon), each with an optional first name and address; all or none |
 | `save_article(...)` / `set_article_status(...)` | Atomic revision + status transitions |
 
 ---
@@ -628,7 +636,8 @@ supabase/migrations/             0001 foundation · 0002 components · 0003 arti
                                  0013 region-agnostic settings (units, address format, language, bounds)
                                  0014 private pages (visibility enforced by RLS)
                                  … 0041 cleanup reaches interior spaces · 0042 move / name / redraw
-                                 0043 spreadsheet import (each file's header explains it)
+                                 0043 spreadsheet import · 0044 its citations, spaces' first names
+                                 and addresses (each file's header explains it)
 supabase/seed.sql                optional Gary, Indiana demo (settings, pages, eras)
 src/lib/map/style.ts             MapLibre layers for snapshots, ghosts, spaces, moments
 src/lib/components/              TimeMachineMap, YearSlider, EntityPanel, Timeline, MiniMap,

@@ -1,7 +1,8 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { loadSettings, loadVocabulary, requirePermission } from '$lib/server/db';
 import { FormError, dbMessage, str } from '$lib/server/forms';
-import { librarySources } from '$lib/server/sources';
+import { createPageSource, discardSource, librarySources, madeSource, type MadeSource } from '$lib/server/sources';
+import { NEW_SOURCE } from '$lib/sources';
 import { applyRows, preview, readSheet, type Choice } from '$lib/server/tableImport';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -39,11 +40,13 @@ export const actions: Actions = {
 		}
 	},
 
-	/** Write the rows as reviewed, as one import that can be undone. */
+	/** Write the rows as reviewed, as one import that can be undone, cited to the document the
+	 *  sheet was made from (picked, or made here as a library source). The sheet isn't kept. */
 	apply: async ({ request, locals }) => {
 		await requirePermission(locals, 'bulk_edit');
 		await requirePermission(locals, 'edit_content');
 		const fd = await request.formData();
+		let made: MadeSource | null = null;
 		try {
 			const sheet = readSheet(str(fd, 'sheet'));
 			let choices: Record<string, Choice>;
@@ -55,16 +58,24 @@ export const actions: Actions = {
 			const rows = applyRows(sheet, await loadVocabulary(locals.supabase), choices);
 			if (!rows.length) throw new FormError('Nothing ticked to import.');
 			const o = sheet.options;
+			if (!o.source_id) throw new FormError('Pick the source you made the sheet from (the directory, census, map…): it is cited on everything the import adds.');
+			// a new source here goes into the library: the next sheet from the same directory reuses it
+			if (o.source_id === NEW_SOURCE) made = await createPageSource(locals.supabase, fd, null);
+			const sourceId = made?.id ?? o.source_id;
 			const { data, error } = await locals.supabase.rpc('apply_table_import', {
 				p_rows: rows,
-				p_source: o.source_id || null,
+				p_source: sourceId,
 				p_confidence: o.confidence || 'probable',
 				p_private: !!o.private,
 				p_label: o.label || null
 			});
 			if (error) throw new FormError(dbMessage(error));
-			return { applied: data as { batch_id: string; created: number; linked: number; points: number; addresses: number } };
+			return {
+				applied: { ...(data as { batch_id: string; created: number; linked: number; points: number; addresses: number }), source_id: sourceId },
+				newSource: madeSource(made)
+			};
 		} catch (e) {
+			await discardSource(locals.supabase, made);
 			return failed(e);
 		}
 	},

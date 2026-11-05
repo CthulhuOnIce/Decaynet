@@ -3,6 +3,8 @@
 	import { page } from '$app/state';
 	import EntityPicker from '$lib/components/EntityPicker.svelte';
 	import SourcePicker from '$lib/components/SourcePicker.svelte';
+	import SourceFields from '$lib/components/SourceFields.svelte';
+	import { NEW_SOURCE } from '$lib/sources';
 	import { TABLE_FIELDS, TEMPLATE_CSV, guessFields, parseDelimited, type SheetOptions, type SheetRow } from '$lib/tableImport';
 
 	let { data, form } = $props();
@@ -13,6 +15,7 @@
 	// ------------------------------------------------------------------ 1. the sheet
 	let text = $state('');
 	let fileName = $state('');
+	let fileInput = $state<HTMLInputElement>();
 	let hasHeaders = $state(true);
 	const parsed = $derived(parseDelimited(text));
 	const width = $derived(Math.max(0, ...parsed.map((r) => r.length)));
@@ -21,9 +24,9 @@
 	async function readFile(e: Event) {
 		const f = (e.currentTarget as HTMLInputElement).files?.[0];
 		if (!f) return;
+		// read here, in the browser: the file itself is never uploaded or kept
 		text = await f.text();
 		fileName = f.name;
-		if (!options.label) options.label = f.name.replace(/\.[^.]+$/, '');
 	}
 	function template() {
 		const a = document.createElement('a');
@@ -37,13 +40,17 @@
 	const attrs = $derived(vocab.attributeKeys as { id: string; label: string; applies_to: string[] | null }[]);
 	let mapping = $state<string[]>([]);
 	let mappedFor = '';
+	// the next sheet with the same columns (the next block from the same directory) keeps the choices
+	const remembered = new Map<string, string[]>();
 	$effect.pre(() => {
-		// a new sheet (new headers): guess again; the same sheet keeps the editor's choices
 		const key = headers.join('\u0001');
 		if (key !== mappedFor) {
 			mappedFor = key;
-			mapping = guessFields(headers, attrs);
+			mapping = remembered.get(key) ?? guessFields(headers, attrs);
 		}
+	});
+	$effect(() => {
+		if (mappedFor) remembered.set(mappedFor, [...mapping]);
 	});
 	const samples = (i: number) =>
 		body
@@ -77,6 +84,11 @@
 		if (linkTypes.length && !linkTypes.some((t) => t.id === options.link_as)) options.link_as = linkTypes[0].id;
 	});
 	const sheetJson = $derived(JSON.stringify({ headers, rows: body, mapping, options }));
+	// what the preview depends on (the source, label and confidence can change after it)
+	const matchKey = $derived(JSON.stringify({ headers, rows: body, mapping, kind: options.kind, year: options.year, link: options.link_as, points: options.points, geocode: options.geocode }));
+	const sourceTitle = $derived(
+		options.source_id === NEW_SOURCE ? 'a new source' : (data.sources.find((x: { id: string }) => x.id === options.source_id)?.title ?? '')
+	);
 
 	// ------------------------------------------------------------------ 4. review
 	let rows = $state<SheetRow[]>([]);
@@ -94,9 +106,16 @@
 		}
 	});
 	$effect(() => {
-		if (form && 'applied' in form && form.applied) rows = [];
+		const a = form && 'applied' in form ? form.applied : null;
+		if (!a) return;
+		// done with this sheet: nothing of it stays on the page; the source stays picked for the next one
+		rows = [];
+		text = '';
+		fileName = '';
+		if (fileInput) fileInput.value = '';
+		options.source_id = a.source_id;
 	});
-	const stale = $derived(rows.length > 0 && previewedJson !== sheetJson);
+	const stale = $derived(rows.length > 0 && previewedJson !== matchKey);
 	const kindLabel = (k: string) => vocab.kinds.find((x: { id: string }) => x.id === k)?.label ?? k;
 	const spatial = (k: string) => !['organization', 'person', 'event', 'media'].includes(k);
 	const taken = $derived(rows.filter((r) => r.include));
@@ -159,7 +178,7 @@
 		<div class="row">
 			<label class="btn ghost filebtn">
 				Choose a CSV or TSV file
-				<input type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" onchange={readFile} />
+				<input type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" onchange={readFile} bind:this={fileInput} />
 			</label>
 			<span class="muted small">{fileName || 'or paste the cells below (straight from a spreadsheet works)'}</span>
 			<span class="spacer"></span>
@@ -170,6 +189,7 @@
 			<label class="check"><input type="checkbox" bind:checked={hasHeaders} /> The first row holds the column names</label>
 			{#if parsed.length}<span class="muted">{plural(body.length, 'row')}, {plural(width, 'column')}</span>{/if}
 		</div>
+		<p class="hint">The sheet is only read: it isn't uploaded as a file or kept anywhere, and it's cleared once imported. What gets cited is the source you pick below.</p>
 	</section>
 
 	{#if body.length}
@@ -203,6 +223,14 @@
 
 		<section class="card step">
 			<h2><span class="num">3</span> For every row</h2>
+			<div class="source-box" class:missing={!options.source_id}>
+				<label for="so-src">Made from <span class="req">required</span></label>
+				<SourcePicker id="so-src" sources={data.sources} allowNone={false} newLabel="New source…" placeholder="The directory, census or map you typed it from…" bind:value={options.source_id} />
+				<span class="hint">Cited on every link, name, tag and fact the import adds, with each row's <em>Source detail</em> (page, entry). The sheet is a copy of this, not the source.</span>
+				{#if options.source_id === NEW_SOURCE}
+					<SourceFields prefix="ns_" idPrefix="sh-ns" form="sheet-apply" kind="directory" note="Saved to the source library when you import, so the next sheet from it can pick it." />
+				{/if}
+			</div>
 			<div class="fields">
 				<div>
 					<label for="so-kind">Pages are</label>
@@ -231,11 +259,6 @@
 					</select>
 				</div>
 				<div class="wide">
-					<label for="so-src">Source</label>
-					<SourcePicker id="so-src" sources={data.sources} allowNew={false} bind:value={options.source_id} />
-					<span class="hint">cited on every link, name, tag and fact the import adds (add the directory to <a href="/sources">Sources</a> first)</span>
-				</div>
-				<div class="wide">
 					<label for="so-label">Label</label>
 					<input id="so-label" bind:value={options.label} placeholder="1925 city directory, Broadway 500–700" />
 				</div>
@@ -253,7 +276,7 @@
 				action="?/preview"
 				use:enhance={() => {
 					busy = true;
-					pendingJson = sheetJson;
+					pendingJson = matchKey;
 					return async ({ update }) => {
 						await update({ reset: false });
 						busy = false;
@@ -344,6 +367,7 @@
 				</table>
 			</div>
 			<form
+				id="sheet-apply"
 				method="post"
 				action="?/apply"
 				class="row"
@@ -356,10 +380,15 @@
 					};
 				}}
 			>
-				<input type="hidden" name="sheet" value={previewedJson} />
+				<input type="hidden" name="sheet" value={sheetJson} />
 				<input type="hidden" name="choices" value={choices} />
-				<button class="primary" disabled={!counts.rows || stale || busy}>{busy ? 'Importing…' : `Import ${plural(counts.rows, 'row')}`}</button>
-				{#if counts.issues}<span class="muted small">{plural(counts.issues, 'row')} with something to check (in amber)</span>{/if}
+				<button class="primary" disabled={!counts.rows || stale || busy || !options.source_id}>{busy ? 'Importing…' : `Import ${plural(counts.rows, 'row')}`}</button>
+				{#if !options.source_id}
+					<span class="issue small">Pick what the sheet was made from (step 3) first.</span>
+				{:else}
+					<span class="muted small">cited to {sourceTitle}</span>
+				{/if}
+				{#if counts.issues}<span class="muted small">· {plural(counts.issues, 'row')} with something to check (in amber)</span>{/if}
 			</form>
 		</section>
 	{/if}
@@ -401,6 +430,26 @@
 	}
 	.step {
 		margin-top: 14px;
+	}
+	.source-box {
+		display: grid;
+		gap: 4px;
+		margin-bottom: 12px;
+		padding: 10px 12px;
+		border: 1px solid var(--line-2);
+		border-radius: var(--radius);
+	}
+	.source-box.missing {
+		border-color: var(--amber);
+	}
+	.source-box label {
+		margin: 0;
+	}
+	.req {
+		margin-left: 4px;
+		font-size: 0.72rem;
+		font-weight: normal;
+		color: var(--amber);
 	}
 	.step h2 {
 		display: flex;

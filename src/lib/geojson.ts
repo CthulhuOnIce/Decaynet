@@ -146,3 +146,17 @@ export function readAreas(input: string | unknown): { areas: { geometry: GeoJSON
 	if (parts.some((p) => p.type !== 'Polygon')) return { error: 'Spaces are areas: paste polygons only.' };
 	return { areas: parts.map((p) => ({ geometry: { type: 'Polygon', coordinates: p.coordinates } as GeoJSON.Polygon, props: p.props ?? {} })) };
 }
+
+/** Feature properties that fill in a space made from a pasted area (case doesn't matter). */
+export const AREA_KEYS = {
+	name: ['name', 'label', 'title', 'tenant'],
+	first_name: ['first_name', 'first name', 'original_name', 'original name', 'firstname'],
+	address: ['address', 'addr', 'street_address'],
+	unit: ['unit', 'unit_label', 'suite', 'number', 'no'],
+	floor: ['floor', 'level', 'storey']
+} as const;
+export function areaProp(p: Record<string, unknown>, field: keyof typeof AREA_KEYS): string | null {
+	const keys = AREA_KEYS[field] as readonly string[];
+	for (const k of Object.keys(p)) if (keys.includes(k.toLowerCase()) && p[k] != null && String(p[k]).trim()) return String(p[k]).trim();
+	return null;
+}

@@ -39,20 +39,17 @@ export type MadeSource = SourceOption & { reused?: boolean };
 const norm = (v: string | null | undefined) => (v ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
 
 /**
- * Create a source that belongs to one page, or reuse an identical one: the same title, link,
+ * Create a source that belongs to one page (or, with entityId null, to the library), or reuse an identical one: the same title, link,
  * kind, author, publisher and date, already on this page or in the library. Saving a form
  * twice (the workbench and fact edits keep their fields after saving) or citing the same
  * thing again no longer makes copies.
  */
-export async function createPageSource(sb: SupabaseClient, fd: FormData, entityId: string, prefix = 'ns_'): Promise<MadeSource> {
+export async function createPageSource(sb: SupabaseClient, fd: FormData, entityId: string | null, prefix = 'ns_'): Promise<MadeSource> {
 	const row = sourceFromForm(fd, prefix);
 	const like = row.title.replace(/[\\%_]/g, (c) => `\\${c}`);
-	const { data: near } = await sb
-		.from('sources')
-		.select(SOURCE_OPTION_COLUMNS)
-		.or(`entity_id.eq.${entityId},entity_id.is.null`)
-		.ilike('title', like)
-		.limit(20);
+	const q = sb.from('sources').select(SOURCE_OPTION_COLUMNS);
+	// a library source (entityId null) only reuses library ones
+	const { data: near } = await (entityId ? q.or(`entity_id.eq.${entityId},entity_id.is.null`) : q.is('entity_id', null)).ilike('title', like).limit(20);
 	const same = ((near ?? []) as SourceOption[])
 		.filter(
 			(s) =>
