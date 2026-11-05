@@ -7,7 +7,8 @@
 		max,
 		density = [],
 		onchange,
-		compact = false
+		compact = false,
+		keyboard = true
 	}: {
 		year: number;
 		min: number;
@@ -17,6 +18,8 @@
 		onchange?: (year: number) => void;
 		/** one slim row (‹ year › and the track): for small screens where the map needs the room */
 		compact?: boolean;
+		/** the page's arrow keys and space step the year (off while the page uses them for something else) */
+		keyboard?: boolean;
 	} = $props();
 
 	let playing = $state(false);
@@ -75,6 +78,7 @@
 	const peak = $derived(Math.max(1, ...density));
 
 	function onkey(e: KeyboardEvent) {
+		if (!keyboard) return;
 		const t = e.target as HTMLElement;
 		if (t.closest('input:not([type=range]), textarea, select')) return;
 		if (e.key === 'ArrowLeft' && (e.shiftKey || t.tagName !== 'INPUT')) set(year - (e.shiftKey ? 10 : 1));

@@ -360,6 +360,10 @@ The modern grid is a poor guide to the past. The lakefront was filled for the mi
 - **The basemap can be hidden** (Layers → Modern basemap → *Hidden*, or as the site default) when today's streets mislead.
 - **The Area change tool:** draw around a cleared block or highway corridor, enter the year, preview everything standing inside, untick anything that survived, and end the rest in one step, with a condition (demolished / vacated…), a note and a citation. Nothing is deleted; it just becomes history.
 - Then **trace the new layout** from a later scan or import it.
+- **Select buildings** (Shift-click or Shift-drag a box; *Select* on a phone) to work on several at once:
+  - *Gone by*, *Condition from*, *Still standing in* and *Name from* a year. A name runs from then until the next recorded one, and the name running then ends there; the page title stays.
+  - **✥ Move / turn**: drag the handle (arrow keys nudge, `[` `]` turn) to fix shapes traced from a sheet that was aligned a little off. The shapes shown in that year move where they always were, with no new version, and the storefronts and suites inside them come along.
+  - **✎ Redraw from a year** (one building): its shape loads into Trace with a handle on each corner. Drag corners, click beside a side to add one, or pick one and remove it. Saving ends the old shape at that year and starts the new one, up to the old one's end (a renovation, or a better map from then on).
 
 ### Importing GIS data
 
@@ -541,6 +545,7 @@ Key RPCs:
 | `search_addresses(q)` | Fuzzy search across street addresses, with the linked page and a map point |
 | `building_spaces(id, at)` / `add_space(...)` | Spaces and tenants of a building / validated space creation |
 | `entities_in_area(...)` / `retire_area(...)` / `import_features(...)` | Workbench bulk tools |
+| `move_shapes(...)` / `name_pages(...)` / `redraw_shape(...)` | Workbench selection: move in place, name from a year, new shape from a year |
 | `match_import_candidates(...)` / `apply_import(...)` / `undo_import(...)` | OHM / Wikidata import: match, apply a reviewed plan, undo |
 | `save_article(...)` / `set_article_status(...)` | Atomic revision + status transitions |
 

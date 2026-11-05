@@ -6,6 +6,7 @@
 	import YearSlider from '$lib/components/YearSlider.svelte';
 	import EntityPicker from '$lib/components/EntityPicker.svelte';
 	import TemporalFields from '$lib/components/TemporalFields.svelte';
+	import SourcePicker from '$lib/components/SourcePicker.svelte';
 	import ScanPinView from '$lib/components/ScanPinView.svelte';
 	import { apply, cornersFor, fit, fromMerc, metres, minPins, toMerc, type FitKind, type XY } from '$lib/map/georef';
 	import { baseStyle, colorFeatures, mapView, snapshotLayers, type ColorBy } from '$lib/map/style';
@@ -565,14 +566,16 @@
 	let boxMode = $state(false);
 	let box = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
 	let bulkResult = $state<{
-		action: 'gone' | 'condition' | 'standing';
+		action: 'gone' | 'condition' | 'standing' | 'name';
 		at: string;
 		status?: string;
+		name?: string;
 		done: number;
 		skipped: { id: string; name: string; slug: string; reason: string }[];
 	} | null>(null);
-	/** what the selection gets: gone by a year, a condition from a year, or still standing in a year */
-	let bulkMode = $state<'gone' | 'condition' | 'standing'>('gone');
+	/** what the selection gets: gone by a year, a condition from a year, still standing in a year, or a name from a year */
+	let bulkMode = $state<'gone' | 'condition' | 'standing' | 'name'>('gone');
+	let bulkName = $state('');
 	let bulkCondition = $state('abandoned');
 	let bulkBusy = $state(false);
 	let bulkYearInput = $state<string | null>(null);
@@ -583,7 +586,12 @@
 	const standingStatuses = $derived(data.vocab.statuses.filter((st) => st.is_extant));
 	const statusLabel = (id: string | undefined) => data.vocab.statuses.find((st) => st.id === id)?.label ?? id ?? '';
 	const bulkNote = $derived(
-		bulkNoteInput ?? (bulkMode === 'condition' ? `${statusLabel(bulkCondition)} in the ${bulkYear} aerial` : `Not seen in the ${bulkYear} aerial`)
+		bulkNoteInput ??
+			(bulkMode === 'condition'
+				? `${statusLabel(bulkCondition)} in the ${bulkYear} aerial`
+				: bulkMode === 'name'
+					? `Named on the ${bulkYear} map`
+					: `Not seen in the ${bulkYear} aerial`)
 	);
 
 	const pickedOf = (f: { properties: Record<string, unknown> | null }): Picked | null => {
@@ -607,6 +615,7 @@
 	}
 	/** Click/tap: toggle the building under the pointer. */
 	function pickAt(x: number, y: number) {
+		if (moving) return;
 		// hidden shapes can't be picked: the first pick shows them again
 		if (!showShapes) return void (showShapes = true);
 		const hit = snapshotHits([x - 5, y - 5], [x + 5, y + 5])[0];
@@ -616,6 +625,7 @@
 	}
 	/** Box: add everything inside it. */
 	function pickBox(b: { x0: number; y0: number; x1: number; y1: number }) {
+		if (moving) return;
 		const hits = snapshotHits([Math.min(b.x0, b.x1), Math.min(b.y0, b.y1)], [Math.max(b.x0, b.x1), Math.max(b.y0, b.y1)]);
 		const have = new Set(selected.map((s) => s.id));
 		bulkResult = null;
@@ -651,6 +661,255 @@
 		for (const id of highlighted) map.setFeatureState({ source: 'snapshot', id }, { selected: false });
 		for (const id of ids) map.setFeatureState({ source: 'snapshot', id }, { selected: true });
 		highlighted = ids;
+	}
+
+	// ---------------------------------------------------------------- move & turn the selection
+	// For a sheet that was aligned a little off: the selected shapes (as shown in this year), and
+	// the storefronts and suites inside them, shift and turn to where they belong. They're changed
+	// in place, not given a new version: they were always there. (Redraw makes a new version.)
+	type LL = [number, number];
+	let moving = $state<{ from: LL; to: LL; angle: number } | null>(null);
+	let moveSpaces = $state(true);
+	let moveBusy = $state(false);
+	let moveResult = $state<{ shapes: number; pages: number; spaces: number } | null>(null);
+	// web mercator in degree units: angles there are angles on the map (and in EPSG:3857, as saved)
+	const mercY = (lat: number) => (180 / Math.PI) * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+	const unmercY = (y: number) => (360 / Math.PI) * Math.atan(Math.exp((y * Math.PI) / 180)) - 90;
+	function moveFn(m: { from: LL; to: LL; angle: number }) {
+		const a = (m.angle * Math.PI) / 180;
+		const [c, sn] = [Math.cos(a), Math.sin(a)];
+		const [ox, oy, tx, ty] = [m.from[0], mercY(m.from[1]), m.to[0], mercY(m.to[1])];
+		return ([lon, lat]: LL): LL => {
+			const x = lon - ox;
+			const y = mercY(lat) - oy;
+			return [+(tx + x * c - y * sn).toFixed(7), +unmercY(ty + x * sn + y * c).toFixed(7)];
+		};
+	}
+	const mapCoords = (c: unknown, f: (p: LL) => LL): unknown =>
+		Array.isArray(c) && typeof c[0] === 'number' ? f(c as LL) : Array.isArray(c) ? c.map((x) => mapCoords(x, f)) : c;
+	const vertices = (g: GeoJSON.Geometry | null): LL[] => {
+		const out: LL[] = [];
+		const walk = (c: unknown): void => {
+			if (Array.isArray(c) && typeof c[0] === 'number') out.push([c[0] as number, c[1] as number]);
+			else if (Array.isArray(c)) c.forEach(walk);
+		};
+		if (g && 'coordinates' in g) walk(g.coordinates);
+		return out;
+	};
+	const outerRings = (g: GeoJSON.Geometry): LL[][] =>
+		g.type === 'Polygon' ? [g.coordinates[0] as LL[]] : g.type === 'MultiPolygon' ? g.coordinates.map((p) => p[0] as LL[]) : [];
+	const inRing = ([x, y]: LL, ring: LL[]) => {
+		let inside = false;
+		for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+			const [xi, yi] = ring[i];
+			const [xj, yj] = ring[j];
+			if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+		}
+		return inside;
+	};
+	const avg = (v: LL[]): LL => [v.reduce((a, p) => a + p[0], 0) / v.length, v.reduce((a, p) => a + p[1], 0) / v.length];
+	/** The selected shapes on the map, and (to preview what the server moves with them) the spaces inside them. */
+	function movingFeatures(): GeoJSON.Feature[] {
+		const ids = new Set(selected.map((x) => x.id));
+		const own = lastSnap.features.filter((f) => ids.has(String(f.properties?.id)));
+		if (!moveSpaces) return own;
+		const rings = own.flatMap((f) => (f.geometry ? outerRings(f.geometry) : []));
+		const spaces = lastSnap.features.filter((f) => {
+			if (ids.has(String(f.properties?.id)) || f.properties?.kind !== 'space' || !f.geometry) return false;
+			const v = vertices(f.geometry);
+			return v.length > 0 && rings.some((r) => inRing(avg(v), r));
+		});
+		return [...own, ...spaces];
+	}
+	function startMove() {
+		const v = movingFeatures().flatMap((f) => vertices(f.geometry));
+		if (!v.length) return;
+		const c = avg(v);
+		moveResult = null;
+		bulkResult = null;
+		moving = { from: c, to: c, angle: 0 };
+	}
+	const metresPerDeg = 111320;
+	const moveSummary = $derived.by(() => {
+		if (!moving) return '';
+		const dx = (moving.to[0] - moving.from[0]) * metresPerDeg * Math.cos((moving.from[1] * Math.PI) / 180);
+		const dy = (moving.to[1] - moving.from[1]) * metresPerDeg;
+		const d = Math.hypot(dx, dy);
+		const parts = [d < 0.05 ? 'not moved' : `moved ${d < 10 ? d.toFixed(1) : Math.round(d)} m`];
+		if (moving.angle) parts.push(`turned ${Math.abs(moving.angle).toFixed(1)}° ${moving.angle > 0 ? 'left' : 'right'}`);
+		return parts.join(' · ');
+	});
+	/** Nudge by metres (arrow keys) or turn by degrees (counter-clockwise positive). */
+	function nudge(east: number, north: number) {
+		if (!moving) return;
+		const lat = moving.to[1];
+		moving.to = [moving.to[0] + east / (metresPerDeg * Math.cos((lat * Math.PI) / 180)), lat + north / metresPerDeg];
+	}
+	function turn(deg: number) {
+		if (moving) moving.angle = Math.round((moving.angle + deg) * 100) / 100;
+	}
+	function drawMoving() {
+		if (!map || !ready) return;
+		const src = map.getSource('moving') as GeoJSONSource | undefined;
+		if (!src) return;
+		if (!moving) return src.setData({ type: 'FeatureCollection', features: [] });
+		const f = moveFn(moving);
+		src.setData({
+			type: 'FeatureCollection',
+			features: movingFeatures().map((x) => ({ type: 'Feature', properties: {}, geometry: { ...x.geometry, coordinates: mapCoords((x.geometry as GeoJSON.Point).coordinates, f) } as GeoJSON.Geometry }))
+		});
+	}
+	let moveHandle: Marker | undefined;
+	let draggingMove = false;
+	function syncMoveHandle() {
+		if (!map || !maplibre || !ready) return;
+		if (!moving) {
+			moveHandle?.remove();
+			moveHandle = undefined;
+			return;
+		}
+		if (moveHandle) {
+			if (!draggingMove) moveHandle.setLngLat(moving.to);
+			return;
+		}
+		const el = document.createElement('div');
+		el.className = 'handle move big';
+		el.title = 'Drag to move the selected shapes';
+		const h = new maplibre.Marker({ element: el, draggable: true }).setLngLat(moving.to).addTo(map);
+		h.on('dragstart', () => (draggingMove = true));
+		h.on('drag', () => {
+			const ll = h.getLngLat();
+			if (moving) moving.to = [ll.lng, ll.lat];
+		});
+		h.on('dragend', () => (draggingMove = false));
+		moveHandle = h;
+	}
+	function afterMove() {
+		moveBusy = true;
+		return async ({ result, update }: { result: { type: string; data?: Record<string, unknown> }; update: (o?: { reset?: boolean }) => Promise<void> }) => {
+			await update({ reset: false });
+			moveBusy = false;
+			if (result.type === 'success' && result.data?.moved) {
+				moveResult = result.data.moved as typeof moveResult;
+				moving = null;
+				refreshKey++;
+			}
+		};
+	}
+
+	// ---------------------------------------------------------------- redraw from a year
+	// One selected page: its shape as shown goes into Trace to be reshaped; saving ends the old
+	// shape at the year and starts this one (a renovation, or a better map from then on).
+	let redraw = $state<{ id: string; name: string; slug: string } | null>(null);
+	let redrawAt = $state('');
+	let redrawBusy = $state(false);
+	let pickedCorner = $state<number | null>(null);
+	function startRedraw() {
+		const x = selected[0];
+		if (!x) return;
+		const feats = lastSnap.features.filter((f) => String(f.properties?.id) === x.id && f.geometry);
+		const g =
+			feats.find((f) => /Polygon/.test(f.geometry!.type))?.geometry ??
+			feats.find((f) => /LineString/.test(f.geometry!.type))?.geometry ??
+			feats[0]?.geometry;
+		let start: LL[] = [];
+		if (g?.type === 'Polygon' || g?.type === 'MultiPolygon') {
+			drawMode = 'polygon';
+			// a several-part outline starts from its biggest part
+			const ring = outerRings(g).sort((a, b) => b.length - a.length)[0] ?? [];
+			start = ring.slice(0, -1);
+		} else if (g?.type === 'LineString' || g?.type === 'MultiLineString') {
+			drawMode = 'line';
+			start = g.type === 'LineString' ? (g.coordinates as LL[]) : ((g.coordinates[0] ?? []) as LL[]);
+		} else if (g?.type === 'Point') {
+			drawMode = 'point';
+			start = [g.coordinates as LL];
+		}
+		redraw = { id: x.id, name: x.name, slug: x.slug };
+		redrawAt = bulkYear;
+		pickedCorner = null;
+		selected = [];
+		bulkResult = null;
+		stopSelecting();
+		tool = 'trace';
+		pts = start.map(([a, b]) => [a, b]);
+	}
+	function removeCorner() {
+		if (pickedCorner == null) return;
+		const min = effectiveMode === 'polygon' ? 3 : effectiveMode === 'line' ? 2 : 1;
+		if (pts.length <= min) return;
+		pts = pts.filter((_, i) => i !== pickedCorner);
+		pickedCorner = null;
+	}
+	function cancelRedraw() {
+		redraw = null;
+		pickedCorner = null;
+		pts = [];
+	}
+	/** A click while redrawing adds a corner on the nearest side, not at the end. */
+	function insertCorner(c: LL, at: { x: number; y: number }) {
+		if (!map || effectiveMode === 'point' || pts.length < 2) return void (pts = effectiveMode === 'point' ? [c] : [...pts, c]);
+		const scr = pts.map((p) => map!.project(p));
+		const n = effectiveMode === 'polygon' ? scr.length : scr.length - 1;
+		let best = Infinity;
+		let after = pts.length - 1;
+		for (let i = 0; i < n; i++) {
+			const a = scr[i];
+			const b = scr[(i + 1) % scr.length];
+			const [dx, dy] = [b.x - a.x, b.y - a.y];
+			const t = Math.max(0, Math.min(1, ((at.x - a.x) * dx + (at.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+			const d = Math.hypot(a.x + t * dx - at.x, a.y + t * dy - at.y);
+			if (d < best) {
+				best = d;
+				after = i;
+			}
+		}
+		pts = [...pts.slice(0, after + 1), c, ...pts.slice(after + 1)];
+		pickedCorner = after + 1;
+	}
+	// a handle on each corner while redrawing: drag to reshape, tap to pick (then Remove corner)
+	let cornerMarkers: Marker[] = [];
+	let draggingCorner = -1;
+	function syncCornerHandles() {
+		if (!map || !maplibre || !ready) return;
+		const want = redraw && tool === 'trace' ? pts.length : 0;
+		if (cornerMarkers.length !== want) {
+			cornerMarkers.forEach((m) => m.remove());
+			cornerMarkers = [];
+			for (let i = 0; i < want; i++) {
+				const el = document.createElement('div');
+				el.className = 'handle corner-pt';
+				el.title = 'Drag to move this corner; tap to pick it';
+				// a click right after a drag is the end of the drag, not a pick
+				let draggedAt = 0;
+				el.addEventListener('click', (ev) => {
+					ev.stopPropagation();
+					if (Date.now() - draggedAt > 300) pickedCorner = pickedCorner === i ? null : i;
+				});
+				const mk = new maplibre.Marker({ element: el, draggable: true }).setLngLat(pts[i]).addTo(map);
+				mk.on('dragstart', () => (draggingCorner = i));
+				mk.on('drag', () => {
+					const ll = mk.getLngLat();
+					pts[i] = [+ll.lng.toFixed(7), +ll.lat.toFixed(7)];
+				});
+				mk.on('dragend', () => ((draggingCorner = -1), (draggedAt = Date.now())));
+				cornerMarkers.push(mk);
+			}
+		} else cornerMarkers.forEach((m, i) => i !== draggingCorner && m.setLngLat(pts[i]));
+		cornerMarkers.forEach((m, i) => m.getElement().classList.toggle('picked', i === pickedCorner));
+	}
+	function afterRedraw() {
+		redrawBusy = true;
+		return async ({ result, update }: { result: { type: string; data?: Record<string, unknown> }; update: (o?: { reset?: boolean }) => Promise<void> }) => {
+			await update({ reset: false });
+			redrawBusy = false;
+			if (result.type === 'success' && result.data?.redrawn) {
+				redraw = null;
+				pickedCorner = null;
+				pts = [];
+				refreshKey++;
+			}
+		};
 	}
 
 	// ---------------------------------------------------------------- import
@@ -792,6 +1051,12 @@
 			m.addLayer({ id: 'draft-line', type: 'line', source: 'draft', filter: ['!=', ['geometry-type'], 'Point'], paint: { 'line-color': '#f2c14e', 'line-width': 2.5 } });
 			m.addLayer({ id: 'draft-pt', type: 'circle', source: 'draft', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 4.5, 'circle-color': '#f2c14e', 'circle-stroke-color': '#17130f', 'circle-stroke-width': 1.5 } });
 
+			// the selection being moved: where it will go
+			m.addSource('moving', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+			m.addLayer({ id: 'moving-fill', type: 'fill', source: 'moving', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#5fd0c4', 'fill-opacity': 0.25 } });
+			m.addLayer({ id: 'moving-line', type: 'line', source: 'moving', filter: ['!=', ['geometry-type'], 'Point'], paint: { 'line-color': '#5fd0c4', 'line-width': 2, 'line-dasharray': [2, 1] } });
+			m.addLayer({ id: 'moving-pt', type: 'circle', source: 'moving', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#5fd0c4', 'circle-stroke-color': '#17130f', 'circle-stroke-width': 1.5 } });
+
 			m.on('click', (e) => {
 				// Shift-click (or a tap in Select mode) picks buildings for bulk edits
 				if (e.originalEvent.shiftKey || selecting) {
@@ -813,6 +1078,7 @@
 					}
 				}
 				if (pinning) addMapPin(c);
+				else if (redraw && tool === 'trace') insertCorner(c, e.point);
 				else pts = effectiveMode === 'point' ? [c] : [...pts, c];
 			});
 			m.on('moveend', () => saveView({ center: [m.getCenter().lng, m.getCenter().lat], zoom: m.getZoom() }));
@@ -831,6 +1097,8 @@
 		pinMarkers.forEach((m) => m.remove());
 		resizeObs?.disconnect();
 		shapeHandle?.remove();
+		moveHandle?.remove();
+		cornerMarkers.forEach((m) => m.remove());
 		if (scan) URL.revokeObjectURL(scan.url);
 		top?.remove();
 		map?.remove();
@@ -888,6 +1156,25 @@
 		void [shapeFill, shapeLine, ready];
 		untrack(applyShapeOpacity);
 	});
+	$effect(() => {
+		void [moving?.to, moving?.angle, moving?.from, moveSpaces, ready];
+		untrack(() => {
+			drawMoving();
+			syncMoveHandle();
+		});
+	});
+	// moving is about the selection: clearing it (or leaving select) stops
+	$effect(() => {
+		if (!selected.length) untrack(() => (moving = null));
+	});
+	$effect(() => {
+		void [pts, redraw, tool, pickedCorner, ready];
+		untrack(syncCornerHandles);
+	});
+	// leaving Trace drops a redraw in progress
+	$effect(() => {
+		if (tool !== 'trace') untrack(() => redraw && cancelRedraw());
+	});
 	// the area preview and the bulk selection share the map's "selected" look
 	const highlightIds = $derived([...new Set([...previewIds, ...selected.map((x) => x.id)])]);
 	$effect(() => {
@@ -903,9 +1190,23 @@
 		if (t.closest('input, textarea, select')) return;
 		if (e.key === 'f' && !e.repeat) overlayHidden = true;
 		if (e.key === 'h' && !e.repeat && !e.metaKey && !e.ctrlKey) showShapes = !showShapes;
+		if (redraw && tool === 'trace' && pickedCorner != null && (e.key === 'Delete' || e.key === 'Backspace')) {
+			e.preventDefault();
+			return removeCorner();
+		}
 		if (drawing && e.key === 'Backspace') {
 			e.preventDefault();
 			pts = pts.slice(0, -1);
+		}
+		if (moving && !e.metaKey && !e.ctrlKey) {
+			const step = e.shiftKey ? 2 : 0.25;
+			const k = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
+			if (k) {
+				e.preventDefault();
+				return nudge(k[0], k[1]);
+			}
+			if (e.key === '[' || e.key === ']') return turn((e.key === '[' ? 1 : -1) * (e.shiftKey ? 1 : 0.2));
+			if (e.key === 'Escape') return void (moving = null);
 		}
 		if (drawing && e.key === 'Escape') pts = [];
 		else if (e.key === 'Escape' && (selected.length || selecting) && !(e.target as HTMLElement).closest('input, select, textarea')) {
@@ -1126,6 +1427,7 @@
 
 		<!-- ======================= TRACE ======================= -->
 		{#if tool === 'trace'}
+			{#if !redraw}
 			<div class="seg">
 				{#each ['polygon', 'line', 'point'] as const as m (m)}
 					<button class:on={drawMode === m} onclick={() => ((drawMode = m), (pts = []))}>{m}</button>
@@ -1137,6 +1439,7 @@
 				{#if !narrow}<kbd>Backspace</kbd> undoes, <kbd>Esc</kbd> clears.{/if}
 				{#if showShapes}<button class="link" onclick={() => (showShapes = false)}>Hide existing shapes</button> to trace without them in the way.{/if}
 			</p>
+			{/if}
 			<div class="row draw-status">
 				<span class="muted small">{pts.length} corner{pts.length === 1 ? '' : 's'}{geometry ? ' · ready to save' : ''}</span>
 				<span class="spacer"></span>
@@ -1144,6 +1447,48 @@
 				<button class="ghost small-btn" disabled={!pts.length} onclick={() => (pts = [])}>Clear</button>
 			</div>
 
+			{#if redraw}
+				<form method="post" action="?/redraw" class="stack redraw-box card" use:enhance={afterRedraw}>
+					<input type="hidden" name="tool" value="trace" />
+					<input type="hidden" name="entity_id" value={redraw.id} />
+					<input type="hidden" name="geojson" value={geojsonText} />
+					<div class="spread">
+						<h3>Redrawing <a href="/e/{redraw.slug}" target="_blank" rel="noopener">{redraw.name}</a></h3>
+						<button type="button" class="ghost small-btn" onclick={cancelRedraw}>Cancel</button>
+					</div>
+					<p class="hint">
+						Its shape is loaded: drag a corner to move it, {narrow ? 'tap' : 'click'} beside a side to add one, or pick a corner and
+						remove it. Saving ends the shape shown then and starts this one, up to when the old one would have ended. For a sheet that
+						was simply misaligned, use Move instead: that fixes the shape where it always was.
+					</p>
+					{#if pickedCorner != null}
+						<div class="row">
+							<span class="muted small">Corner {pickedCorner + 1} picked</span>
+							<button type="button" class="ghost small-btn" onclick={removeCorner}>Remove corner</button>
+						</div>
+					{/if}
+					<div class="fields">
+						<div>
+							<label for="rd-at">New shape from</label>
+							<input id="rd-at" name="at" bind:value={redrawAt} placeholder="1958 · May 1958" />
+						</div>
+						<div>
+							<label for="rd-conf">Confidence</label>
+							<select id="rd-conf" name="confidence">
+								{#each ['certain', 'probable', 'approximate', 'speculative'] as c (c)}<option selected={c === 'probable'}>{c}</option>{/each}
+							</select>
+						</div>
+					</div>
+					<div>
+						<label for="rd-src">Source</label>
+						<SourcePicker id="rd-src" name="source_id" sources={data.sources} allowNew={false} />
+					</div>
+					<div><label for="rd-note">Note</label><input id="rd-note" name="note" placeholder="Rear wing added · redrawn from the 1958 aerial" /></div>
+					<button class="primary" disabled={!geometry || redrawBusy || !redrawAt.trim()}>
+						{redrawBusy ? 'Saving…' : `Save new shape from ${redrawAt.trim() || '…'}`}
+					</button>
+				</form>
+			{:else}
 			<h3>Save to a page</h3>
 			<form method="post" action="?/trace" class="stack" use:enhance={() => after()}>
 				<input type="hidden" name="tool" value="trace" />
@@ -1177,6 +1522,7 @@
 				/>
 				<button class="primary" disabled={!geometry}>Save shape</button>
 			</form>
+			{/if}
 
 			<details class="fold">
 				<summary>Drawing style</summary>
@@ -1442,7 +1788,7 @@
 				></div>
 			{/if}
 			<div class="dock">
-				<YearSlider bind:year min={Math.min(data.minYear, data.settings.min_year)} max={data.maxYear} compact={narrow} />
+				<YearSlider bind:year min={Math.min(data.minYear, data.settings.min_year)} max={data.maxYear} compact={narrow} keyboard={!moving} />
 			</div>
 		</div>
 	</div>
@@ -1512,12 +1858,14 @@
 	{#if bulkResult}
 		<div class="notice small {bulkResult.done ? 'ok' : 'error'}">
 			{bulkResult.done
-				? `${bulkResult.done} marked ${
+				? `${bulkResult.done} ${bulkResult.action === 'name' ? 'named' : 'marked'} ${
 						bulkResult.action === 'gone'
 							? `gone by ${bulkResult.at}`
 							: bulkResult.action === 'condition'
 								? `${statusLabel(bulkResult.status)} from ${bulkResult.at}`
-								: `still standing in ${bulkResult.at}`
+								: bulkResult.action === 'name'
+									? `“${bulkResult.name}” from ${bulkResult.at}`
+									: `still standing in ${bulkResult.at}`
 					}.`
 				: 'Nothing changed.'}
 			{#if bulkResult.skipped.length}
@@ -1546,17 +1894,65 @@
 				{/each}
 			</ul>
 		</details>
-		<form method="post" action={bulkMode === 'gone' ? '?/bulkGone' : bulkMode === 'condition' ? '?/bulkCondition' : '?/bulkStanding'} class="bulk" use:enhance={afterBulk}>
+		{#if moveResult}
+			<p class="notice ok small">
+				Moved {moveResult.shapes} shape{moveResult.shapes === 1 ? '' : 's'}{moveResult.spaces
+					? ` (with ${moveResult.spaces} interior space${moveResult.spaces === 1 ? '' : 's'})`
+					: ''}.
+			</p>
+		{/if}
+		{#if moving}
+			<form method="post" action="?/moveShapes" class="move-box" use:enhance={afterMove}>
+				<input type="hidden" name="tool" value="select" />
+				{#each selected as x (x.id)}<input type="hidden" name="ids" value={x.id} />{/each}
+				<input type="hidden" name="at" value={yearToDate(year)} />
+				<input type="hidden" name="from_lon" value={moving.from[0]} />
+				<input type="hidden" name="from_lat" value={moving.from[1]} />
+				<input type="hidden" name="to_lon" value={moving.to[0]} />
+				<input type="hidden" name="to_lat" value={moving.to[1]} />
+				<input type="hidden" name="angle" value={moving.angle} />
+				<div class="bar-row">
+					<strong>Move &amp; turn</strong>
+					<span class="muted small move-sum">{moveSummary}</span>
+				</div>
+				<p class="hint">
+					Drag the <span class="sw grip">✥</span> handle{narrow ? '' : ' (or nudge with the arrow keys, Shift for bigger steps)'}; turn
+					with the buttons{narrow ? '' : ' or [ and ]'}. The shapes shown in {year} move where they always were, with no new version.
+				</p>
+				<div class="row nudges">
+					<button type="button" class="ghost small-btn" onclick={() => turn(1)} title="Turn 1° left">⟲ 1°</button>
+					<button type="button" class="ghost small-btn" onclick={() => turn(0.2)} title="Turn 0.2° left">⟲ 0.2°</button>
+					<button type="button" class="ghost small-btn" onclick={() => turn(-0.2)} title="Turn 0.2° right">⟳ 0.2°</button>
+					<button type="button" class="ghost small-btn" onclick={() => turn(-1)} title="Turn 1° right">⟳ 1°</button>
+					<button type="button" class="ghost small-btn" onclick={() => moving && (moving = { ...moving, to: moving.from, angle: 0 })}>Reset</button>
+				</div>
+				<label class="check small">
+					<input type="checkbox" name="spaces" value="1" bind:checked={moveSpaces} /> Storefronts and suites inside them move too
+				</label>
+				<div class="row">
+					<button class="primary" disabled={moveBusy || moveSummary === 'not moved'}>{moveBusy ? 'Moving…' : 'Save move'}</button>
+					<button type="button" class="ghost" onclick={() => (moving = null)}>Cancel</button>
+				</div>
+			</form>
+		{:else}
+		<div class="row adjust">
+			<button class="ghost small-btn" onclick={startMove} title="Drag (and turn) the selected shapes, e.g. traced from a sheet that was aligned a little off">✥ Move / turn</button>
+			{#if selected.length === 1 && !selected[0].ghost}
+				<button class="ghost small-btn" onclick={startRedraw} title="Reshape it: the shape shown in {bulkYear} ends then, the new one starts">✎ Redraw from {bulkYear}</button>
+			{/if}
+		</div>
+		<form method="post" action={bulkMode === 'gone' ? '?/bulkGone' : bulkMode === 'condition' ? '?/bulkCondition' : bulkMode === 'name' ? '?/bulkName' : '?/bulkStanding'} class="bulk" use:enhance={afterBulk}>
 			<input type="hidden" name="tool" value="select" />
 			{#each selected as x (x.id)}<input type="hidden" name="ids" value={x.id} />{/each}
 			<div class="seg bulk-mode" role="radiogroup" aria-label="What to record">
 				<button type="button" class:on={bulkMode === 'gone'} onclick={() => ((bulkMode = 'gone'), (bulkNoteInput = null))}>Gone by</button>
 				<button type="button" class:on={bulkMode === 'condition'} onclick={() => ((bulkMode = 'condition'), (bulkNoteInput = null))}>Condition from</button>
 				<button type="button" class:on={bulkMode === 'standing'} onclick={() => (bulkMode = 'standing')}>Still standing in</button>
+				<button type="button" class:on={bulkMode === 'name'} onclick={() => ((bulkMode = 'name'), (bulkNoteInput = null))}>Name from</button>
 			</div>
 			<div class="bulk-fields">
 				<label>
-					<span>{bulkMode === 'gone' ? 'Gone by' : bulkMode === 'condition' ? 'From' : 'Standing in'}</span>
+					<span>{bulkMode === 'gone' ? 'Gone by' : bulkMode === 'condition' || bulkMode === 'name' ? 'From' : 'Standing in'}</span>
 					<input name="at" value={bulkYear} oninput={(e) => (bulkYearInput = e.currentTarget.value)} placeholder="1958 · May 1958 · 1950s" title="A year, a month, a day, or a decade" />
 				</label>
 				{#if bulkMode === 'gone'}
@@ -1571,6 +1967,11 @@
 							{#each standingStatuses as st (st.id)}<option value={st.id}>{st.label}</option>{/each}
 						</select>
 					</label>
+				{:else if bulkMode === 'name'}
+					<label class="grow">
+						<span>Name</span>
+						<input name="name" bind:value={bulkName} placeholder={selected.length === 1 ? selected[0].name : 'Gary Hotel'} required />
+					</label>
 				{/if}
 			</div>
 			{#if bulkMode !== 'standing'}
@@ -1579,12 +1980,14 @@
 					<input name="note" value={bulkNote} oninput={(e) => (bulkNoteInput = e.currentTarget.value)} />
 				</label>
 			{/if}
-			<button class="primary" disabled={bulkBusy}>
+			<button class="primary" disabled={bulkBusy || (bulkMode === 'name' && !bulkName.trim())}>
 				{bulkMode === 'gone'
 					? `Mark ${selected.length} gone by ${bulkYear}`
 					: bulkMode === 'condition'
 						? `Mark ${selected.length} ${statusLabel(bulkCondition)} from ${bulkYear}`
-						: `Mark ${selected.length} still standing in ${bulkYear}`}
+						: bulkMode === 'name'
+							? `Name ${selected.length === 1 ? 'it' : selected.length} “${bulkName.replace(/\s+/g, ' ').trim() || '…'}” from ${bulkYear}`
+							: `Mark ${selected.length} still standing in ${bulkYear}`}
 			</button>
 			<p class="hint">
 				{#if bulkMode === 'gone'}
@@ -1592,12 +1995,16 @@
 					that year are skipped.
 				{:else if bulkMode === 'condition'}
 					Starts the condition then (approximate), up to the next recorded one; what's recorded later, like a demolition, stays.
+				{:else if bulkMode === 'name'}
+					The map shows this name from then until the next recorded name; the name running then ends there. The page's title stays
+					as it is.
 				{:else}
 					It was there then: a start after that year moves back to it, and ones marked gone by then reopen (a guessed demolition is
 					removed).
 				{/if}
 			</p>
 		</form>
+		{/if}
 	{/if}
 {/snippet}
 
@@ -1698,6 +2105,19 @@
 	.sw.move {
 		background: #8fb3c9;
 		border-radius: 50%;
+	}
+	.sw.grip {
+		width: auto;
+		height: auto;
+		padding: 0 3px;
+		background: #5fd0c4;
+		border-radius: 50%;
+		color: #17130f;
+		font-size: 0.75rem;
+		line-height: 1.3;
+	}
+	.move-box strong {
+		white-space: nowrap;
 	}
 	.sw.kept {
 		background: #e08a4a;
@@ -1870,6 +2290,32 @@
 		background: #8fb3c9;
 		border-radius: 50%;
 	}
+	:global(.handle.move.big) {
+		display: grid;
+		place-items: center;
+		width: 30px;
+		height: 30px;
+		background: #5fd0c4;
+	}
+	:global(.handle.move.big)::after {
+		content: '✥';
+		color: #17130f;
+		font-size: 17px;
+		line-height: 1;
+	}
+	/* corners of a shape being redrawn */
+	:global(.handle.corner-pt) {
+		width: 12px;
+		height: 12px;
+		background: #f2c14e;
+		border-radius: 50%;
+	}
+	:global(.handle.corner-pt.picked) {
+		background: #e0574a;
+		box-shadow:
+			0 0 0 2px #17130f,
+			0 0 0 5px #e0574a88;
+	}
 	:global(.handle.pin) {
 		width: 22px;
 		height: 22px;
@@ -1906,6 +2352,14 @@
 		:global(.handle.move) {
 			width: 36px;
 			height: 36px;
+		}
+		:global(.handle.move.big) {
+			width: 42px;
+			height: 42px;
+		}
+		:global(.handle.corner-pt) {
+			width: 22px;
+			height: 22px;
 		}
 		:global(.handle.pin) {
 			width: 32px;
@@ -2109,7 +2563,46 @@
 		display: grid;
 		gap: 6px;
 	}
+	.adjust {
+		gap: 6px;
+		margin: 4px 0 8px;
+		flex-wrap: wrap;
+	}
+	.move-box {
+		display: grid;
+		gap: 6px;
+		padding: 8px 10px;
+		border: 1px solid #5fd0c4;
+		border-radius: var(--radius);
+	}
+	.move-box .hint {
+		margin: 0;
+	}
+	.move-sum {
+		margin-left: auto;
+		font-variant-numeric: tabular-nums;
+	}
+	.nudges {
+		gap: 4px;
+		flex-wrap: wrap;
+	}
+	.move-box .check {
+		display: flex;
+		gap: 6px;
+		align-items: center;
+		margin: 0;
+		color: var(--ink-2);
+	}
+	.redraw-box {
+		border-color: #f2c14e;
+	}
+	.redraw-box h3 {
+		margin: 0;
+	}
+	/* four of them: two by two */
 	.bulk-mode {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
 		margin: 0;
 	}
 	.bulk-mode button {

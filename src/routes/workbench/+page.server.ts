@@ -1,7 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { newPagesPrivate, requirePermission } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, required, slugify, str } from '$lib/server/forms';
-import { librarySources, madeSource, resolveInlineSource, type MadeSource } from '$lib/server/sources';
+import { discardSource, librarySources, madeSource, resolveInlineSource, type MadeSource } from '$lib/server/sources';
 import { parseFuzzyDate } from '$lib/time';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -208,6 +208,73 @@ export const actions: Actions = {
 		const res = await locals.supabase.rpc('reopen_pages', { p_ids: ids, p_at: at.date, p_precision: at.precision });
 		check(res);
 		return { bulk: { ...(res.data as BulkResult), action: 'standing' as const, at: str(fd, 'at') } };
+	}),
+
+	/** Selected pages: an official name from a year (e.g. the label on that year's sanborn sheet). */
+	bulkName: wrap(async (fd, locals) => {
+		await requirePermission(locals, 'edit_content');
+		const ids = fd.getAll('ids').map(String).filter(Boolean);
+		if (!ids.length) throw new FormError('Select some buildings first.');
+		const at = bulkDate(fd);
+		if (!at?.date) throw new FormError('Named from when? Enter a year, like 1925.');
+		const name = required(fd, 'name', 'Name');
+		const res = await locals.supabase.rpc('name_pages', { p_ids: ids, p_at: at.date, p_precision: at.precision, p_name: name, p_note: str(fd, 'note') });
+		check(res);
+		return { bulk: { ...(res.data as BulkResult), action: 'name' as const, at: str(fd, 'at'), name: name.replace(/\s+/g, ' ').trim() } };
+	}),
+
+	/** Shift (and turn) the selected pages' shapes, as shown in a year, where they always were. */
+	moveShapes: wrap(async (fd, locals) => {
+		await requirePermission(locals, 'edit_content');
+		const ids = fd.getAll('ids').map(String).filter(Boolean);
+		if (!ids.length) throw new FormError('Select some buildings first.');
+		const n = (k: string) => {
+			const v = Number(str(fd, k));
+			if (!Number.isFinite(v)) throw new FormError('Drag the shapes to where they belong first.');
+			return v;
+		};
+		const res = await locals.supabase.rpc('move_shapes', {
+			p_ids: ids,
+			p_at: required(fd, 'at'),
+			p_from_lon: n('from_lon'),
+			p_from_lat: n('from_lat'),
+			p_to_lon: n('to_lon'),
+			p_to_lat: n('to_lat'),
+			p_angle: n('angle'),
+			p_spaces: str(fd, 'spaces') !== '0'
+		});
+		check(res);
+		return { moved: res.data as { shapes: number; pages: number; spaces: number } };
+	}),
+
+	/** A new shape for one page from a year: the one shown then ends there. */
+	redraw: wrap(async (fd, locals) => {
+		await requirePermission(locals, 'edit_content');
+		const entity = required(fd, 'entity_id');
+		const at = bulkDate(fd);
+		if (!at?.date) throw new FormError('From which year? Enter one, like 1958.');
+		const made = await resolveInlineSource(locals.supabase, fd, entity);
+		const res = await locals.supabase.rpc('redraw_shape', {
+			p_entity: entity,
+			p_at: at.date,
+			p_precision: at.precision,
+			p_geojson: parseGeo(str(fd, 'geojson')),
+			p_confidence: str(fd, 'confidence') ?? 'probable',
+			p_source_id: str(fd, 'source_id'),
+			p_note: str(fd, 'note')
+		});
+		if (res.error) await discardSource(locals.supabase, made);
+		check(res);
+		const r = res.data as { id: string; ended: string | null; replaced: boolean };
+		return {
+			ok: r.replaced
+				? `Shape redrawn (it already started in ${str(fd, 'at')}).`
+				: r.ended
+					? `New shape from ${str(fd, 'at')}; the old one ends then.`
+					: `Shape added from ${str(fd, 'at')}.`,
+			redrawn: true,
+			newSource: madeSource(made)
+		};
 	}),
 
 	import: wrap(async (fd, locals) => {
