@@ -4,6 +4,7 @@
 	import { TIMELINE_SECTIONS, describeFix, fixChange, type TimelineSection } from '$lib/timelineCleanup';
 
 	let { data, form } = $props();
+	const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 	const e = $derived(data.entity);
 
 	// ignored items stay out of the way until the page's timeline changes (then they come back on their own)
@@ -25,8 +26,18 @@
 		picked = defaults;
 	});
 	let busy = $state(false);
+	// storefronts, suites and halls inside it get their own default fixes after these
+	const spaces = $derived(data.spaces);
+	const spaceFixes = $derived(spaces.reduce((n, sp) => n + sp.keys.length, 0));
+	const endsSpaces = $derived(picked.some((k) => actions.find((f) => f.key === k)?.section === 'spaces'));
+	let withSpaces = $state(true);
+	const willWork = $derived(picked.length > 0 || (withSpaces && spaces.length > 0));
+	const applyLabel = $derived(
+		[picked.length ? `Apply ${plural(picked.length, 'edit')}` : '', withSpaces && spaces.length ? `${picked.length ? 'tidy' : 'Tidy'} ${plural(spaces.length, 'space')}` : '']
+			.filter(Boolean)
+			.join(' and ') || 'Apply'
+	);
 	const lifespan = $derived(formatRange(e.exists_from, e.exists_from_precision, e.exists_to, e.exists_to_precision) || 'no dates');
-	const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 </script>
 
 <svelte:head><title>Timeline cleanup · {e.name}</title></svelte:head>
@@ -64,7 +75,7 @@
 				</section>
 			{/if}
 
-			{#if !actions.length}
+			{#if !actions.length && !spaceFixes}
 				<div class="card">
 					<h2>Nothing to fix</h2>
 					<p class="muted">
@@ -89,6 +100,10 @@
 						};
 					}}
 				>
+					{#if !actions.length}
+						<h2>Nothing to fix on this page itself</h2>
+						<p class="muted">Its interior spaces have {plural(spaceFixes, 'fix', 'fixes')} waiting.</p>
+					{:else}
 					<div class="spread">
 						<h2>
 							{plural(defaults.length, 'fix', 'fixes')}{#if suggestions}<span class="muted">, {plural(suggestions, 'suggestion')}</span>{/if}
@@ -99,6 +114,7 @@
 							<button type="button" class="link" onclick={() => (picked = [])}>none</button>
 						</span>
 					</div>
+					{/if}
 					{#each sections as s (s.id)}
 						<section class="card group">
 							<h3>{s.title}</h3>
@@ -127,13 +143,41 @@
 							</ul>
 						</section>
 					{/each}
+					{#if spaces.length}
+						<section class="card group spaces-card">
+							<label class="check">
+								<input type="checkbox" name="spaces" value="1" bind:checked={withSpaces} />
+								<span>
+									<strong>Then tidy its {plural(spaces.length, 'interior space')}</strong>
+									<span class="hint">
+										Each space gets its own recommended fixes, after this page's, so its conditions, shapes and tenants fit the
+										corrected lifespan. Spaces inside spaces too. Anything you ignored on a space stays ignored.
+									</span>
+								</span>
+							</label>
+							<ul class="plain-list space-list" class:off={!withSpaces}>
+								{#each spaces as sp (sp.id)}
+									<li style:padding-left="{(sp.depth - 1) * 1.1}em">
+										<a href="/e/{sp.slug}/cleanup">{sp.name}</a>
+										<span class="muted small">
+											{sp.keys.length
+												? plural(sp.keys.length, 'fix', 'fixes') + ' waiting'
+												: endsSpaces
+													? 'in order now; ending it may add some'
+													: 'in order'}
+										</span>
+									</li>
+								{/each}
+							</ul>
+						</section>
+					{/if}
 					<p class="hint">
 						Added conditions are marked “approximate” with a note saying they came from this cleanup. Check “Demolished” against
 						what you know: a building that was moved or renamed rather than torn down needs a different condition.
 					</p>
 					<div class="row">
-						<button class="primary" disabled={!picked.length || busy}>
-							{busy ? 'Applying…' : `Apply ${plural(picked.length, 'edit')}`}
+						<button class="primary" disabled={!willWork || busy}>
+							{busy ? 'Applying…' : applyLabel}
 						</button>
 						<button
 							class="ghost"
@@ -240,6 +284,23 @@
 	}
 	.check input {
 		margin-top: 3px;
+	}
+	.spaces-card .check .hint {
+		display: block;
+		margin: 2px 0 0;
+	}
+	.space-list {
+		margin: 8px 0 0 26px;
+	}
+	.space-list li {
+		display: flex;
+		gap: 8px;
+		align-items: baseline;
+		flex-wrap: wrap;
+		padding: 1px 0;
+	}
+	.space-list.off {
+		opacity: 0.5;
 	}
 	.suggestion .check {
 		color: var(--ink-2);
