@@ -121,7 +121,7 @@
 	const taken = $derived(rows.filter((r) => r.include));
 	const counts = $derived({
 		rows: taken.length,
-		created: taken.filter((r) => !r.use_existing).length,
+		created: taken.filter((r) => !r.use_existing && !r.shares).length,
 		existing: taken.filter((r) => r.use_existing).length,
 		placed: taken.filter((r) => r.place_id).length,
 		points: taken.filter((r) => !r.place_id && r.point).length,
@@ -160,6 +160,7 @@
 		A spreadsheet of every business on a block from a city directory, say, becomes pages in one go, each linked to the building (or
 		storefront) it was in that year, so they show on the map. Rows are matched to pages that already exist; nothing is written until
 		you've looked over the preview, and the whole import can be undone.
+		<a href="{page.data.settings.source_code_url}/blob/main/CSVs.md" target="_blank" rel="noopener">How to write a sheet ↗</a>
 	</p>
 
 	{#if form && 'error' in form && form.error}<p class="notice error">{form.error}</p>{/if}
@@ -338,6 +339,8 @@
 											<option value={m.id}>{r.same ? 'Existing' : 'Same as'}: {m.name}</option>
 										</select>
 										{#if r.use_existing}<a class="small" href="/e/{m.slug}" target="_blank" rel="noopener">open ↗</a>{/if}
+									{:else if r.shares}
+										<span class="muted">same page as row {r.shares}</span>
 									{:else}
 										<span class="muted">New {kindLabel(r.kind).toLowerCase()}</span>
 									{/if}

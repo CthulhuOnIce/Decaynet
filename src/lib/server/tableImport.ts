@@ -184,9 +184,11 @@ export async function preview(sb: SupabaseClient, sheet: Sheet, vocab: Vocabular
 	const rows: SheetRow[] = norm.map((r) => {
 		const m = byRow.get(r.n)!;
 		const issues = [...r.issues];
-		const place = m.space ? { ...m.space, kind: 'space' } : m.place;
+		// a storefront row's unit is its own number, not one to look for
+		const isSpace = r.kind === 'space';
+		const place = m.space && !isSpace ? { ...m.space, kind: 'space' } : m.place;
 		if (r.place && !m.place) issues.push(`no building called “${r.place}”`);
-		if (r.unit && m.place && !m.space) issues.push(`no storefront “${r.unit}” in ${m.place.name}: linked to the building`);
+		if (r.unit && m.place && !m.space && !isSpace) issues.push(`no storefront “${r.unit}” in ${m.place.name}: linked to the building`);
 		if (m.place_how === 'address, other years') issues.push(`${m.place?.name} has that address only in other years`);
 		const rel = vocab.relationTypes.find((t) => t.id === r.link_as);
 		if (place && rel && !SPATIAL_LINKLESS.has(r.kind) && r.kind !== 'space') {
@@ -203,9 +205,10 @@ export async function preview(sb: SupabaseClient, sheet: Sheet, vocab: Vocabular
 			link_as: r.link_as,
 			same: m.same,
 			similar: m.similar,
+			shares: null,
 			place,
 			place_how: m.place_how,
-			space: m.space,
+			space: isSpace ? null : m.space,
 			tags: m.tags.found,
 			missing_tags: m.tags.missing,
 			lat: r.lat,
@@ -217,6 +220,15 @@ export async function preview(sb: SupabaseClient, sheet: Sheet, vocab: Vocabular
 			include: true
 		};
 	});
+
+	// one page per name and kind in a sheet: later rows go on the page the first one makes
+	const first = new Map<string, number>();
+	for (const r of rows) {
+		if (r.same) continue;
+		const key = `${r.kind}|${r.name.toLowerCase()}`;
+		if (first.has(key)) r.shares = first.get(key)!;
+		else first.set(key, r.n);
+	}
 
 	// a few addresses that match no building, looked up on today's map
 	let geocoded = 0;
@@ -264,6 +276,8 @@ export function applyRows(sheet: Sheet, vocab: Vocabulary, choices: Record<strin
 		if (!c?.include) continue;
 		const d = (f: FuzzyDate | null) => f?.date ?? null;
 		const p = (f: FuzzyDate | null) => f?.precision ?? 'year';
+		// a storefront row's unit is its own number
+		const attributes = r.kind === 'space' && r.unit && !r.attributes.some((a) => a.key === 'unit_label') ? [...r.attributes, { key: 'unit_label', value: r.unit }] : r.attributes;
 		out.push({
 			name: r.name,
 			kind: r.kind,
@@ -271,7 +285,7 @@ export function applyRows(sheet: Sheet, vocab: Vocabulary, choices: Record<strin
 			summary: r.summary,
 			names: r.names,
 			tag_ids: c.tag_ids,
-			attributes: r.attributes,
+			attributes,
 			from: d(r.life.from),
 			from_p: p(r.life.from),
 			to: d(r.life.to),

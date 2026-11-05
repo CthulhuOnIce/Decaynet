@@ -133,6 +133,8 @@ export interface SheetRow {
 	/** a page with that name already */
 	same: { id: string; slug: string; name: string } | null;
 	similar: { id: string; slug: string; name: string; score: number } | null;
+	/** an earlier row with the same name and kind: both go on one page (a business over several years) */
+	shares: number | null;
 	place: { id: string; slug: string; name: string; kind: string } | null;
 	place_how: 'named' | 'address' | 'address, other years' | 'geocoded' | null;
 	space: { id: string; slug: string; name: string } | null;

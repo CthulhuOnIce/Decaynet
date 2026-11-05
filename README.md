@@ -406,6 +406,8 @@ Bulk tools (area change and import) need the *Bulk map tools* permission.
    - **Not found?** Pick the building by hand in the preview, or let unmatched addresses become **new map points**, from *Latitude / Longitude* columns or, optionally, looked up on OpenStreetMap (today's numbering, so check the result; at most 25 addresses per preview, one a second, per OSM's usage policy). A row left unplaced keeps its address on its page, so address search finds it and you can place it later.
    - Unknown tags are flagged and skipped (add them under *Tags* first); rows with something to check are marked amber. Untick any row to leave it out.
 
+Rows with the same name in one sheet are one page, so a business followed through several directories (one row per year) gets one page with each year's facts and address. **[CSVs.md](CSVs.md)** is the full guide to writing sheets: every column, date forms, timed facts, links, recipes and troubleshooting.
+
 Everything goes in as one import, listed under *Recent spreadsheet imports*, and a moderator can **undo** it: that deletes the pages it created and the links, names, tags, facts and addresses it added to existing pages.
 
 ### Starter pages from OpenHistoricalMap & Wikidata
@@ -646,6 +648,7 @@ src/lib/server/                  db helpers, forms, markdown, service client, ti
 src/lib/server/importers/        OpenHistoricalMap (Overpass) + Wikidata (SPARQL) fetch, combine, match, plan
 src/routes/                      pages, /api endpoints, /workbench, /import, /tip(s), /admin
 docs/images/                     screenshots used in this README
+CSVs.md                          writing and importing spreadsheets
 ROADMAP.md                       long-horizon tracker
 ```
 
