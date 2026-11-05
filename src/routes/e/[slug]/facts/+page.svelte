@@ -48,7 +48,7 @@
 
 {#snippet status(section: string)}
 	{@const m = msg(section)}
-	{#if m?.error}<p class="notice error">{m.error}</p>{:else if m?.ok}<p class="notice ok">Saved.</p>{/if}
+	{#if m?.error}<p class="notice error">{m.error}</p>{:else if m?.ok}<p class="notice ok">{('message' in m && m.message) || 'Saved.'}</p>{/if}
 {/snippet}
 
 {#snippet factRow(table: string, f: TemporalFact & Record<string, unknown>, label: string, color?: string)}
@@ -435,9 +435,12 @@
 			{#if footprints.length}
 				<form method="post" action="?/addSpace" use:enhance>
 					<input type="hidden" name="section" value="spaces" />
-					<GeometryPicker mode="polygon" context={spaceContext} height={340} />
+					<GeometryPicker mode="polygon" context={spaceContext} height={340} each="space" />
 					<div class="fields" style="margin-top: 8px">
-						<div style="grid-column: span 2"><label for="sp-name">Space name</label><input id="sp-name" name="space_name" required placeholder="North storefront" /></div>
+						<div style="grid-column: span 2">
+							<label for="sp-name">Space name</label><input id="sp-name" name="space_name" required placeholder="North storefront" />
+							<span class="hint">Pasted several areas? Each becomes its own space, named from the GeoJSON's <code>name</code> (and <code>unit</code>, <code>floor</code>) or numbered after this.</span>
+						</div>
 						<div><label for="sp-floor">Floor</label><input id="sp-floor" name="floor" type="number" step="1" value="1" /></div>
 						<div><label for="sp-unit">Unit / suite</label><input id="sp-unit" name="unit_label" placeholder="101" /></div>
 						<div><label for="sp-from">From</label><input id="sp-from" name="valid_from" placeholder="same as building" /></div>

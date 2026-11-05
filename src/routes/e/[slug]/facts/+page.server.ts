@@ -2,6 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { entityBySlug, loadTags, requireEditor } from '$lib/server/db';
 import { FormError, dbMessage, fuzzyPair, geometryFromForm, required, slugify, str, temporalFromForm } from '$lib/server/forms';
 import { discardSource, madeSource, resolveInlineSource, sourceOptions, type MadeSource } from '$lib/server/sources';
+import { readAreas } from '$lib/geojson';
 import type { RelationRow, Space } from '$lib/types';
 import type { Actions, PageServerLoad, RequestEvent } from './$types';
 
@@ -59,17 +60,18 @@ function action(fn: (ctx: { fd: FormData; entityId: string; event: RequestEvent 
 		const fd = await event.request.formData();
 		const section = str(fd, 'section') ?? 'general';
 		let newSource: MadeSource | null = null;
+		let said: unknown;
 		try {
 			// "New source…" in a fact form: create it for this page first
 			newSource = await resolveInlineSource(event.locals.supabase, fd, entity.id);
-			await fn({ fd, entityId: entity.id, event });
+			said = await fn({ fd, entityId: entity.id, event });
 		} catch (e) {
 			await discardSource(event.locals.supabase, newSource);
 			if (e instanceof FormError) return fail(400, { section, error: e.message });
 			throw e;
 		}
 		// the form switches from "New source…" to it, so saving again doesn't make another
-		return { section, ok: true, newSource: madeSource(newSource) };
+		return { section, ok: true, message: typeof said === 'string' ? said : null, newSource: madeSource(newSource) };
 	};
 }
 
@@ -244,12 +246,41 @@ export const actions: Actions = {
 		check(await sb.from('entity_tags').insert({ entity_id: entityId, tag_id: tagId, ...temporalFromForm(fd) }));
 	}),
 
-	/** Draw a space (storefront, suite, hall) inside this building's footprint. */
+	/** Draw a space (storefront, suite, hall) inside this building's footprint; pasted GeoJSON
+	 *  with several areas makes one space each (named from the features when they carry names). */
 	addSpace: action(async ({ fd, entityId, event }) => {
-		const geom = geometryFromForm(fd);
-		if (!geom) throw new FormError('Draw the space as a polygon inside the footprint.');
 		const life = fuzzyPair(fd, 'valid_from', 'valid_to');
 		const floor = str(fd, 'floor');
+		const pastedText = str(fd, 'geojson_text');
+		const areas = pastedText ? readAreas(pastedText) : null;
+		if (areas && 'areas' in areas && areas.areas.length > 1) {
+			const base = required(fd, 'space_name', 'Space name');
+			const prop = (p: Record<string, unknown>, keys: string[]) => {
+				for (const k of Object.keys(p)) if (keys.includes(k.toLowerCase()) && p[k] != null && String(p[k]).trim()) return String(p[k]).trim();
+				return null;
+			};
+			const spaces = areas.areas.map((a, i) => {
+				const f = prop(a.props, ['floor', 'level', 'storey']);
+				return {
+					name: prop(a.props, ['name', 'label', 'title', 'tenant']) ?? `${base} ${i + 1}`,
+					geojson: a.geometry,
+					floor: f != null && Number.isFinite(Number(f)) ? Number(f) : floor == null ? null : Number(floor),
+					unit_label: prop(a.props, ['unit', 'unit_label', 'suite', 'number', 'no'])
+				};
+			});
+			const res = await event.locals.supabase.rpc('add_spaces', {
+				p_building: entityId,
+				p_spaces: spaces,
+				p_from: life.from,
+				p_from_precision: life.fromPrecision,
+				p_to: life.to,
+				p_to_precision: life.toPrecision
+			});
+			check(res);
+			return `Added ${spaces.length} spaces: ${spaces.map((x) => x.name).join(', ')}.`;
+		}
+		const geom = geometryFromForm(fd);
+		if (!geom) throw new FormError('Draw the space as a polygon inside the footprint.');
 		check(
 			await event.locals.supabase.rpc('add_space', {
 				p_building: entityId,

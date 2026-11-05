@@ -89,6 +89,7 @@ export function dbMessage(error: { message: string; code?: string } | null): str
 			: error.message;
 	if (error.code === '23505') return 'That already exists (duplicate slug or key).';
 	if (error.code === '23503') return 'That refers to something that does not exist.';
-	if (error.code === '23514') return `Value rejected by a check constraint: ${error.message}`;
+	// a raw constraint name needs the explanation; a check that wrote its own message doesn't
+	if (error.code === '23514') return /violates check constraint/.test(error.message) ? `Value rejected by a check constraint: ${error.message}` : error.message;
 	return error.message;
 }

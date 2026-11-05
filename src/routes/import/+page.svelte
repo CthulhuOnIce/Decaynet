@@ -258,6 +258,7 @@
 			<a href="https://www.wikidata.org" target="_blank" rel="noopener">Wikidata</a>, OpenStreetMap, Wikipedia, Wikimedia Commons and GeoNames for an area, live. You'll see a preview of
 			every page that would be created or updated; <strong>nothing is written until you apply it.</strong>
 		</p>
+		<p class="hint">Have a list instead, like a city directory? Use the <a href="/import/spreadsheet">spreadsheet import</a>.</p>
 
 		{#if form && 'applied' in form && form.applied}
 			<p class="notice ok">

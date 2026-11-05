@@ -53,8 +53,10 @@ const polygon = (c: unknown): Pos[][] => {
 	return c.map(ring);
 };
 
-/** Flatten anything into simple shapes (multi-part shapes split into their parts). */
-function simples(g: unknown, out: { type: Simple; coordinates: unknown }[]) {
+type Part = { type: Simple; coordinates: unknown; props?: Record<string, unknown> };
+
+/** Flatten anything into simple shapes (multi-part shapes split into their parts), each with its feature's properties. */
+function simples(g: unknown, out: Part[], props?: Record<string, unknown>) {
 	if (!g || typeof g !== 'object') throw new Bad('That isn’t a GeoJSON shape.');
 	const o = g as { type?: string; coordinates?: unknown; geometry?: unknown; features?: unknown[]; geometries?: unknown[] };
 	switch (o.type) {
@@ -63,22 +65,22 @@ function simples(g: unknown, out: { type: Simple; coordinates: unknown }[]) {
 			return;
 		case 'Feature':
 			if (o.geometry == null) return; // a feature with no shape
-			return simples(o.geometry, out);
+			return simples(o.geometry, out, ((o as { properties?: Record<string, unknown> | null }).properties ?? undefined) || undefined);
 		case 'GeometryCollection':
-			for (const x of o.geometries ?? []) simples(x, out);
+			for (const x of o.geometries ?? []) simples(x, out, props);
 			return;
 		case 'Point':
-			return void out.push({ type: 'Point', coordinates: pos(o.coordinates) });
+			return void out.push({ type: 'Point', coordinates: pos(o.coordinates), props });
 		case 'LineString':
-			return void out.push({ type: 'LineString', coordinates: line(o.coordinates, 2) });
+			return void out.push({ type: 'LineString', coordinates: line(o.coordinates, 2), props });
 		case 'Polygon':
-			return void out.push({ type: 'Polygon', coordinates: polygon(o.coordinates) });
+			return void out.push({ type: 'Polygon', coordinates: polygon(o.coordinates), props });
 		case 'MultiPoint':
 		case 'MultiLineString':
 		case 'MultiPolygon': {
 			const t = o.type.slice(5) as Simple;
 			if (!Array.isArray(o.coordinates)) throw new Bad(`The ${o.type} has no coordinates.`);
-			for (const c of o.coordinates) simples({ type: t, coordinates: c }, out);
+			for (const c of o.coordinates) simples({ type: t, coordinates: c }, out, props);
 			return;
 		}
 		default:
@@ -98,7 +100,7 @@ export function readGeometry(input: string | unknown): GeometryResult {
 			return { error: 'That isn’t valid JSON. Paste the whole GeoJSON, including the outer { }.' };
 		}
 	}
-	const parts: { type: Simple; coordinates: unknown }[] = [];
+	const parts: Part[] = [];
 	try {
 		simples(obj, parts);
 	} catch (e) {
@@ -112,10 +114,35 @@ export function readGeometry(input: string | unknown): GeometryResult {
 		return { error: `It mixes kinds of shape (${list.join(', ')}). Paste them one kind at a time.` };
 	}
 	const kind = kinds[0];
-	if (parts.length === 1) return { geometry: parts[0] as GeoJSON.Geometry, parts: 1 };
+	if (parts.length === 1) return { geometry: { type: parts[0].type, coordinates: parts[0].coordinates } as GeoJSON.Geometry, parts: 1 };
 	return {
 		geometry: { type: MULTI[kind], coordinates: parts.map((p) => p.coordinates) } as GeoJSON.Geometry,
 		parts: parts.length,
 		note: `${parts.length} ${NOUN[kind]}s, saved together as one shape.`
 	};
+}
+
+/**
+ * Pasted areas, one per polygon (a FeatureCollection of storefronts, or a MultiPolygon), each with
+ * the properties of the feature it came from, for making one page per area.
+ */
+export function readAreas(input: string | unknown): { areas: { geometry: GeoJSON.Polygon; props: Record<string, unknown> }[] } | { error: string } {
+	let obj = input;
+	if (typeof input === 'string') {
+		try {
+			obj = JSON.parse(input.trim());
+		} catch {
+			return { error: 'That isn’t valid JSON. Paste the whole GeoJSON, including the outer { }.' };
+		}
+	}
+	const parts: Part[] = [];
+	try {
+		simples(obj, parts);
+	} catch (e) {
+		if (e instanceof Bad) return { error: e.message };
+		throw e;
+	}
+	if (!parts.length) return { error: 'The GeoJSON has no shapes in it.' };
+	if (parts.some((p) => p.type !== 'Polygon')) return { error: 'Spaces are areas: paste polygons only.' };
+	return { areas: parts.map((p) => ({ geometry: { type: 'Polygon', coordinates: p.coordinates } as GeoJSON.Polygon, props: p.props ?? {} })) };
 }

@@ -10,7 +10,8 @@
 		multiple = false,
 		placeholder = 'Search for a page…',
 		required = false,
-		id = undefined
+		id = undefined,
+		onpick = undefined
 	}: {
 		name: string;
 		kinds?: string[] | null;
@@ -22,6 +23,8 @@
 		placeholder?: string;
 		required?: boolean;
 		id?: string;
+		/** called when a page is picked (or the pick is cleared by typing) */
+		onpick?: (p: { id: string; name: string; slug?: string; kind?: string } | null) => void;
 	} = $props();
 
 	let picked = $state<{ id: string; name: string } | null>(null);
@@ -47,7 +50,10 @@
 
 	function search() {
 		clearTimeout(timer);
-		if (!multiple) picked = null;
+		if (!multiple && picked) {
+			picked = null;
+			onpick?.(null);
+		}
 		timer = setTimeout(async () => {
 			if (q.trim().length < 2) return void (hits = []);
 			const params = new URLSearchParams({ q });
@@ -70,6 +76,7 @@
 		picked = { id: h.id, name: h.name };
 		q = h.name;
 		open = false;
+		onpick?.({ id: h.id, name: h.name, slug: h.slug, kind: h.kind });
 	}
 	function remove(target: { id: string }) {
 		chosen = chosen.filter((c) => c.id !== target.id);

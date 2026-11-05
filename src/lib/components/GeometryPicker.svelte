@@ -15,7 +15,8 @@
 		context = [],
 		height = 360,
 		snap = true,
-		initial = null
+		initial = null,
+		each = null
 	}: {
 		name?: string;
 		mode?: Mode;
@@ -26,6 +27,8 @@
 		snap?: boolean;
 		/** a starting shape, e.g. a point carried over from a geocoded address */
 		initial?: GeoJSON.Geometry | null;
+		/** several pasted areas each become one of these (e.g. "space"), rather than one shape */
+		each?: string | null;
 	} = $props();
 
 	function pointsOf(g: GeoJSON.Geometry | null): [number, number][] {
@@ -91,7 +94,10 @@
 		} else {
 			pts = []; // the pasted text is what's saved, so don't leave an older drawing beside it
 			pasted = g;
-			pasteNote = `${r.note ?? 'An area with holes, kept as pasted.'} Clear this box to draw on the map instead.`;
+			pasteNote =
+				each && r.parts > 1 && g.type === 'MultiPolygon'
+					? `${r.parts} areas pasted: each becomes its own ${each}. Clear this box to draw on the map instead.`
+					: `${r.note ?? 'An area with holes, kept as pasted.'} Clear this box to draw on the map instead.`;
 		}
 		const b = boundsOf(g);
 		if (b && map) map.fitBounds(b, { padding: 60, maxZoom: 18, duration: 300 });

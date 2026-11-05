@@ -1636,7 +1636,8 @@
 		{#if tool === 'import'}
 			<p class="hint">
 				Bring in GIS data: building footprints, parcels, digitized street grids. Upload a GeoJSON FeatureCollection in lon/lat
-				(EPSG:4326). Each feature becomes a page with a dated shape.
+				(EPSG:4326). Each feature becomes a page with a dated shape. For a list of businesses or people with addresses, use the
+				<a href="/import/spreadsheet">spreadsheet import</a>.
 			</p>
 			<input type="file" accept=".geojson,.json,application/geo+json,application/json" onchange={readImport} />
 			{#if importError}<p class="notice error small">{importError}</p>{/if}

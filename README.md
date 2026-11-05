@@ -23,6 +23,7 @@ Built with **SvelteKit 2 / Svelte 5**, **Supabase** (Postgres 17 + PostGIS, Auth
   - [Tracing from a scanned map (workbench)](#tracing-from-a-scanned-map-workbench)
   - [When a whole area's layout changed](#when-a-whole-areas-layout-changed)
   - [Importing GIS data](#importing-gis-data)
+  - [Spreadsheets: a block's businesses at once](#spreadsheets-a-blocks-businesses-at-once)
   - [Starter pages from OpenHistoricalMap & Wikidata](#starter-pages-from-openhistoricalmap--wikidata)
   - [Anonymous tips](#anonymous-tips)
   - [Administration](#administration)
@@ -318,6 +319,7 @@ Buildings are polygons, not dots. To record who occupied which part:
 
 1. Give the building a **footprint**: trace it in the workbench, or draw it under **Edit facts → Location & shape**.
 2. Under **Edit facts → Spaces**, draw each storefront, suite or hall *inside* the footprint. Corners snap to the footprint, and a space that pokes out more than 2 m is rejected.
+   Or paste GeoJSON: with several polygons (a FeatureCollection of storefronts traced in the workbench, or a MultiPolygon) **each polygon becomes its own space**. A feature's `name`, `unit` and `floor` properties are used when it has them; otherwise the spaces are numbered after the name you typed ("Storefront 1", "Storefront 2"…). They're added together or not at all: if one pokes outside the footprint, the message says which and nothing is added.
 3. Click **+ Tenant** on a space to add who occupied it and when (a business, a congregation, a resident).
 
 On the building's page you'll see a floor plan and a "tenant in YEAR" table. On the map, zoom past ~16 to see spaces labelled with their tenants. Tagging a tenant (say *Food & drink*) lights up the space it occupied when you filter the map by that tag.
@@ -375,6 +377,28 @@ The modern grid is a poor guide to the past. The lakefront was filled for the mi
 4. **Import.** Each feature becomes a page with a dated shape.
 
 Bulk tools (area change and import) need the *Bulk map tools* permission.
+
+### Spreadsheets: a block's businesses at once
+
+**Import → Spreadsheet** (`/import/spreadsheet`, needs *Bulk map tools* and *Edit content*) turns a list into pages, each linked to the building it was in. For example, every business on Broadway from the 1925 city directory, typed into a spreadsheet:
+
+| Name | Address | Unit | Listed in | Category | Other names | Note |
+|---|---|---|---|---|---|---|
+| Kresge's | 512 Broadway | | 1925 | Retail | S. S. Kresge Co. | p. 214 |
+| Joe's Diner | 520 Broadway, Suite 2 | | 1925 | Food & drink | | |
+| Gary Hotel | 600 Broadway | | | Lodging | Hotel Gary | |
+
+1. **The sheet.** Choose a CSV or TSV file, or paste cells straight from a spreadsheet. *Download a template* gives you the columns above.
+2. **Columns.** Each column is guessed from its header (*Name*, *Address*, *Unit / suite*, *Building*, *Listed in*, *From*, *Until*, *Kind*, *Link as*, *Tags*, *Other names*, *Summary*, *Note*, *Latitude*, *Longitude*, or any fact such as *Employees* or *Website*); change any of them, or set one to *Ignore*.
+3. **For every row.** What the pages are (organizations by default; people, or even buildings, work too), the directory's year (*Listed in*: the link holds in that year, for rows without dates of their own), how they're linked (*occupies*, *owns*, *lived at*…), a confidence level and **one source**, which is cited on every link, name, tag and fact the import adds.
+4. **Preview, check, import.** Each row is matched before anything is written:
+   - **The page:** an existing page with that name (or that name among its other names) is used instead of making a second one. A close spelling is offered but not chosen for you.
+   - **The building:** one named in a *Building* column (a name, a slug or a `/e/…` link), or the building that had that **address in that year**. House numbers are matched against every name the street has had, so "512 Main St." finds a building on a street since renamed Broadway, and "W. 5th Avenue" equals "West 5th Ave". An address recorded only in other years is flagged.
+   - **The storefront:** a *Unit* (or "Suite 2", "Rm 201", "#3" at the end of the address) picks the space with that name or unit number inside the building.
+   - **Not found?** Pick the building by hand in the preview, or let unmatched addresses become **new map points**, from *Latitude / Longitude* columns or, optionally, looked up on OpenStreetMap (today's numbering, so check the result; at most 25 addresses per preview, one a second, per OSM's usage policy). A row left unplaced keeps its address on its page, so address search finds it and you can place it later.
+   - Unknown tags are flagged and skipped (add them under *Tags* first); rows with something to check are marked amber. Untick any row to leave it out.
+
+Everything goes in as one import, listed under *Recent spreadsheet imports*, and a moderator can **undo** it: that deletes the pages it created and the links, names, tags, facts and addresses it added to existing pages.
 
 ### Starter pages from OpenHistoricalMap & Wikidata
 
@@ -547,6 +571,8 @@ Key RPCs:
 | `entities_in_area(...)` / `retire_area(...)` / `import_features(...)` | Workbench bulk tools |
 | `move_shapes(...)` / `name_pages(...)` / `redraw_shape(...)` | Workbench selection: move in place, name from a year, new shape from a year |
 | `match_import_candidates(...)` / `apply_import(...)` / `undo_import(...)` | OHM / Wikidata import: match, apply a reviewed plan, undo |
+| `match_table_rows(...)` / `apply_table_import(...)` | Spreadsheet import: match rows to pages, buildings (by address in a year) and storefronts; write the reviewed rows as one undoable import |
+| `add_spaces(building, spaces)` | Several spaces at once (one per pasted polygon), all or none |
 | `save_article(...)` / `set_article_status(...)` | Atomic revision + status transitions |
 
 ---
@@ -601,6 +627,8 @@ supabase/migrations/             0001 foundation · 0002 components · 0003 arti
                                  0011 session-only overlays + source link · 0012 external ids & import
                                  0013 region-agnostic settings (units, address format, language, bounds)
                                  0014 private pages (visibility enforced by RLS)
+                                 … 0041 cleanup reaches interior spaces · 0042 move / name / redraw
+                                 0043 spreadsheet import (each file's header explains it)
 supabase/seed.sql                optional Gary, Indiana demo (settings, pages, eras)
 src/lib/map/style.ts             MapLibre layers for snapshots, ghosts, spaces, moments
 src/lib/components/              TimeMachineMap, YearSlider, EntityPanel, Timeline, MiniMap,
