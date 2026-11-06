@@ -62,6 +62,8 @@
 	let snap = $state<EntitySnapshot | null>(null);
 	let snapLoading = $state(false);
 	let mapRef: ReturnType<typeof TimeMachineMap> | undefined = $state();
+	/** the map is fetching the year: playback holds each year once it's drawn */
+	let mapBusy = $state(false);
 
 	$effect(() => {
 		const id = selected;
@@ -212,6 +214,7 @@
 			}}
 			{onmoments}
 			onview={(v) => (view = v)}
+			bind:loading={mapBusy}
 			onready={() => (mapReady = true)}
 		/>
 
@@ -325,7 +328,7 @@
 		</section>
 
 		<div class="slider-dock">
-			<YearSlider bind:year min={data.minYear} max={data.maxYear} density={data.density} />
+			<YearSlider bind:year min={data.minYear} max={data.maxYear} density={data.density} busy={mapBusy} />
 		</div>
 	</div>
 

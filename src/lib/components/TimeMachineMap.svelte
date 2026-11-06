@@ -26,7 +26,8 @@
 		onselect,
 		onmoments,
 		onview,
-		onready
+		onready,
+		loading = $bindable(false)
 	}: {
 		year: number;
 		minYear: number;
@@ -51,13 +52,14 @@
 		onmoments?: (fc: { features: GeoJSON.Feature[]; unplaced: unknown[] }) => void;
 		onview?: (v: { center: [number, number]; zoom: number }) => void;
 		onready?: () => void;
+		/** fetching the year's map (the slider's playback waits for it) */
+		loading?: boolean;
 	} = $props();
 
 	let container: HTMLDivElement;
 	let map: MLMap | undefined;
 	let popup: Popup | undefined;
 	let ready = $state(false);
-	let loading = $state(false);
 	let failed = $state<string | null>(null);
 
 	const cache = new Map<string, unknown>();

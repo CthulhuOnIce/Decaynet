@@ -241,6 +241,13 @@ At country or world scale, the map only fetches what's in view (plus a margin) a
 ![Filtering the map by tag: every entertainment venue standing in 1955](docs/images/map-tag-filter.png)
 
 - **Year slider:** drag it, use ←/→ (Shift for a decade), or press ▶ to play history forward. The amber ticks above the slider show when things happened.
+  - **Right-click ▶** (or hold it on a touch screen) for the playback options:
+    - how long each year stays on screen (0.1–3 s, or *Fast*, *Normal*, *Slow*, *Very slow*);
+    - steps of 1, 2, 5 or 10 years, forward or back;
+    - a range of years to play, with *From [this year]* and a *Loop* option;
+    - *Linger on eventful years* (3× as long on the years with amber ticks) and *Skip quiet years*;
+    - *Wait for the map to draw each year* (on by default): a year's pause starts once the map has drawn it, so on a slow connection no year flashes past undrawn.
+  - The options are kept in your browser, and *Reset* puts them back.
 - **Click anything** to see it *as of that year*: its name then, its condition, address, tenants, connections and photos. Links in the panel jump to other pages at the same year.
 - **Colours** show condition: green for active, amber for declining or vacant, rust for abandoned, dark red for ruin. *Ghosts* (dashed outlines) are places already gone by the chosen year.
 - **Layers panel:**
