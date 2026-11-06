@@ -5,6 +5,7 @@
 	const links = $derived(
 		[
 			{ href: '/admin', label: 'Overview', exact: true },
+			can('manage_records') && { href: '/admin/records', label: 'Records' },
 			can('clean_timelines') && { href: '/admin/timelines', label: 'Timelines' },
 			can('manage_users') && { href: '/admin/users', label: 'Users' },
 			can('manage_settings') && { href: '/admin/roles', label: 'Roles & permissions' },
@@ -15,7 +16,7 @@
 	const active = (l: { href: string; exact?: boolean }) => (l.exact ? page.url.pathname === l.href : page.url.pathname.startsWith(l.href));
 </script>
 
-<div class="page">
+<div class="page" class:wide={page.url.pathname.startsWith('/admin/records')}>
 	<div class="eyebrow">Administration</div>
 	<nav class="tabs" aria-label="Administration">
 		{#each links as l (l.href)}
@@ -26,6 +27,11 @@
 </div>
 
 <style>
+	.page.wide {
+		max-width: none;
+		padding-left: 16px;
+		padding-right: 16px;
+	}
 	.tabs {
 		display: flex;
 		flex-wrap: wrap;

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { can } from '$lib/perms';
 	import KindBadge from '$lib/components/KindBadge.svelte';
 	import { formatRange } from '$lib/time';
 	import { CONFIDENCES, type Precision } from '$lib/types';
@@ -49,6 +50,13 @@
 		].filter(Boolean).length
 	);
 	const pages = $derived(Math.ceil(data.total / PER_PAGE));
+	// the same filters, opened as a grid (its own sorts aside, and the year searched as the year to work in)
+	const recordsQuery = $derived.by(() => {
+		const u = new URLSearchParams(page.url.search);
+		u.delete('page');
+		if (u.get('to')) u.set('y', u.get('to') as string);
+		return u.toString();
+	});
 	function pageHref(n: number) {
 		const u = new URL(page.url);
 		u.searchParams.set('page', String(n));
@@ -224,6 +232,9 @@
 					<strong>{data.total.toLocaleString()}</strong> found{p.from || p.to ? ` (${p.from || '…'}–${p.to || '…'})` : ''}{pages > 1
 						? ` · page ${p.page} of ${pages}`
 						: ''}
+					{#if can('manage_records')}
+						· <a href="/admin/records?{recordsQuery}" title="Edit every result together, as of a year and citing a source">Open in Records</a>
+					{/if}
 				</p>
 				<ul class="plain-list">
 					{#each data.results as r (r.id)}

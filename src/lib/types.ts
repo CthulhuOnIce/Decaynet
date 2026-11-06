@@ -357,10 +357,11 @@ export type Permission =
 	| 'moderate'
 	| 'clean_timelines'
 	| 'manage_users'
-	| 'manage_settings';
+	| 'manage_settings'
+	| 'manage_records';
 
 /** Permissions that open the admin area (each section checks its own). */
-export const ADMIN_PERMS: Permission[] = ['manage_users', 'manage_settings', 'moderate', 'clean_timelines'];
+export const ADMIN_PERMS: Permission[] = ['manage_users', 'manage_settings', 'moderate', 'clean_timelines', 'manage_records'];
 
 export interface SiteSettings {
 	site_name: string;

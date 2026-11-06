@@ -1884,6 +1884,13 @@
 		{#if selecting || narrow}
 			<button class="ghost small-btn" class:on={boxMode} onclick={() => (boxMode = !boxMode)} title="Drag a box to select everything in it">Box</button>
 		{/if}
+		{#if selected.length && can('manage_records')}
+			<a
+				class="btn ghost small-btn"
+				href={`/admin/records?ids=${selected.filter((x) => !x.ghost).slice(0, 1000).map((x) => x.id).join(',')}&y=${year}&sort=west`}
+				title="Edit these pages together in Admin › Records, as of {year}">Open in Records</a
+			>
+		{/if}
 		{#if selected.length}<button class="ghost small-btn" onclick={() => ((selected = []), (bulkResult = null))}>Clear</button>{/if}
 		<button class="ghost small-btn" onclick={() => ((selected = []), (bulkResult = null), stopSelecting())}>Stop selecting</button>
 	</div>

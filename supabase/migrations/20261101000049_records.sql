@@ -630,6 +630,25 @@ begin
         v_explicit := false;
         v_new := null;
       else
+        if v_mode = 'seen' and v_to is null and v_op = 'set' then
+          -- something else recorded from this same year, from this source (or none): the same
+          -- sighting, entered wrong. Correct it rather than add a second record beside it
+          select value into x from jsonb_array_elements(v_rows) value
+           where value -> 'v' <> v_value and value ->> 'f' is not null
+             and (value ->> 'lo')::date >= cs_lo and (value ->> 'lo')::date < cs_hi
+             and (value ->> 'src' is null or (value ->> 'src')::uuid = v_src)
+           order by (value ->> 'lo')::date limit 1;
+          if x is not null then
+            perform internal.rec_set_value(f, (x ->> 'id')::uuid, v_value);
+            if x ->> 'src' is null then
+              execute format('update public.%I set source_id = $2, source_detail = $3 where id = $1', f ->> 'tbl')
+                using (x ->> 'id')::uuid, v_src, v_detail;
+            end if;
+            return v_out || jsonb_build_object('outcome', 'changed', 'steps',
+              jsonb_build_array('corrected ' || internal.rec_value_label(f, x -> 'v', v_at) || ' → ' || v_lbl || ' (' ||
+                internal.rec_span((x->>'f')::date, (x->>'fp')::public.date_precision, (x->>'t')::date, (x->>'tp')::public.date_precision) || ')'));
+          end if;
+        end if;
         -- seen / only: widen a neighbour with the same value when nothing else comes between
         v_bridge := v_mode = 'seen';
         v_blockers := (select coalesce(jsonb_agg(value), '[]') from jsonb_array_elements(v_rows) value
@@ -861,6 +880,7 @@ declare
   v_ctx jsonb := v_set.context;
   v_results jsonb := '[]';
   it jsonb;
+  v_before bigint := (select coalesce(max(id), 0) from public.change_log);
 begin
   if jsonb_typeof(p_items) <> 'array' then
     raise exception 'Expected a list of changes' using errcode = '22023';
@@ -887,6 +907,7 @@ begin
   end if;
   return jsonb_build_object(
     'items', v_results,
+    'after', case when p_preview then null else v_before end,
     'changed', (select count(*) from jsonb_array_elements(v_results) r where r ->> 'outcome' = 'changed'),
     'cited', (select count(*) from jsonb_array_elements(v_results) r where r ->> 'outcome' = 'cited'),
     'already', (select count(*) from jsonb_array_elements(v_results) r where r ->> 'outcome' = 'already'),
@@ -899,16 +920,22 @@ grant execute on function public.records_write(uuid, jsonb, boolean) to authenti
 
 -- Delete pages in a change set, keeping what change_log doesn't (articles, the page's own
 -- sources, external ids, dismissed fixes) so undoing the set brings them back whole.
-create or replace function public.records_delete(p_set uuid, p_ids uuid[], p_expect int)
+create or replace function public.records_delete(p_set uuid, p_ids uuid[], p_expect int, p_spaces boolean default false)
 returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   v_set public.change_sets := internal.rec_open_set(p_set);
   v_n int;
+  v_before bigint := (select coalesce(max(id), 0) from public.change_log);
 begin
   select count(*) into v_n from public.entities where id = any (p_ids);
   if p_expect is distinct from v_n then
     raise exception 'Expected to delete % pages, found %', p_expect, v_n using errcode = '22023';
+  end if;
+  -- and the spaces inside them, at any depth, when asked
+  if p_spaces then
+    p_ids := p_ids || coalesce((select array_agg(distinct s.id) from unnest(p_ids) b (id), public.interior_spaces(b.id) s), '{}');
+    select count(*) into v_n from public.entities where id = any (p_ids);
   end if;
   perform set_config('decaynet.change_set', p_set::text, true);
   insert into public.records_trash (change_set_id, table_name, data)
@@ -923,11 +950,11 @@ begin
   delete from public.entities where id = any (p_ids);
   update public.change_sets set updated_at = now() where id = p_set;
   perform set_config('decaynet.change_set', '', true);
-  return jsonb_build_object('deleted', v_n);
+  return jsonb_build_object('deleted', v_n, 'after', v_before);
 end;
 $$;
-revoke all on function public.records_delete(uuid, uuid[], int) from public, anon;
-grant execute on function public.records_delete(uuid, uuid[], int) to authenticated;
+revoke all on function public.records_delete(uuid, uuid[], int, boolean) from public, anon;
+grant execute on function public.records_delete(uuid, uuid[], int, boolean) to authenticated;
 
 -- The columns a logged row can be put back with
 create or replace function internal.rec_cols(p_tbl text, p_data jsonb) returns text
@@ -938,10 +965,57 @@ language sql stable security definer set search_path = public as $$
      and attgenerated = '' and p_data ? attname::text
 $$;
 
--- Undo a change set: every change in it, newest first. Refuses (listing them) if anything
--- in it was changed again since by something outside the set; p_preview lists what would
--- be undone. Returns {undone, conflicts: [...], changes}
-create or replace function public.records_undo(p_set uuid, p_preview boolean default false)
+-- Put a row back as a change_log entry had it before (insert it, or update it if it's there).
+-- A page also gets back what records_delete kept aside: its article, its own sources, ….
+-- False when what it belongs to isn't back yet.
+create or replace function internal.rec_restore(p_table text, p_row uuid, p_data jsonb, p_set uuid) returns boolean
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_cols text := internal.rec_cols(p_table, p_data);
+  v_key text := case when p_table in ('event_details', 'media_items') then 'entity_id' else 'id' end;
+  v_there boolean;
+  tr record;
+begin
+  execute format('select exists (select 1 from public.%I where %I = $1)', p_table, v_key) using p_row into v_there;
+  begin
+    if v_there then
+      execute format('update public.%I set (%s) = (select %s from jsonb_populate_record(null::public.%I, $1)) where %I = $2',
+                     p_table, v_cols, v_cols, p_table, v_key) using p_data, p_row;
+    else
+      execute format('insert into public.%I (%s) select %s from jsonb_populate_record(null::public.%I, $1)',
+                     p_table, v_cols, v_cols, p_table) using p_data;
+    end if;
+  exception when foreign_key_violation then
+    return false;
+  end;
+  if p_table = 'entities' and not v_there then
+    delete from public.articles where entity_id = p_row;  -- the stub a new page gets
+    for tr in select * from public.records_trash
+               where change_set_id = p_set
+                 and (data ->> 'entity_id' = p_row::text or data ->> 'about_entity_id' = p_row::text or data ->> 'resulting_entity_id' = p_row::text)
+               order by id loop
+      if tr.table_name = 'tips' then
+        update public.tips set about_entity_id = coalesce(about_entity_id, (tr.data ->> 'about_entity_id')::uuid),
+                               resulting_entity_id = coalesce(resulting_entity_id, (tr.data ->> 'resulting_entity_id')::uuid)
+         where id = (tr.data ->> 'id')::uuid;
+      else
+        v_cols := internal.rec_cols(tr.table_name, tr.data);
+        execute format('insert into public.%I (%s) select %s from jsonb_populate_record(null::public.%I, $1) on conflict do nothing',
+                       tr.table_name, v_cols, v_cols, tr.table_name) using tr.data;
+      end if;
+    end loop;
+  end if;
+  return true;
+end;
+$$;
+revoke all on function internal.rec_restore(text, uuid, jsonb, uuid) from public;
+
+-- Undo a change set: every row it touched goes back to how it was before the set's first
+-- change to it (whatever happened in between, deletes and their undos included). Refuses,
+-- listing them, if something outside the set changed one of those rows since; p_preview
+-- lists what would be undone. With p_after (the "after" a write returned), only what came
+-- after it: undoing the last edit. Returns {undone, conflicts: [...], changes}
+create or replace function public.records_undo(p_set uuid, p_preview boolean default false, p_after bigint default null)
 returns jsonb
 language plpgsql security definer set search_path = public, extensions as $$
 declare
@@ -949,15 +1023,17 @@ declare
   v_conflicts jsonb;
   v_n int := 0;
   c record;
-  t record;
-  v_cols text;
   v_key text;
+  v_later jsonb := '[]';
+  v_left jsonb;
+  v_round int := 0;
+  x jsonb;
 begin
   -- rows the set touched that something else changed afterwards
   select coalesce(jsonb_agg(distinct jsonb_build_object('table', l2.table_name, 'row_id', l2.row_id, 'entity_id', l2.entity_id,
            'name', (select name from public.entities where id = l2.entity_id), 'at', l2.created_at)), '[]')
     into v_conflicts
-    from (select row_id, max(id) as last_id from public.change_log where change_set_id = p_set group by row_id) mine
+    from (select row_id, max(id) as last_id from public.change_log where change_set_id = p_set and id > coalesce(p_after, 0) group by row_id) mine
     join public.change_log l2 on l2.row_id = mine.row_id and l2.id > mine.last_id
    where l2.change_set_id is distinct from p_set;
   -- and anything added since to a page the set created (undoing it would delete that too)
@@ -966,53 +1042,98 @@ begin
     into v_conflicts
     from public.change_log made
     join public.change_log l2 on l2.entity_id = made.row_id and l2.id > made.id and l2.change_set_id is distinct from p_set
-   where made.change_set_id = p_set and made.table_name = 'entities' and made.op = 'INSERT';
+   where made.change_set_id = p_set and made.id > coalesce(p_after, 0) and made.table_name = 'entities' and made.op = 'INSERT';
   if jsonb_array_length(v_conflicts) > 0 or p_preview then
     return jsonb_build_object('undone', false, 'conflicts', v_conflicts,
-      'changes', (select count(*) from public.change_log where change_set_id = p_set));
+      'changes', (select count(*) from public.change_log where change_set_id = p_set and id > coalesce(p_after, 0)));
   end if;
 
-  perform set_config('decaynet.change_set', '-', true);  -- the undo itself isn't part of the set
-  -- pages deleted in the set come back first, then what the log doesn't keep, then the rest
-  for c in select * from public.change_log where change_set_id = p_set and op = 'DELETE' and table_name = 'entities' order by id loop
-    v_cols := internal.rec_cols('entities', c.old_data);
-    execute format('insert into public.entities (%s) select %s from jsonb_populate_record(null::public.entities, $1)', v_cols, v_cols) using c.old_data;
-    delete from public.articles where entity_id = c.row_id;  -- the stub a new page gets
-    v_n := v_n + 1;
-  end loop;
-  for t in select * from public.records_trash where change_set_id = p_set order by id loop
-    if t.table_name = 'tips' then
-      update public.tips set about_entity_id = coalesce(about_entity_id, (t.data ->> 'about_entity_id')::uuid),
-                             resulting_entity_id = coalesce(resulting_entity_id, (t.data ->> 'resulting_entity_id')::uuid)
-       where id = (t.data ->> 'id')::uuid;
-    else
-      v_cols := internal.rec_cols(t.table_name, t.data);
-      execute format('insert into public.%I (%s) select %s from jsonb_populate_record(null::public.%I, $1) on conflict do nothing',
-                     t.table_name, v_cols, v_cols, t.table_name) using t.data;
-    end if;
-  end loop;
-  for c in select * from public.change_log where change_set_id = p_set and not (op = 'DELETE' and table_name = 'entities') order by id desc loop
+  -- undoing the whole set isn't part of it; undoing its last edit is (so undoing the whole
+  -- set later still comes out right)
+  perform set_config('decaynet.change_set', case when p_after is null then '-' else p_set::text end, true);
+
+  -- each row's state before the set first touched it
+  select count(distinct (table_name, row_id)) into v_n
+    from public.change_log where change_set_id = p_set and id > coalesce(p_after, 0) and row_id is not null;
+
+  -- rows that didn't exist before: gone again (pages last, their own rows go with them)
+  for c in select * from (select distinct on (l.table_name, l.row_id) l.table_name, l.row_id, l.op as first_op, l.old_data as before
+                    from public.change_log l
+                   where l.change_set_id = p_set and l.id > coalesce(p_after, 0) and l.row_id is not null
+                   order by l.table_name, l.row_id, l.id) f
+            where first_op = 'INSERT' order by (table_name = 'entities'), table_name loop
     v_key := case when c.table_name in ('event_details', 'media_items') then 'entity_id' else 'id' end;
-    if c.op = 'INSERT' then
-      execute format('delete from public.%I where %I = $1', c.table_name, v_key) using c.row_id;
-    elsif c.op = 'UPDATE' then
-      v_cols := internal.rec_cols(c.table_name, c.old_data);
-      execute format('update public.%I set (%s) = (select %s from jsonb_populate_record(null::public.%I, $1)) where %I = $2',
-                     c.table_name, v_cols, v_cols, c.table_name, v_key) using c.old_data, c.row_id;
-    else
-      v_cols := internal.rec_cols(c.table_name, c.old_data);
-      execute format('insert into public.%I (%s) select %s from jsonb_populate_record(null::public.%I, $1) on conflict do nothing',
-                     c.table_name, v_cols, v_cols, c.table_name) using c.old_data;
-    end if;
-    v_n := v_n + 1;
+    execute format('delete from public.%I where %I = $1', c.table_name, v_key) using c.row_id;
   end loop;
-  update public.change_sets set undone_at = now() where id = p_set;
+  -- rows that did: as they were (pages first, links last; a row whose page isn't back yet waits)
+  for c in select * from (select distinct on (l.table_name, l.row_id) l.table_name, l.row_id, l.op as first_op, l.old_data as before
+                    from public.change_log l
+                   where l.change_set_id = p_set and l.id > coalesce(p_after, 0) and l.row_id is not null
+                   order by l.table_name, l.row_id, l.id) f
+            where first_op <> 'INSERT'
+            order by case table_name when 'entities' then 0 when 'relations' then 2 else 1 end, table_name loop
+    if not internal.rec_restore(c.table_name, c.row_id, c.before, p_set) then
+      v_later := v_later || jsonb_build_object('t', c.table_name, 'r', c.row_id, 'd', c.before);
+    end if;
+  end loop;
+  while jsonb_array_length(v_later) > 0 and v_round < 6 loop
+    v_left := '[]';
+    for x in select value from jsonb_array_elements(v_later) loop
+      if not internal.rec_restore(x ->> 't', (x ->> 'r')::uuid, x -> 'd', p_set) then
+        v_left := v_left || x;
+      end if;
+    end loop;
+    v_later := v_left;
+    v_round := v_round + 1;
+  end loop;
+  if jsonb_array_length(v_later) > 0 then
+    raise exception 'Couldn''t put back % rows (what they belonged to is gone)', jsonb_array_length(v_later) using errcode = '23503';
+  end if;
+  if p_after is null then
+    update public.change_sets set undone_at = now() where id = p_set;
+  end if;
   perform set_config('decaynet.change_set', '', true);
   return jsonb_build_object('undone', true, 'conflicts', '[]'::jsonb, 'changes', v_n);
 end;
 $$;
-revoke all on function public.records_undo(uuid, boolean) from public, anon;
-grant execute on function public.records_undo(uuid, boolean) to authenticated;
+revoke all on function public.records_undo(uuid, boolean, bigint) from public, anon;
+grant execute on function public.records_undo(uuid, boolean, bigint) to authenticated;
+
+-- My change sets, newest first, with how much is in each
+create or replace function public.records_sets(p_limit int default 20)
+returns table (id uuid, title text, context jsonb, progress jsonb, created_at timestamptz, updated_at timestamptz,
+               undone_at timestamptz, changes bigint, pages bigint)
+language sql stable security definer set search_path = public as $$
+  select s.id, s.title, s.context, s.progress, s.created_at, s.updated_at, s.undone_at,
+         (select count(*) from public.change_log l where l.change_set_id = s.id),
+         (select count(distinct l.entity_id) from public.change_log l where l.change_set_id = s.id)
+    from public.change_sets s
+   where s.actor_id = auth.uid() and public.has_permission('manage_records')
+   order by s.updated_at desc
+   limit least(greatest(coalesce(p_limit, 20), 1), 200)
+$$;
+revoke all on function public.records_sets(int) from public, anon;
+grant execute on function public.records_sets(int) to authenticated;
+
+-- Addresses typed as text ("512 Broadway", or just "512" on a given street): the street page
+-- and number, as records_write takes them. Unknown streets come back without street_id.
+create or replace function public.records_addresses(p_texts text[], p_street uuid default null)
+returns jsonb
+language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(
+           case when nullif(btrim(t), '') is null then null
+                else jsonb_strip_nulls(jsonb_build_object(
+                  'street_id', coalesce(case when sa.street is not null and sa.street <> '' then public.find_street(sa.street) end,
+                                        case when sa.street is null or sa.street = '' then p_street end),
+                  'house_number', coalesce(sa.house_number, case when btrim(t) ~ '^\d+[a-z]?$' then btrim(t) end),
+                  'street', nullif(sa.street, ''),
+                  'text', btrim(t))) end
+           order by o), '[]'::jsonb)
+    from unnest(p_texts) with ordinality u (t, o)
+    left join lateral public.split_address(btrim(t)) sa on true
+$$;
+revoke all on function public.records_addresses(text[], uuid) from public, anon;
+grant execute on function public.records_addresses(text[], uuid) to authenticated;
 
 -- ---------------------------------------------------------------------------------------------
 -- Advanced search, for Records too: these ids, everything inside a building, has spaces, and a
@@ -1390,6 +1511,7 @@ declare
   v_sets text[] := '{}';
   v_n int;
   k text;
+  v_before bigint := (select coalesce(max(id), 0) from public.change_log);
 begin
   for k in select jsonb_object_keys(p_patch) loop
     if k = 'name' then
@@ -1419,7 +1541,7 @@ begin
   get diagnostics v_n = row_count;
   update public.change_sets set updated_at = now() where id = p_set;
   perform set_config('decaynet.change_set', '', true);
-  return jsonb_build_object('changed', v_n);
+  return jsonb_build_object('changed', v_n, 'after', v_before);
 end;
 $$;
 revoke all on function public.records_set_pages(uuid, uuid[], jsonb) from public, anon;
