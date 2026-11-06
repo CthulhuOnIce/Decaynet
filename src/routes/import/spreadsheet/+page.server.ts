@@ -71,7 +71,7 @@ export const actions: Actions = {
 			});
 			if (error) throw new FormError(dbMessage(error));
 			return {
-				applied: { ...(data as { batch_id: string; created: number; linked: number; points: number; addresses: number }), source_id: sourceId },
+				applied: { ...(data as { batch_id: string; created: number; linked: number; points: number; addresses: number; shapes?: number }), source_id: sourceId },
 				newSource: madeSource(made)
 			};
 		} catch (e) {

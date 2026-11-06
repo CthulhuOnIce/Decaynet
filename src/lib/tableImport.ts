@@ -27,8 +27,37 @@ export const TABLE_FIELDS: TableField[] = [
 	{ id: 'note', label: 'Note', hint: 'on the link', match: ['note', 'notes', 'comment', 'comments', 'remarks'] },
 	{ id: 'source_detail', label: 'Source detail', hint: 'page, entry: cited with it', match: ['page', 'p', 'pg', 'pp', 'page no', 'entry', 'citation', 'source detail', 'source page', 'ref', 'reference', 'folio', 'frame'] },
 	{ id: 'lat', label: 'Latitude', match: ['lat', 'latitude'] },
-	{ id: 'lon', label: 'Longitude', match: ['lon', 'lng', 'long', 'longitude'] }
+	{ id: 'lon', label: 'Longitude', match: ['lon', 'lng', 'long', 'longitude'] },
+	{ id: 'geojson', label: 'GeoJSON (shape)', hint: 'a geometry or Feature, lon/lat', match: ['geojson', 'geometry', 'geom', 'shape', 'footprint', 'outline', 'polygon', 'boundary'] }
 ];
+
+/** The role a row's shape gets: lines are centerlines, areas a building's footprint or a district's boundary. */
+export function shapeRole(geometry: GeoJSON.Geometry, kind: string): string {
+	if (/Point/.test(geometry.type)) return 'point';
+	if (/LineString/.test(geometry.type)) return 'centerline';
+	if (['building', 'space'].includes(kind)) return 'footprint';
+	if (['district', 'parcel', 'site'].includes(kind)) return 'boundary';
+	return 'shape';
+}
+
+/** "area, 5 corners" / "2 areas" / "line" */
+export function shapeLabel(g: GeoJSON.Geometry): string {
+	const corners = (r: number[][]) => Math.max(0, r.length - 1);
+	switch (g.type) {
+		case 'Polygon':
+			return `area, ${corners(g.coordinates[0])} corners`;
+		case 'MultiPolygon':
+			return `${g.coordinates.length} areas`;
+		case 'LineString':
+			return `line, ${g.coordinates.length} points`;
+		case 'MultiLineString':
+			return `${g.coordinates.length} lines`;
+		case 'MultiPoint':
+			return `${g.coordinates.length} points`;
+		default:
+			return g.type.toLowerCase();
+	}
+}
 
 export const fieldLabel = (id: string, attrs: { id: string; label: string }[] = []) =>
 	id.startsWith('attr:') ? `Fact: ${attrs.find((a) => a.id === id.slice(5))?.label ?? id.slice(5)}` : (TABLE_FIELDS.find((f) => f.id === id)?.label ?? 'Ignore');
@@ -142,6 +171,10 @@ export interface SheetRow {
 	missing_tags: string[];
 	lat: number | null;
 	lon: number | null;
+	/** a shape from the GeoJSON column (not a single point: that's lat / lon) */
+	shape: string | null;
+	/** what the shape will be: the page's own, a new building's, or the matched building's (it has none) */
+	shape_use: 'own' | 'new place' | 'gives place' | 'unused' | null;
 	issues: string[];
 	/** the editor's choices */
 	use_existing: string | null;

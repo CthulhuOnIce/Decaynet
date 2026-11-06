@@ -170,7 +170,7 @@
 		<p class="notice ok">
 			Imported: {plural(form.applied.created, 'new page')}, {plural(form.applied.linked, 'link')} to buildings{form.applied.points
 				? `, ${plural(form.applied.points, 'new map point')}`
-				: ''}{form.applied.addresses ? `, ${plural(form.applied.addresses, 'address', 'addresses')} kept on unplaced pages` : ''}.
+				: ''}{form.applied.shapes ? `, ${plural(form.applied.shapes, 'shape')}` : ''}{form.applied.addresses ? `, ${plural(form.applied.addresses, 'address', 'addresses')} kept on unplaced pages` : ''}.
 			{#if can('moderate')}Undo it under Recent imports below if something's wrong.{/if}
 		</p>
 	{/if}
@@ -266,7 +266,7 @@
 				</div>
 			</div>
 			<div class="checks">
-				<label class="check"><input type="checkbox" bind:checked={options.points} /> Addresses that match no building become new map points (from Latitude / Longitude columns)</label>
+				<label class="check"><input type="checkbox" bind:checked={options.points} /> Addresses that match no building become new buildings on the map (from Latitude / Longitude, or a GeoJSON shape)</label>
 				<label class="check" class:off={!options.points}>
 					<input type="checkbox" bind:checked={options.geocode} disabled={!options.points} /> …or look them up on OpenStreetMap: today's numbering, the
 					first 25 addresses, about one a second
@@ -348,16 +348,17 @@
 								</td>
 								<td class="placecell" data-label="In">
 									{#if spatial(r.kind) && r.kind !== 'space'}
-										<span class="muted small">{r.lat != null ? 'its own point' : r.address ? 'address only' : '–'}</span>
+										<span class="muted small">{r.shape ? `its own shape (${r.shape})` : r.lat != null ? 'its own point' : r.address ? 'address only' : '–'}</span>
 									{:else if r.place_id && r.place}
 										<a href="/e/{r.place.slug}" target="_blank" rel="noopener">{r.place.name}</a>
 										<span class="how small">{r.place_how === 'named' ? 'named' : r.space ? 'by address & unit' : 'by address'}</span>
+										{#if r.shape_use === 'gives place'}<span class="how small" title="It has no shape yet: the row's {r.shape} becomes its own">+ its shape</span>{/if}
 										<button type="button" class="ghost x" title="Don't link it" onclick={() => pickPlace(r, null)}>✕</button>
 									{:else if picking === r.n}
 										<EntityPicker name="pick-{r.n}" kinds={['building', 'site', 'parcel', 'space']} placeholder="Find the building…" onpick={(p) => pickPlace(r, p)} />
 									{:else}
-										{#if r.lat != null && options.points}
-											<label class="check small"><input type="checkbox" bind:checked={r.point} /> new point{r.place_how === 'geocoded' ? ' (looked up)' : ''}</label>
+										{#if (r.lat != null || r.shape) && options.points}
+											<label class="check small"><input type="checkbox" bind:checked={r.point} /> {r.shape ? `new building (${r.shape})` : 'new point'}{r.place_how === 'geocoded' ? ' (looked up)' : ''}</label>
 										{:else}
 											<span class="muted small">not placed</span>
 										{/if}

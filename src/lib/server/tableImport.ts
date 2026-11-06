@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { SiteSettings, Vocabulary } from '$lib/types';
 import { formatFuzzy, formatRange, parseFuzzyDate, type FuzzyDate } from '$lib/time';
-import { splitList, unitFromAddress, type SheetOptions, type SheetRow } from '$lib/tableImport';
+import { shapeLabel, shapeRole, splitList, unitFromAddress, type SheetOptions, type SheetRow } from '$lib/tableImport';
+import { readGeometry } from '$lib/geojson';
 import { geocodeAddresses } from './geocode';
 import { FormError } from './forms';
 
@@ -36,6 +37,8 @@ interface Norm {
 	attributes: { key: string; value: unknown }[];
 	lat: number | null;
 	lon: number | null;
+	/** the GeoJSON column, read (a lone point goes to lat / lon instead) */
+	geometry: GeoJSON.Geometry | null;
 	issues: string[];
 }
 
@@ -119,8 +122,18 @@ export function normalize(sheet: Sheet, vocab: Vocabulary): Norm[] {
 			issues.push(`${what} “${v}” isn't one`);
 			return null;
 		};
-		const lat = num(at(r, 'lat'), -90, 90, 'latitude');
-		const lon = num(at(r, 'lon'), -180, 180, 'longitude');
+		let lat = num(at(r, 'lat'), -90, 90, 'latitude');
+		let lon = num(at(r, 'lon'), -180, 180, 'longitude');
+		let geometry: GeoJSON.Geometry | null = null;
+		const shape = at(r, 'geojson');
+		if (shape) {
+			const g = readGeometry(shape);
+			if ('error' in g) issues.push(`shape: ${g.error}`);
+			else if (g.geometry.type === 'Point') {
+				// a lone point is the same as Latitude / Longitude
+				if (lat == null && lon == null) [lon, lat] = g.geometry.coordinates as [number, number];
+			} else geometry = g.geometry;
+		}
 		out.push({
 			n: k + 2, // the spreadsheet's own row number (row 1 holds the headers)
 			name,
@@ -145,6 +158,7 @@ export function normalize(sheet: Sheet, vocab: Vocabulary): Norm[] {
 			attributes,
 			lat,
 			lon,
+			geometry,
 			issues
 		});
 	});
@@ -213,13 +227,27 @@ export async function preview(sb: SupabaseClient, sheet: Sheet, vocab: Vocabular
 			missing_tags: m.tags.missing,
 			lat: r.lat,
 			lon: r.lon,
+			shape: r.geometry ? shapeLabel(r.geometry) : null,
+			shape_use: !r.geometry ? null : SPATIAL_LINKLESS.has(r.kind) || r.kind === 'space' ? 'own' : place ? 'gives place' : 'new place',
 			issues,
 			use_existing: m.same?.id ?? null,
 			place_id: place?.id ?? null,
-			point: sheet.options.points && !place && r.lat != null && r.lon != null,
+			point: sheet.options.points && !place && ((r.lat != null && r.lon != null) || !!r.geometry),
 			include: true
 		};
 	});
+
+	// a business's shape goes to the building it's matched to only if that building has none yet
+	const placed = [...new Set(rows.filter((r) => r.shape_use === 'gives place' && r.place_id).map((r) => r.place_id as string))];
+	if (placed.length) {
+		const { data: have } = await sb.from('entity_geometries').select('entity_id').in('entity_id', placed).neq('role', 'viewpoint');
+		const shaped = new Set(((have ?? []) as { entity_id: string }[]).map((g) => g.entity_id));
+		for (const r of rows)
+			if (r.shape_use === 'gives place' && r.place_id && shaped.has(r.place_id)) {
+				r.shape_use = 'unused';
+				r.issues.push(`${r.place?.name} has a shape already: this one isn't used`);
+			}
+	}
 
 	// one page per name and kind in a sheet: later rows go on the page the first one makes
 	const first = new Map<string, number>();
@@ -302,7 +330,9 @@ export function applyRows(sheet: Sheet, vocab: Vocabulary, choices: Record<strin
 			unit: r.unit,
 			lat: c.lat ?? r.lat,
 			lon: c.lon ?? r.lon,
-			point: c.point
+			point: c.point,
+			geojson: r.geometry,
+			role: r.geometry ? shapeRole(r.geometry, r.kind) : null
 		});
 	}
 	return out;

@@ -99,6 +99,7 @@ Each column is guessed from its header; any of them can be changed, or set to
 | **Note** | Note, Notes, Comment, Remarks | A note on the link (or on the kept address, for an unplaced row). |
 | **Source detail** | Page, P, Pg, Entry, Citation, Reference, Folio, Frame | Where in the source: cited with every fact the row adds. A bare number reads as a page: `214` → "p. 214". |
 | **Latitude** / **Longitude** | Lat, Latitude / Lon, Lng, Long, Longitude | A map point, in decimal degrees (WGS 84): for a place row, or a new building when no building matches. |
+| **GeoJSON (shape)** | GeoJSON, Geometry, Geom, Shape, Footprint, Outline, Polygon, Boundary | A shape, as GeoJSON in longitude/latitude (WGS 84 / EPSG:4326): a geometry, a Feature, or a FeatureCollection of one kind of shape (several areas become one shape with several parts). A place row gets it as its own (a building's footprint, a street's centerline, a district's boundary), dated like the row and cited. A business row places itself: a new building with that shape when no building matches, or the matched building's shape if it has none yet. A lone `Point` is the same as Latitude / Longitude. |
 | **A fact** | the fact's label or id, e.g. *Employees*, *Industry*, *Occupation*, *Website* | A dated fact on the page. See [Timed facts](#timed-facts) and the [list of facts](#reference-facts-and-link-types). |
 
 Lists (*Tags*, *Other names*) split on `;`, or on `|` or `,` when there's no `;`.
@@ -183,8 +184,8 @@ storefront it was in:
   preview.
 - **When.** The row's dates (see [Dates](#dates)).
 - **Rows that are places themselves** (Kind `building`, `site`…) don't link
-  anywhere. They get their own map point from *Latitude / Longitude*, and their
-  address. A **`space`** row with a *Building* is made *part of* that building
+  anywhere. They get their own shape from *GeoJSON* or map point from
+  *Latitude / Longitude*, and their address. A **`space`** row with a *Building* is made *part of* that building
   (a storefront listed by number).
 
 Links between two pages that aren't places (a person *worked for* a company,
@@ -194,9 +195,11 @@ from a sheet yet. Add them on the page under **Edit facts → Relations**.
 ### Places not found
 
 - **Pick it in the preview**: *choose…* on the row, then search for the building.
-- **A new map point**: with *Addresses that match no building become new map
-  points* ticked, a row with *Latitude / Longitude* makes a building there (named
-  by its address, marked approximate; the same address twice is one building).
+- **A new building on the map**: with *Addresses that match no building become
+  new buildings on the map* ticked, a row with *Latitude / Longitude* makes a
+  building there (named by its address, its point marked approximate), and a
+  row with a *GeoJSON* shape makes one with that footprint. The same address (or
+  shape) twice is one building.
   Optionally, tick the OpenStreetMap lookup to find coordinates for addresses.
   It uses **today's numbering**, which may have changed since, so check the
   results; only the first 25 addresses per preview are looked up, about one a
@@ -251,6 +254,19 @@ Liberty Garage,1440 Washington St,1924,1961,41.5941,-87.3389,12
 
 Each becomes a page with a map point and its address. Trace the footprint
 later in the workbench.
+
+**Buildings with their footprints**, from a city GIS export or a tracing tool:
+one row per building, the shape as GeoJSON in its own column. A CSV quotes it
+(and doubles the quotes inside); pasted from a spreadsheet, the cell is used as
+it is.
+
+```csv
+Name,Address,From,Until,GeoJSON
+Liberty Garage,1440 Washington St,1924,1961,"{""type"":""Polygon"",""coordinates"":[[[-87.3391,41.5940],[-87.3387,41.5940],[-87.3387,41.5943],[-87.3391,41.5943],[-87.3391,41.5940]]]}"
+```
+
+Each footprint runs over the row's From–Until and is cited to the sheet's
+source. Importing the same sheet again doesn't add the same shape twice.
 
 **Storefronts of a building, by number.** Kind *space*: each row becomes a
 storefront *part of* the building, with its unit number.
@@ -329,4 +345,7 @@ Link types are in [Associations](#associations-links).
 | *unknown kind "…"* | Use a kind's id or label (organization, person, building, space…). |
 | *Employees "about 40" isn't a number* | Write `40`, and say "about" with the Confidence setting or a Note. |
 | *not looked up (only the first 25 addresses are)* | Import in smaller sheets, or add Latitude / Longitude columns. |
+| *shape: The coordinates are not longitude/latitude…* | Export the shapes as WGS 84 (EPSG:4326), longitude first. |
+| *shape: It mixes kinds of shape…* | One kind per cell: areas, or lines, or a point. |
+| *… has a shape already: this one isn't used* | A business row only gives a building a shape when it has none. Redraw it in the workbench if the sheet's is better. |
 | **Import** stays greyed out | Pick what the sheet was *made from* (step 3). |
