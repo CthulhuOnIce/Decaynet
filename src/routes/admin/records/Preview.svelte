@@ -3,6 +3,7 @@
 
 	let {
 		title,
+		notes = [],
 		summary,
 		conflict,
 		busy = false,
@@ -11,6 +12,8 @@
 		oncancel
 	}: {
 		title: string;
+		/** what else it does (makes a page, widens a lifespan) */
+		notes?: string[];
 		summary: WriteSummary;
 		conflict: ConflictRule;
 		busy?: boolean;
@@ -47,6 +50,7 @@
 			{#if summary[o]}<span class="c {o}">{summary[o]} {LABEL[o].toLowerCase()}</span>{/if}
 		{/each}
 	</p>
+	{#if notes.length}<ul class="notes small">{#each notes as n, i (i)}<li>{n}</li>{/each}</ul>{/if}
 	{#if summary.conflict || conflict !== 'skip'}
 		<label class="rule small">
 			When another source's fact is in the way:
@@ -131,6 +135,11 @@
 	.gh.skipped,
 	.gh.already {
 		color: var(--muted);
+	}
+	.notes {
+		margin: 0;
+		padding-left: 18px;
+		color: var(--moss);
 	}
 	.rule {
 		display: flex;

@@ -25,6 +25,7 @@
 	} from '$lib/records';
 	import CellEditor, { type EditorSubmit } from './CellEditor.svelte';
 	import Preview from './Preview.svelte';
+	import WorkThrough from './WorkThrough.svelte';
 
 	let { data, form } = $props();
 
@@ -163,7 +164,20 @@
 		}
 	}
 
-	let preview = $state<{ title: string; items: WriteItem[]; summary: WriteSummary; conflict: ConflictRule } | null>(null);
+	type Check = (c: ConflictRule, preview: boolean) => Promise<WriteSummary & { steps?: string[] }>;
+	let preview = $state<{ title: string; notes: string[]; summary: WriteSummary; conflict: ConflictRule; check: Check } | null>(null);
+	const writeCheck =
+		(items: WriteItem[]): Check =>
+		(c, pv) =>
+			api({ op: 'write', items: items.map((it) => ({ ...it, conflict: c })), preview: pv }) as Promise<WriteSummary>;
+	async function openPreview(title: string, check: Check, conflict: ConflictRule = ctx.conflict) {
+		try {
+			const summary = await check(conflict, true);
+			preview = { title, notes: summary.steps ?? [], summary, conflict, check };
+		} catch (e) {
+			say((e as Error).message, 'error');
+		}
+	}
 	let applying = $state(false);
 
 	const describe = (s: WriteSummary) =>
@@ -190,8 +204,7 @@
 				await invalidateAll();
 				return;
 			}
-			const summary = (await api({ op: 'write', items: withRule, preview: true })) as WriteSummary;
-			preview = { title, items, summary, conflict };
+			await openPreview(title, writeCheck(items), conflict);
 		} catch (e) {
 			say((e as Error).message, 'error');
 		}
@@ -200,8 +213,8 @@
 		if (!preview) return;
 		const p = preview;
 		try {
-			const summary = (await api({ op: 'write', items: p.items.map((it) => ({ ...it, conflict: c })), preview: true })) as WriteSummary;
-			preview = { ...p, summary, conflict: c };
+			const summary = await p.check(c, true);
+			preview = { ...p, notes: summary.steps ?? [], summary, conflict: c };
 		} catch (e) {
 			say((e as Error).message, 'error');
 		}
@@ -211,7 +224,7 @@
 		applying = true;
 		const p = preview;
 		try {
-			const s = (await api({ op: 'write', items: p.items.map((it) => ({ ...it, conflict: p.conflict })) })) as WriteSummary;
+			const s = await p.check(p.conflict, false);
 			if (s.after !== null && s.changed + s.cited) undoStack = [...undoStack, { after: s.after, label: p.title }];
 			say(`${p.title}: ${describe(s)}.`, s.skipped || s.conflict ? 'info' : 'ok');
 			preview = null;
@@ -416,6 +429,71 @@
 			for (const c of shown.filter((x) => x.type === 'fact'))
 				for (const f of r.cells[c.id] ?? []) items.push({ entity: r.id, field: c.id, op: c.multi ? 'add' : 'set', value: f.v, mode: 'seen' });
 		await run(items, `Confirmed ${targetRows().length} rows as seen in ${year}`);
+	}
+
+	// ---- workflow: an organization for named spaces
+	let mt = $state<{ match: string; org: { id: string; name: string } | null; newName: string; dates: string; sources: string; rename: string; widen: boolean } | null>(null);
+	function openMakeTenant() {
+		const q = grid.search.q;
+		mt = { match: q, org: null, newName: q ? q.replace(/\b\w/g, (c) => c.toUpperCase()) : '', dates: 'names', sources: 'names', rename: 'keep', widen: true };
+	}
+	async function previewMakeTenant() {
+		if (!mt) return;
+		const m = mt;
+		const ids = [...sel];
+		mt = null;
+		const check: Check = (c, pv) =>
+			api({ op: 'makeTenant', ids, match: m.match, org: m.org?.id ?? null, newName: m.newName, opts: { dates: m.dates, sources: m.sources, rename: m.rename, widen: m.widen, conflict: c }, preview: pv }) as Promise<WriteSummary & { steps: string[] }>;
+		await openPreview(`${m.org?.name ?? m.newName} as tenant of the spaces named “${m.match}”`, check);
+	}
+
+	// ---- workflow: tags a page's names suggest
+	let sug = $state<{ list: { entity: string; tag: string; path: string; name: string; when: string; item: WriteItem; on: boolean }[] } | null>(null);
+	async function openTagSuggestions() {
+		try {
+			const ids = sel.size ? [...sel] : rows.map((r) => r.id);
+			const list = (await api({ op: 'tagSuggestions', ids })) as { entity: string; tag: string; path: string; name: string; when: string; item: WriteItem }[];
+			if (!list.length) return say('No tags suggested: no tag’s name appears in these pages’ names (or they have it already).', 'info');
+			sug = { list: list.map((s) => ({ ...s, on: true })) };
+		} catch (e) {
+			say((e as Error).message, 'error');
+		}
+	}
+	const pageName = (id: string) => rows.find((r) => r.id === id)?.name ?? 'page';
+	async function previewTags() {
+		if (!sug) return;
+		const items = sug.list.filter((s) => s.on).map((s) => s.item);
+		sug = null;
+		await run(items, `Tags from names on ${new Set(items.map((i) => i.entity)).size} pages`);
+	}
+
+	// ---- workflow: row by row
+	let through = $state<number | null>(null);
+	function moveThrough(i: number) {
+		if (i < 0) i = 0;
+		if (i >= rows.length) {
+			through = null;
+			if (grid.page < pages) {
+				say(`End of page ${grid.page}. Carrying on with the next.`, 'info');
+				nav((u) => u.set('page', String(grid.page + 1)), true);
+				tick().then(() => (through = 0));
+			} else say('That was the last row.', 'info');
+			return;
+		}
+		through = i;
+		focus = { r: i, c: 0 };
+		tick().then(() => gridEl?.querySelector<HTMLElement>(`[data-cell="${i}:0"]`)?.scrollIntoView({ block: 'center' }));
+		if (editing) api({ op: 'progress', progress: { through: { search: page.url.search, index: i, name: rows[i]?.name } } }).catch(() => {});
+	}
+	const resumeAt = $derived.by(() => {
+		const t = (data.current?.progress as { through?: { search: string; index: number; name: string } } | undefined)?.through;
+		return t && t.search === page.url.search && t.index < rows.length ? t : null;
+	});
+	async function confirmOne(r: GridRow) {
+		const items: WriteItem[] = [];
+		for (const c of shown.filter((x) => x.type === 'fact')) for (const f of r.cells[c.id] ?? []) items.push({ entity: r.id, field: c.id, op: c.multi ? 'add' : 'set', value: f.v, mode: 'seen' });
+		if (!items.length) return say(`${r.name}: nothing shown to confirm.`, 'info');
+		await openPreview(`Confirm ${r.name_then} as seen in ${year}`, writeCheck(items));
 	}
 
 	let del = $state<{ typed: string; spaces: boolean } | null>(null);
@@ -646,6 +724,10 @@
 		<span class="muted small">{data.grid.total} page{data.grid.total === 1 ? '' : 's'}{data.grid.total > data.grid.listed ? ` (the first ${data.grid.listed} listed; narrow the filters)` : ''} · as of {year} · tick rows (Shift for a run) to work on several</span>
 	{/if}
 	<span class="grow"></span>
+	{#if resumeAt && through === null}<button class="ghost" onclick={() => moveThrough(resumeAt.index)}>Resume at {resumeAt.name}</button>{/if}
+	<button class="ghost" onclick={() => moveThrough(focus?.r ?? 0)} disabled={!rows.length || !editing} title="One row at a time: its spaces, what it shows, save and move on">Work through</button>
+	{#if sel.size}<button class="ghost" onclick={openMakeTenant} disabled={!editing} title="Make an organization the tenant of the selected spaces, for the years they carried its name">Make tenant…</button>{/if}
+	<button class="ghost" onclick={openTagSuggestions} disabled={!rows.length || !editing} title="Tags whose names appear in these pages' names, dated like those names">Tags from names…</button>
 	<button class="ghost" onclick={openFill} disabled={!rows.length} title="Number the selected rows in order (house numbers, storefronts…)">Fill series…</button>
 	<button class="ghost" onclick={confirmRows} disabled={!rows.length || !editing} title="Each row's values, seen in {year}: cited and joined up">Confirm {sel.size ? 'selected' : 'page'}</button>
 	<button class="ghost" onclick={exportCsv} disabled={!rows.length}>CSV</button>
@@ -756,7 +838,7 @@
 {/if}
 
 {#if preview}
-	<Preview title={preview.title} summary={preview.summary} conflict={preview.conflict} busy={applying} onapply={applyPreview} onrecheck={recheck} oncancel={() => (preview = null)} />
+	<Preview title={preview.title} notes={preview.notes} summary={preview.summary} conflict={preview.conflict} busy={applying} onapply={applyPreview} onrecheck={recheck} oncancel={() => (preview = null)} />
 {/if}
 
 {#if fill}
@@ -790,6 +872,72 @@
 		<div class="spread">
 			<span class="muted small">{mode === 'starting' ? `Starting ${year}` : `Seen in ${year}`} · previewed before anything changes</span>
 			<span class="row"><button class="ghost" onclick={() => (fill = null)}>Cancel</button><button class="primary" onclick={previewFill} disabled={!editing}>Preview</button></span>
+		</div>
+	</div>
+{/if}
+
+{#if through !== null && rows[through]}
+	<WorkThrough
+		row={rows[through]}
+		index={through}
+		count={rows.length}
+		columns={shown}
+		{year}
+		{api}
+		onmove={moveThrough}
+		onclose={() => (through = null)}
+		onsaved={async (after, label, text) => {
+			undoStack = [...undoStack, { after, label }];
+			say(text);
+			await invalidateAll();
+		}}
+		onconfirm={confirmOne}
+	/>
+{/if}
+
+{#if mt}
+	<div class="backdrop" role="presentation" onclick={() => (mt = null)}></div>
+	<div class="dialog" role="dialog" aria-modal="true" aria-label="Make tenant">
+		<h2>Make tenant</h2>
+		<p class="muted small">For each of the {sel.size} selected pages, the names that match become years of tenancy: the organization occupies it while it carried that name.</p>
+		<label>Names that look like <input bind:value={mt.match} placeholder="Kresge" /></label>
+		<div class="field">
+			<span class="lbl">The tenant</span>
+			<EntityPicker name="mt_org" kinds={['organization', 'person']} value={mt.org} placeholder="An existing organization or person…" onpick={(p) => mt && (mt.org = p ? { id: p.id, name: p.name } : null)} />
+			{#if !mt.org}<label class="sub">…or a new organization called <input bind:value={mt.newName} placeholder="S. S. Kresge Co." /></label>{/if}
+		</div>
+		<div class="fields">
+			<label>Dates
+				<select bind:value={mt.dates}><option value="names">Each name's own years</option><option value="context">{MODES.find((m) => m.id === ctx.mode)?.label} {year}</option></select>
+			</label>
+			<label>Cite
+				<select bind:value={mt.sources}><option value="names">Each name's own source</option><option value="context">{data.sources.find((s) => s.id === ctx.source_id)?.title ?? 'the open source'}</option></select>
+			</label>
+			<label>Those name records
+				<select bind:value={mt.rename}><option value="keep">Keep them</option><option value="unit">Rename to the unit (or “Storefront”)</option><option value="remove">Remove them</option></select>
+			</label>
+		</div>
+		<label class="check"><input type="checkbox" bind:checked={mt.widen} /> Start (and end) the organization with its tenancies</label>
+		<div class="spread">
+			<span class="muted small">Previewed before anything changes.</span>
+			<span class="row"><button class="ghost" onclick={() => (mt = null)}>Cancel</button><button class="primary" onclick={previewMakeTenant} disabled={!mt.match.trim() || (!mt.org && !mt.newName.trim())}>Preview</button></span>
+		</div>
+	</div>
+{/if}
+
+{#if sug}
+	<div class="backdrop" role="presentation" onclick={() => (sug = null)}></div>
+	<div class="dialog wide" role="dialog" aria-modal="true" aria-label="Tags from names">
+		<h2>Tags from names</h2>
+		<p class="muted small">A tag whose name appears in a page's name, dated like that name. Untick any that don't fit.</p>
+		<ul class="sug">
+			{#each sug.list as s, i (i)}
+				<li><label class="check"><input type="checkbox" bind:checked={s.on} /> <strong>{pageName(s.entity)}</strong> → {s.path} <span class="muted small">from “{s.name}”, {s.when}</span></label></li>
+			{/each}
+		</ul>
+		<div class="spread">
+			<span class="muted small">{sug.list.filter((s) => s.on).length} of {sug.list.length} ticked</span>
+			<span class="row"><button class="ghost" onclick={() => (sug = null)}>Cancel</button><button class="primary" onclick={previewTags} disabled={!sug.list.some((s) => s.on)}>Preview</button></span>
 		</div>
 	</div>
 {/if}
@@ -1217,6 +1365,28 @@
 		padding: 14px 16px;
 		display: grid;
 		gap: 10px;
+	}
+	.dialog.wide {
+		width: min(720px, calc(100vw - 32px));
+		max-height: 80vh;
+		overflow: auto;
+	}
+	.sug {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		max-height: 50vh;
+		overflow: auto;
+	}
+	.sug li {
+		padding: 3px 0;
+		border-bottom: 1px dashed var(--line);
+	}
+	.sug .check {
+		white-space: normal;
+	}
+	.sub {
+		margin-top: 6px;
 	}
 	.dialog h2 {
 		margin: 0;

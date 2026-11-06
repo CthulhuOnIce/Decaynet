@@ -1547,6 +1547,310 @@ $$;
 revoke all on function public.records_set_pages(uuid, uuid[], jsonb) from public, anon;
 grant execute on function public.records_set_pages(uuid, uuid[], jsonb) to authenticated;
 
+
+-- ---------------------------------------------------------------------------------------------
+-- Workflow tools
+
+-- A slug for a new page: its parent's slug (for a space) or nothing, then the name.
+create or replace function internal.rec_new_slug(p_prefix text, p_name text) returns text
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  v text := coalesce(nullif(trim(both '-' from regexp_replace(lower(coalesce(p_name, '')), '[^a-z0-9]+', '-', 'g')), ''), 'page');
+begin
+  if p_prefix is not null then v := p_prefix || '-' || v; end if;
+  v := left(v, 90);
+  while exists (select 1 from public.entities where slug = v) loop
+    v := regexp_replace(v, '-[0-9a-f]{4}$', '') || '-' || substr(md5(random()::text), 1, 4);
+  end loop;
+  return v;
+end;
+$$;
+revoke all on function internal.rec_new_slug(text, text) from public;
+
+-- The context's dates as a claim: from (at), to (only: to; otherwise open)
+create or replace function internal.rec_ctx_span(p_ctx jsonb, out f date, out fp public.date_precision, out t date, out tp public.date_precision)
+language sql immutable as $$
+  select (p_ctx ->> 'at')::date, coalesce(p_ctx ->> 'at_p', 'year')::public.date_precision,
+         case when p_ctx ->> 'mode' = 'only' then (p_ctx ->> 'to')::date end,
+         coalesce(case when p_ctx ->> 'mode' = 'only' then p_ctx ->> 'to_p' end, 'year')::public.date_precision
+$$;
+
+-- Stub spaces into a building, as seen in the context year: no shape yet (draw them in the
+-- workbench later). Each row: {name, first_name?, unit?, floor?, address?, tenant?}. Dated
+-- and cited from the change set; a tenant is linked as seen that year.
+-- Returns {added: [{id, slug, name}], items: [results of the tenant links]}
+create or replace function public.records_add_spaces(p_set uuid, p_building uuid, p_rows jsonb, p_preview boolean default false)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_set public.change_sets := internal.rec_open_set(p_set);
+  c jsonb := v_set.context;
+  b public.entities;
+  s record;
+  r jsonb;
+  v_id uuid;
+  v_slug text;
+  v_name text;
+  v_first text;
+  v_src uuid := (c ->> 'source_id')::uuid;
+  v_detail text := nullif(btrim(c ->> 'source_detail'), '');
+  v_conf public.confidence_level := coalesce(c ->> 'confidence', 'probable')::public.confidence_level;
+  v_added jsonb := '[]';
+  v_items jsonb := '[]';
+  v_addr record;
+  v_street uuid;
+  v_out jsonb;
+  v_before bigint := (select coalesce(max(id), 0) from public.change_log);
+begin
+  select * into b from public.entities where id = p_building;
+  if not found or b.kind not in ('building', 'site', 'space') then
+    raise exception 'Spaces go in a building, a site or another space' using errcode = '22023';
+  end if;
+  if c ->> 'at' is null or v_src is null then
+    raise exception 'Set the year and the source you''re working from first' using errcode = '22023';
+  end if;
+  select * into s from internal.rec_ctx_span(c);
+  if not p_preview then
+    perform set_config('decaynet.change_set', p_set::text, true);
+  end if;
+  begin
+    for r in select value from jsonb_array_elements(p_rows) loop
+      v_name := nullif(btrim(regexp_replace(coalesce(r ->> 'name', ''), '\s+', ' ', 'g')), '');
+      continue when v_name is null;
+      v_slug := internal.rec_new_slug(b.slug, v_name);
+      insert into public.entities (kind, slug, name, exists_from, exists_from_precision, exists_to, exists_to_precision, lifespan_confidence)
+      values ('space', v_slug, v_name, s.f, s.fp, s.t, s.tp, v_conf) returning id into v_id;
+      insert into public.relations (subject_id, predicate, object_id, valid_from, valid_from_precision, valid_to, valid_to_precision, confidence, source_id, source_detail)
+      values (v_id, 'part_of', p_building, s.f, s.fp, s.t, s.tp, v_conf, v_src, v_detail);
+      if nullif(btrim(r ->> 'unit'), '') is not null then
+        insert into public.entity_attributes (entity_id, key, value, valid_from, valid_from_precision, source_id, source_detail)
+        values (v_id, 'unit_label', to_jsonb(btrim(r ->> 'unit')), s.f, s.fp, v_src, v_detail);
+      end if;
+      if nullif(btrim(r ->> 'floor'), '') ~ '^-?\d+(\.\d+)?$' then
+        insert into public.entity_attributes (entity_id, key, value, valid_from, valid_from_precision, source_id, source_detail)
+        values (v_id, 'floor', to_jsonb((r ->> 'floor')::numeric), s.f, s.fp, v_src, v_detail);
+      end if;
+      v_first := nullif(btrim(regexp_replace(coalesce(r ->> 'first_name', ''), '\s+', ' ', 'g')), '');
+      if v_first is not null and lower(v_first) <> lower(v_name) then
+        insert into public.entity_names (entity_id, name, name_type, valid_from, valid_from_precision, valid_to, valid_to_precision, confidence, source_id, source_detail)
+        values (v_id, v_first, 'official', s.f, s.fp, s.t, s.tp, v_conf, v_src, v_detail);
+      end if;
+      if nullif(btrim(r ->> 'address'), '') is not null then
+        select * into v_addr from public.split_address(btrim(r ->> 'address'));
+        v_street := case when coalesce(v_addr.street, '') <> '' then public.find_street(v_addr.street)
+                         else (select a.street_id from public.addresses a where a.entity_id = p_building and a.valid @> s.f order by a.valid_from desc nulls last limit 1) end;
+        insert into public.addresses (entity_id, street_id, house_number, unit, raw_address, valid_from, valid_from_precision, valid_to, valid_to_precision, confidence, source_id, source_detail)
+        values (v_id, v_street, coalesce(v_addr.house_number, case when btrim(r ->> 'address') ~ '^\d+[a-z]?$' then btrim(r ->> 'address') end),
+                nullif(btrim(r ->> 'unit'), ''), case when v_street is null then btrim(r ->> 'address') end, s.f, s.fp, s.t, s.tp, v_conf, v_src, v_detail);
+      end if;
+      v_added := v_added || jsonb_build_object('id', v_id, 'slug', v_slug, 'name', v_name);
+      if nullif(r ->> 'tenant', '') is not null then
+        v_items := v_items || internal.rec_item_safe(jsonb_build_object('entity', v_id, 'field', 'rel:occupies:in', 'op', 'add', 'value', r ->> 'tenant'), c);
+      end if;
+    end loop;
+    if p_preview then
+      raise exception using errcode = 'DN001', message = 'preview';
+    end if;
+  exception when sqlstate 'DN001' then
+    null;
+  end;
+  if not p_preview then
+    update public.change_sets set updated_at = now() where id = p_set;
+    perform set_config('decaynet.change_set', '', true);
+  end if;
+  return jsonb_build_object('added', v_added, 'items', v_items, 'after', case when p_preview then null else v_before end);
+end;
+$$;
+revoke all on function public.records_add_spaces(uuid, uuid, jsonb, boolean) from public, anon;
+grant execute on function public.records_add_spaces(uuid, uuid, jsonb, boolean) to authenticated;
+
+-- The names on these pages that match a text (any name they ever had), with their dates
+create or replace function public.records_name_matches(p_ids uuid[], p_match text)
+returns table (entity_id uuid, name_id uuid, name text, name_type text, valid_from date, valid_from_precision public.date_precision,
+               valid_to date, valid_to_precision public.date_precision, source_id uuid, source_detail text, is_title boolean)
+language sql stable security definer set search_path = public as $$
+  select n.entity_id, n.id, n.name, n.name_type, n.valid_from, n.valid_from_precision, n.valid_to, n.valid_to_precision,
+         n.source_id, n.source_detail, false
+    from public.entity_names n
+   where n.entity_id = any (p_ids) and public.has_permission('manage_records')
+     and public.search_text_matches(n.name, p_match, 'fuzzy')
+  union all
+  -- the page title, when no dated name matches: the page's own dates
+  select e.id, null, e.name, 'title', e.exists_from, e.exists_from_precision, e.exists_to, e.exists_to_precision, null, null, true
+    from public.entities e
+   where e.id = any (p_ids) and public.has_permission('manage_records')
+     and public.search_text_matches(e.name, p_match, 'fuzzy')
+     and not exists (select 1 from public.entity_names n where n.entity_id = e.id and public.search_text_matches(n.name, p_match, 'fuzzy'))
+$$;
+revoke all on function public.records_name_matches(uuid[], text) from public, anon;
+grant execute on function public.records_name_matches(uuid[], text) to authenticated;
+
+-- An item dated like a name: only its years when it has an end, from its start when it
+-- doesn't, seen in the context year when it has no dates at all
+create or replace function internal.rec_item_from_name(
+  p_entity uuid, f date, fp public.date_precision, t date, tp public.date_precision, p_src uuid, p_detail text,
+  p_field text, p_value jsonb, p_ctx jsonb, p_cite_names boolean
+) returns jsonb
+language sql stable as $$
+  select jsonb_strip_nulls(jsonb_build_object(
+    'entity', p_entity, 'field', p_field, 'op', 'add', 'value', p_value,
+    'mode', case when f is null then 'seen' when t is null then 'starting' else 'only' end,
+    'at', coalesce(f, (p_ctx ->> 'at')::date), 'at_p', case when f is null then coalesce(p_ctx ->> 'at_p', 'year') else fp::text end,
+    'to', t, 'to_p', tp)
+    || case when p_cite_names and p_src is not null then jsonb_build_object('source_id', p_src, 'source_detail', p_detail) else '{}'::jsonb end)
+$$;
+
+-- Workflow 1: an organization for something that only existed as named spaces. Finds each
+-- space's names that match, links the organization as their tenant for those years (cited
+-- to the names' own sources, or the context's), optionally renames those name records to
+-- the space's unit, and widens the organization's lifespan to its tenancies.
+-- p_org: an existing page, or null with p_new {name, kind} to create one.
+-- p_opts: {dates: names|context, sources: names|context, rename: keep|unit|remove, widen: bool}
+create or replace function public.records_make_tenant(p_set uuid, p_ids uuid[], p_match text, p_org uuid, p_new jsonb, p_opts jsonb, p_preview boolean default false)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_set public.change_sets := internal.rec_open_set(p_set);
+  c jsonb := v_set.context;
+  v_org uuid := p_org;
+  o public.entities;
+  m record;
+  it jsonb;
+  v_results jsonb := '[]';
+  v_steps jsonb := '[]';
+  v_names_dates boolean := coalesce(p_opts ->> 'dates', 'names') = 'names';
+  v_cite_names boolean := coalesce(p_opts ->> 'sources', 'names') = 'names';
+  v_rename text := coalesce(p_opts ->> 'rename', 'keep');
+  v_unit text;
+  v_lo date; v_lo_p public.date_precision; v_hi date; v_hi_p public.date_precision; v_open boolean;
+  v_before bigint := (select coalesce(max(id), 0) from public.change_log);
+  v_new_name text := nullif(btrim(p_new ->> 'name'), '');
+begin
+  if nullif(btrim(p_match), '') is null then
+    raise exception 'What name are you looking for?' using errcode = '22023';
+  end if;
+  if not p_preview then
+    perform set_config('decaynet.change_set', p_set::text, true);
+  end if;
+  begin
+    if v_org is null then
+      if v_new_name is null then
+        raise exception 'Pick the organization, or name a new one' using errcode = '22023';
+      end if;
+      insert into public.entities (kind, slug, name, is_private)
+      values (coalesce(nullif(p_new ->> 'kind', ''), 'organization'), internal.rec_new_slug(null, v_new_name), v_new_name, coalesce((p_new ->> 'private')::boolean, false))
+      returning id into v_org;
+      v_steps := v_steps || to_jsonb('made the page ' || v_new_name);
+    end if;
+    select * into o from public.entities where id = v_org;
+
+    for m in select * from public.records_name_matches(p_ids, p_match) order by entity_id, valid_from nulls first loop
+      if v_names_dates then
+        it := internal.rec_item_from_name(m.entity_id, m.valid_from, m.valid_from_precision, m.valid_to, m.valid_to_precision, m.source_id, m.source_detail,
+                                         'rel:occupies:in', to_jsonb(v_org::text), c, v_cite_names);
+      else
+        it := jsonb_build_object('entity', m.entity_id, 'field', 'rel:occupies:in', 'op', 'add', 'value', v_org::text)
+              || case when v_cite_names and m.source_id is not null then jsonb_build_object('source_id', m.source_id, 'source_detail', m.source_detail) else '{}'::jsonb end;
+      end if;
+      if p_opts ? 'conflict' then
+        it := it || jsonb_build_object('conflict', p_opts ->> 'conflict');
+      end if;
+      v_results := v_results || (internal.rec_item_safe(it, c) || jsonb_build_object('matched', m.name));
+      -- the name was really the tenant's: the space goes by its unit (or "Storefront") then, or loses that name
+      if v_rename <> 'keep' and not m.is_title and m.name_id is not null then
+        if v_rename = 'remove' then
+          delete from public.entity_names where id = m.name_id;
+        else
+          v_unit := coalesce((select a.value #>> '{}' from public.entity_attributes a where a.entity_id = m.entity_id and a.key = 'unit_label' order by a.valid_from desc nulls last limit 1), 'Storefront');
+          update public.entity_names set name = v_unit where id = m.name_id;
+        end if;
+      end if;
+    end loop;
+
+    if coalesce((p_opts ->> 'widen')::boolean, true) then
+      -- the organization's lifespan covers its tenancies
+      select r.valid_from, r.valid_from_precision into v_lo, v_lo_p from public.relations r
+       where r.subject_id = v_org and r.predicate = 'occupies' order by lower(r.valid) nulls first limit 1;
+      select bool_or(r.valid_to is null) into v_open from public.relations r where r.subject_id = v_org and r.predicate = 'occupies';
+      select r.valid_to, r.valid_to_precision into v_hi, v_hi_p from public.relations r
+       where r.subject_id = v_org and r.predicate = 'occupies' and r.valid_to is not null order by upper(r.valid) desc limit 1;
+      if v_lo is not null and (o.exists_from is null or v_lo < o.exists_from) then
+        update public.entities set exists_from = v_lo, exists_from_precision = v_lo_p where id = v_org;
+        v_steps := v_steps || to_jsonb('started ' || o.name || ' ' || public.fuzzy_label(v_lo, v_lo_p));
+      end if;
+      if not coalesce(v_open, true) and v_hi is not null and o.exists_to is not null and v_hi > o.exists_to then
+        update public.entities set exists_to = v_hi, exists_to_precision = v_hi_p where id = v_org;
+        v_steps := v_steps || to_jsonb('ended ' || o.name || ' ' || public.fuzzy_label(v_hi, v_hi_p));
+      end if;
+    end if;
+    if p_preview then
+      raise exception using errcode = 'DN001', message = 'preview';
+    end if;
+  exception when sqlstate 'DN001' then
+    null;
+  end;
+  if not p_preview then
+    update public.change_sets set updated_at = now() where id = p_set;
+    perform set_config('decaynet.change_set', '', true);
+  end if;
+  return jsonb_build_object(
+    'org', jsonb_build_object('id', case when p_preview and p_org is null then null else v_org end, 'slug', o.slug, 'name', coalesce(o.name, v_new_name)),
+    'steps', v_steps, 'items', v_results, 'after', case when p_preview then null else v_before end,
+    'changed', (select count(*) from jsonb_array_elements(v_results) r where r ->> 'outcome' = 'changed'),
+    'cited', (select count(*) from jsonb_array_elements(v_results) r where r ->> 'outcome' = 'cited'),
+    'already', (select count(*) from jsonb_array_elements(v_results) r where r ->> 'outcome' = 'already'),
+    'skipped', (select count(*) from jsonb_array_elements(v_results) r where r ->> 'outcome' = 'skipped'),
+    'conflict', (select count(*) from jsonb_array_elements(v_results) r where r ->> 'outcome' = 'conflict'));
+end;
+$$;
+revoke all on function public.records_make_tenant(uuid, uuid[], text, uuid, jsonb, jsonb, boolean) from public, anon;
+grant execute on function public.records_make_tenant(uuid, uuid[], text, uuid, jsonb, jsonb, boolean) to authenticated;
+
+-- Tags a page's names suggest: a tag whose label (or its singular) appears as a word in one
+-- of its names ("Joe's Tavern" → Tavern), dated like that name. Leaves out what's tagged then.
+-- Returns [{entity, tag_id, tag, path, name, item}] (item: ready for records_write)
+create or replace function public.records_tag_suggestions(p_set uuid, p_ids uuid[])
+returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare
+  v_set public.change_sets := internal.rec_open_set(p_set);
+  c jsonb := v_set.context;
+  v jsonb := '[]';
+  m record;
+begin
+  for m in
+    with names as (
+      select n.entity_id, n.id as name_id, n.name, n.name_type, n.valid_from, n.valid_from_precision, n.valid_to, n.valid_to_precision,
+             n.source_id, n.source_detail, false as is_title
+        from public.entity_names n where n.entity_id = any (p_ids)
+      union all
+      select e.id, null, e.name, 'title', e.exists_from, e.exists_from_precision, e.exists_to, e.exists_to_precision, null, null, true
+        from public.entities e where e.id = any (p_ids)
+    ), words as (
+      select t.id as tag_id, t.label, ti.path, lower(t.label) as w,
+             lower(regexp_replace(t.label, '(ies|s)$', case when t.label ~* 'ies$' then 'y' else '' end, 'i')) as w1
+        from public.tags t join public.tag_index ti on ti.id = t.id
+       where length(t.label) >= 3
+    )
+    select distinct on (nm.entity_id, w.tag_id) nm.*, w.tag_id, w.label, w.path
+      from names nm join words w
+        on lower(nm.name) ~ ('(^|[^a-z])(' || regexp_replace(w.w, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') || '|' ||
+                             regexp_replace(w.w1, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') || ')s?($|[^a-z])')
+     where not exists (select 1 from public.entity_tags et where et.entity_id = nm.entity_id and et.tag_id = w.tag_id
+                         and (nm.valid_from is null or et.valid && public.fuzzy_range(nm.valid_from, nm.valid_from_precision, nm.valid_to, nm.valid_to_precision)))
+     order by nm.entity_id, w.tag_id, nm.is_title, nm.valid_from nulls last
+  loop
+    v := v || jsonb_build_object('entity', m.entity_id, 'tag_id', m.tag_id, 'tag', m.label, 'path', m.path, 'name', m.name,
+      'when', internal.rec_span(m.valid_from, m.valid_from_precision, m.valid_to, m.valid_to_precision),
+      'item', internal.rec_item_from_name(m.entity_id, m.valid_from, m.valid_from_precision, m.valid_to, m.valid_to_precision, m.source_id, m.source_detail,
+                                         'tag', to_jsonb(m.tag_id::text), c, true));
+  end loop;
+  return v;
+end;
+$$;
+revoke all on function public.records_tag_suggestions(uuid, uuid[]) from public, anon;
+grant execute on function public.records_tag_suggestions(uuid, uuid[]) to authenticated;
+
 revoke all on function internal.rec_field(text) from public;
 revoke all on function internal.rec_norm(jsonb, jsonb) from public;
 revoke all on function internal.rec_value_label(jsonb, jsonb, date) from public;

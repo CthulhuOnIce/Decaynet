@@ -10,7 +10,12 @@ type Body =
 	| { op: 'undoLast'; after: number }
 	| { op: 'pages'; ids: string[]; patch: Record<string, unknown> }
 	| { op: 'delete'; ids: string[]; expect: number; spaces?: boolean }
-	| { op: 'ids'; search: string; at: string };
+	| { op: 'ids'; search: string; at: string }
+	| { op: 'makeTenant'; ids: string[]; match: string; org: string | null; newName: string | null; opts: Record<string, unknown>; preview?: boolean }
+	| { op: 'tagSuggestions'; ids: string[] }
+	| { op: 'spaces'; id: string }
+	| { op: 'addSpaces'; building: string; rows: Record<string, unknown>[]; preview?: boolean }
+	| { op: 'progress'; progress: Record<string, unknown> };
 
 /** Records' edits, as JSON: write (or preview) items, undo the last edit, page fields, delete, list ids. */
 export const POST: RequestHandler = async ({ request, locals, cookies }) => {
@@ -83,6 +88,44 @@ export const POST: RequestHandler = async ({ request, locals, cookies }) => {
 		const { data, error: err } = await sb.rpc('records_delete', { p_set: needSet(), p_ids: body.ids, p_expect: body.expect, p_spaces: !!body.spaces });
 		if (err) error(400, dbMessage(err));
 		return json(data);
+	}
+
+	if (body.op === 'makeTenant') {
+		const { data, error: err } = await sb.rpc('records_make_tenant', {
+			p_set: needSet(),
+			p_ids: body.ids,
+			p_match: body.match,
+			p_org: body.org || null,
+			p_new: body.org ? null : { name: body.newName, kind: 'organization' },
+			p_opts: body.opts,
+			p_preview: !!body.preview
+		});
+		if (err) error(400, dbMessage(err));
+		return json(data);
+	}
+
+	if (body.op === 'tagSuggestions') {
+		const { data, error: err } = await sb.rpc('records_tag_suggestions', { p_set: needSet(), p_ids: body.ids });
+		if (err) error(400, dbMessage(err));
+		return json(data);
+	}
+
+	if (body.op === 'spaces') {
+		const { data, error: err } = await sb.rpc('interior_spaces', { p_entity: body.id });
+		if (err) error(400, dbMessage(err));
+		return json(data);
+	}
+
+	if (body.op === 'addSpaces') {
+		const { data, error: err } = await sb.rpc('records_add_spaces', { p_set: needSet(), p_building: body.building, p_rows: body.rows, p_preview: !!body.preview });
+		if (err) error(400, dbMessage(err));
+		return json(data);
+	}
+
+	if (body.op === 'progress') {
+		const { error: err } = await sb.from('change_sets').update({ progress: body.progress }).eq('id', needSet());
+		if (err) error(400, dbMessage(err));
+		return json({ ok: true });
 	}
 
 	error(400, 'Unknown request');
