@@ -518,8 +518,8 @@
 							<div><label for="sp-first">First name <span class="muted">if different</span></label><input id="sp-first" name="first_name" placeholder="Kresge's store" /></div>
 							<div><label for="sp-addr">Address <span class="muted">its own</span></label><input id="sp-addr" name="address" placeholder="514 Broadway" /></div>
 						{/if}
-						<div><label for="sp-from">From</label><input id="sp-from" name="valid_from" placeholder="same as building" /></div>
-						<div><label for="sp-to">Until</label><input id="sp-to" name="valid_to" placeholder="blank = still there" /></div>
+						<div><label for="sp-from">From</label><input id="sp-from" name="valid_from" placeholder="from the footprint it fits" /></div>
+						<div><label for="sp-to">Until</label><input id="sp-to" name="valid_to" placeholder="blank = while it fits" /></div>
 					</div>
 					<button>{spaceAreas.length ? `Add ${spaceAreas.length} spaces` : 'Add space'}</button>
 				</form>

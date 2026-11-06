@@ -318,7 +318,9 @@ Responses that can include private pages are sent with `Cache-Control: private, 
 Buildings are polygons, not dots. To record who occupied which part:
 
 1. Give the building a **footprint**: trace it in the workbench, or draw it under **Edit facts → Location & shape**.
-2. Under **Edit facts → Spaces**, draw each storefront, suite or hall *inside* the footprint. Corners snap to the footprint, and a space that pokes out more than 2 m is rejected.
+2. Under **Edit facts → Spaces**, draw each storefront, suite or hall *inside* the footprint. Corners snap to the footprint, and a space that pokes out of every footprint the building has had by more than 2 m is rejected.
+   - **Without dates**, a space takes them from the first footprint (in time) that holds it. A storefront in a wing added in 1955 starts in 1955; one in the original block starts with the building. If a later footprint leaves it out (the wing was torn down), the space ends with the last one that held it.
+   - **With a From date**, the space has to fit the footprint standing then. If it only fits another one, the message says which.
    Or paste GeoJSON: with several polygons (a FeatureCollection of storefronts traced in the workbench, or a MultiPolygon) **each polygon becomes its own space**. The areas are numbered on the map, with a row each to fill in:
    - **Page title**: if left blank, the space goes by its first name, then its address, then a number after the name you typed ("Storefront 3").
    - **First name** *(if different)*: recorded as the space's official name from its start. A later rename (the workbench's *Name from*) takes over from it, so the map shows each name in its own years.
