@@ -14,7 +14,12 @@ export const load: PageServerLoad = async ({ parent, locals, url, cookies }) => 
 	if (!perms.includes('manage_records')) error(403, 'Records is for admins (the “Manage records” permission).');
 
 	const grid = readGrid(url.searchParams);
-	const [setsRes, sources, tags] = await Promise.all([locals.supabase.rpc('records_sets', { p_limit: 12 }), librarySources(locals.supabase), loadTags(locals.supabase)]);
+	const [setsRes, sources, tags, views] = await Promise.all([
+		locals.supabase.rpc('records_sets', { p_limit: 12 }),
+		librarySources(locals.supabase),
+		loadTags(locals.supabase),
+		locals.supabase.from('records_views').select('*').order('name')
+	]);
 	const sets = (setsRes.data ?? []) as ChangeSet[];
 	const current = sets.find((s) => s.id === cookies.get(SET_COOKIE) && !s.undone_at) ?? null;
 	const context: RecordsContext = { ...CONTEXT_DEFAULTS, ...(current?.context ?? {}) };
@@ -35,6 +40,8 @@ export const load: PageServerLoad = async ({ parent, locals, url, cookies }) => 
 		sources,
 		tags,
 		grid: { total: g.total ?? 0, listed: g.listed ?? 0, rows: g.rows ?? [] },
+		views: (views.data ?? []) as { id: string; name: string; query: string; owner_id: string; shared: boolean }[],
+		me: user.id as string,
 		params: url.search
 	};
 };
@@ -130,6 +137,26 @@ export const actions: Actions = {
 		const { error: err } = await locals.supabase.from('change_sets').update({ title }).eq('id', cookies.get(SET_COOKIE) ?? '');
 		if (err) return fail(400, { error: dbMessage(err) });
 		return { renamed: true };
+	},
+
+	/** Keep the grid as it is (filters, columns, sort) under a name, for you or every admin. */
+	saveView: async ({ request, locals }) => {
+		await requirePermission(locals, 'manage_records');
+		const fd = await request.formData();
+		const name = (str(fd, 'name') ?? '').slice(0, 120);
+		if (!name) return fail(400, { error: 'Give the view a name.' });
+		const query = new URLSearchParams(str(fd, 'query') ?? '');
+		query.delete('page');
+		const { error: err } = await locals.supabase.from('records_views').insert({ name, query: `?${query}`, shared: fd.get('shared') === 'on' });
+		if (err) return fail(400, { error: dbMessage(err) });
+		return { savedView: name };
+	},
+
+	deleteView: async ({ request, locals }) => {
+		await requirePermission(locals, 'manage_records');
+		const { error: err } = await locals.supabase.from('records_views').delete().eq('id', str(await request.formData(), 'id') ?? '');
+		if (err) return fail(400, { error: dbMessage(err) });
+		return { deletedView: true };
 	},
 
 	/** Undo the open change set as a whole (refused, with what's in the way, if things changed since). */

@@ -1,10 +1,13 @@
 <script lang="ts">
 	import { formatFuzzy, formatRange } from '$lib/time';
+	import RecordsNav from '../RecordsNav.svelte';
 	let { data } = $props();
 	const when = (d: string) => new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 </script>
 
 <svelte:head><title>Change sets · Records · Admin</title></svelte:head>
+
+<RecordsNav />
 
 <div class="spread">
 	<h1>Your change sets</h1>

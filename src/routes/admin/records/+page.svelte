@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { tick, untrack } from 'svelte';
 	import { enhance } from '$app/forms';
-	import { goto, invalidateAll } from '$app/navigation';
+	import { afterNavigate, goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
 	import SourcePicker from '$lib/components/SourcePicker.svelte';
 	import SourceFields from '$lib/components/SourceFields.svelte';
@@ -14,6 +14,7 @@
 		CONFLICTS,
 		MODES,
 		PER_PAGE,
+		PRESET_VIEWS,
 		SORTS,
 		allColumns,
 		readGrid,
@@ -26,6 +27,7 @@
 	import CellEditor, { type EditorSubmit } from './CellEditor.svelte';
 	import Preview from './Preview.svelte';
 	import WorkThrough from './WorkThrough.svelte';
+	import RecordsNav from './RecordsNav.svelte';
 
 	let { data, form } = $props();
 
@@ -78,6 +80,8 @@
 		u.delete(k);
 		keep.forEach((x) => u.append(k, x));
 	}
+	let viewsOpen = $state(false);
+	afterNavigate(() => (viewsOpen = false));
 	let qText = $state(untrack(() => grid.search.q));
 	$effect(() => {
 		const q = grid.search.q;
@@ -574,6 +578,8 @@
 
 <svelte:head><title>Records · Admin</title></svelte:head>
 
+<RecordsNav />
+
 <!-- ======================================================== context -->
 <section class="context" class:live={editing} aria-label="What you're working from">
 	{#if !ctxOpen}
@@ -691,6 +697,32 @@
 			{#each SORTS as s (s.id)}<option value={s.id}>{s.label}</option>{/each}
 		</select>
 	</label>
+	<details class="cols views" bind:open={viewsOpen}>
+		<summary class="btn ghost">Views</summary>
+		<div class="col-menu view-menu">
+			<div class="col-group">
+				<div class="eyebrow">Ready-made</div>
+				{#each PRESET_VIEWS as v (v.href)}<a class="view" href={v.href} data-sveltekit-reload={!v.href.startsWith('/admin/records?')}>{v.name}</a>{/each}
+			</div>
+			<div class="col-group">
+				<div class="eyebrow">Saved</div>
+				{#each data.views as v (v.id)}
+					<div class="view-row">
+						<a class="view" href="/admin/records{v.query}">{v.name}{v.shared ? ' · shared' : ''}</a>
+						{#if v.owner_id === data.me}
+							<form method="post" action="?/deleteView" use:enhance><input type="hidden" name="id" value={v.id} /><button class="x" aria-label="Delete {v.name}" title="Delete">×</button></form>
+						{/if}
+					</div>
+				{:else}<p class="muted small">None yet.</p>{/each}
+				<form method="post" action="?/saveView" use:enhance={() => async ({ update }) => update()} class="save-view">
+					<input type="hidden" name="query" value={page.url.search} />
+					<input name="name" placeholder="Name this view…" aria-label="View name" required />
+					<label class="check small"><input type="checkbox" name="shared" /> Share with the other admins</label>
+					<button class="ghost">Save</button>
+				</form>
+			</div>
+		</div>
+	</details>
 	<details class="cols">
 		<summary class="btn ghost">Columns ({shown.length})</summary>
 		<div class="col-menu">
@@ -730,6 +762,7 @@
 	<button class="ghost" onclick={openTagSuggestions} disabled={!rows.length || !editing} title="Tags whose names appear in these pages' names, dated like those names">Tags from names…</button>
 	<button class="ghost" onclick={openFill} disabled={!rows.length} title="Number the selected rows in order (house numbers, storefronts…)">Fill series…</button>
 	<button class="ghost" onclick={confirmRows} disabled={!rows.length || !editing} title="Each row's values, seen in {year}: cited and joined up">Confirm {sel.size ? 'selected' : 'page'}</button>
+	{#if sel.size && sel.size <= 300}<a class="btn ghost" href="/admin/records/facts?table=entity_states&ids={[...sel].join(',')}" title="Their conditions, names, addresses, facts, tags and links, one record at a time">Their records</a>{/if}
 	<button class="ghost" onclick={exportCsv} disabled={!rows.length}>CSV</button>
 	{#if sel.size}<button class="ghost danger-text" onclick={() => (del = { typed: '', spaces: false })} disabled={!editing}>Delete…</button>{/if}
 	{#if sel.size}<button class="ghost" onclick={() => (sel = new Set())}>Untick</button>{/if}
@@ -1128,6 +1161,33 @@
 		max-height: 60vh;
 		overflow: auto;
 		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+	}
+	.view-menu {
+		min-width: 420px;
+	}
+	.view {
+		display: block;
+		padding: 3px 0;
+		font-size: 0.88rem;
+	}
+	.view-row {
+		display: flex;
+		justify-content: space-between;
+		gap: 6px;
+		align-items: center;
+	}
+	.view-row .x {
+		border: 0;
+		background: none;
+		color: var(--muted);
+		padding: 0 4px;
+	}
+	.save-view {
+		display: grid;
+		gap: 4px;
+		margin-top: 8px;
+		border-top: 1px solid var(--line);
+		padding-top: 8px;
 	}
 	.col-group {
 		min-width: 150px;

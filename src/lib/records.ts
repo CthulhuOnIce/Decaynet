@@ -327,3 +327,48 @@ export const FIELD_LABELS: Record<string, string> = {
 	exists_to: 'ends',
 	is_private: 'private'
 };
+
+/** The tables of individual records, as Records > Each record lists them. */
+export const FACT_TABLES = [
+	{ id: 'entity_states', label: 'Conditions', field: 'status' },
+	{ id: 'entity_names', label: 'Names', field: 'name' },
+	{ id: 'addresses', label: 'Addresses', field: 'address' },
+	{ id: 'entity_attributes', label: 'Facts', field: 'attr' },
+	{ id: 'entity_tags', label: 'Tags', field: 'tag' },
+	{ id: 'relations', label: 'Links', field: 'rel' },
+	{ id: 'entity_geometries', label: 'Shapes', field: null }
+] as const;
+
+export interface FactRow {
+	id: string;
+	entity_id: string;
+	slug: string;
+	name: string;
+	kind: string;
+	value: string;
+	f: string | null;
+	fp: string;
+	t: string | null;
+	tp: string;
+	span: string;
+	conf: string;
+	src: string | null;
+	src_title: string | null;
+	detail: string | null;
+	note: string | null;
+	updated_at: string;
+	raw: Record<string, unknown>;
+}
+
+/** Ready-made views: the usual clean-up lists. */
+export const PRESET_VIEWS = [
+	{ name: 'Buildings with no shape', href: '/admin/records?kind=building&has_shape=unset&sort=address' },
+	{ name: 'Buildings with no spaces yet', href: '/admin/records?kind=building&has_spaces=unset&sort=address' },
+	{ name: 'Pages with no start date', href: '/admin/records?has_start=unset' },
+	{ name: 'Buildings with no condition', href: '/admin/records?kind=building&has_condition=unset' },
+	{ name: 'Spaces, building by building', href: '/admin/records?kind=space&sort=tree&cols=name,parent,rel:occupies:in,address,tag' },
+	{ name: 'Conditions nobody cited', href: '/admin/records/facts?table=entity_states&uncited=1' },
+	{ name: 'Addresses nobody cited', href: '/admin/records/facts?table=addresses&uncited=1' },
+	{ name: 'Tenancies nobody cited', href: '/admin/records/facts?table=relations&predicate=occupies&uncited=1' },
+	{ name: 'Disputed or speculative facts', href: '/admin/records/facts?table=entity_attributes&conf=disputed&conf=speculative' }
+];

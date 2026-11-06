@@ -24,6 +24,7 @@ Built with **SvelteKit 2 / Svelte 5**, **Supabase** (Postgres 17 + PostGIS, Auth
   - [When a whole area's layout changed](#when-a-whole-areas-layout-changed)
   - [Importing GIS data](#importing-gis-data)
   - [Spreadsheets: a block's businesses at once](#spreadsheets-a-blocks-businesses-at-once)
+  - [Records: many pages at once, as of a year](#records-many-pages-at-once-as-of-a-year)
   - [Starter pages from OpenHistoricalMap & Wikidata](#starter-pages-from-openhistoricalmap--wikidata)
   - [Anonymous tips](#anonymous-tips)
   - [Administration](#administration)
@@ -398,6 +399,7 @@ The modern grid is a poor guide to the past. The lakefront was filled for the mi
   The year box takes "May 1958" or "1950s" too.
   - **✥ Move / turn**: drag the handle (arrow keys nudge, `[` `]` turn) to fix shapes traced from a sheet that was aligned a little off. The shapes shown in that year move where they always were, with no new version, and the storefronts and suites inside them come along.
   - **✎ Redraw from a year** (one building): its shape loads into Trace with a handle on each corner. Drag corners, click beside a side to add one, or pick one and remove it. Saving ends the old shape at that year and starts the new one, up to the old one's end (a renovation, or a better map from then on).
+  - **Open in Records** (admins): the selection as a spreadsheet, as of the year you're looking at, sorted west to east, to set a block's addresses, tenants or anything else at once (see [Records](#records-many-pages-at-once-as-of-a-year)).
 
 ### Importing GIS data
 
@@ -435,6 +437,59 @@ Bulk tools (area change and import) need the *Bulk map tools* permission.
 Rows with the same name in one sheet are one page, so a business followed through several directories (one row per year) gets one page with each year's facts and address. **[CSVs.md](CSVs.md)** is the full guide to writing sheets: every column, date forms, timed facts, links, recipes and troubleshooting.
 
 Everything goes in as one import, listed under *Recent spreadsheet imports*, and a moderator can **undo** it: that deletes the pages it created and the links, names, tags, facts and addresses it added to existing pages.
+
+### Records: many pages at once, as of a year
+
+**Admin → Records** (`/admin/records`, admins only: the *Manage records* permission) is a spreadsheet of pages for managing and auditing the data in bulk: filter, tick, edit, and every edit is dated and cited for you.
+
+**1. Say what you're working from.** The bar at the top holds the context for every edit:
+
+| | |
+|---|---|
+| **As of** | The year (1925), or a range for *Only* (1925 to 1930). Fuzzy dates work: *1920s*, *May 1925*. The grid shows what every page was like then. |
+| **Edits land** | How an edit goes into the timeline (below). |
+| **Citing** | The map, directory or photo you're working from, plus *Where in it* (sheet 14, p. 214). Required, except for corrections. |
+| **Confidence** | Given to everything you add. |
+| **If another source disagrees** | What to do when an edit would cut a fact cited to a different source: skip that row (the default), add yours alongside it marked *disputed*, or cut it back anyway. |
+
+*Start editing* opens a **change set**: everything you change from then on is kept together, so you can review it or undo it as a whole later.
+
+**How edits land in time:**
+
+| Mode | For | What it does |
+|---|---|---|
+| **Seen in** *(default)* | A snapshot: a map, a directory, a photo | If the same value is recorded next to that year with nothing different in between, it's widened to cover it (and cited, if it wasn't). Otherwise the value starts that year and what was there ends *by* then; later records are left alone. A tenant or tag seen once holds just that year, and joins up with the next sighting. The same year again from the same source corrects the entry instead of adding a second one. |
+| **Starting** | A change: a renumbering, a new tenant | What was there ends, and the new value runs up to the next recorded change. |
+| **Only** | Exactly these years | What overlaps is trimmed, or split around them. |
+| **Correction** | A typo or wrong entry | The record in force then is fixed in place: no new history, no source needed. |
+
+**2. Pick the pages.** Search by any name a page ever had, filter by kind or by what's missing, or pick *Inside a building…*. *More filters…* opens the same filters in Advanced search, and its results have **Open in Records**. In the workbench, Shift-select buildings and choose **Open in Records**: you get those pages as of the year you were looking at, sorted west to east. *Views* has ready-made lists (buildings with no shape, no spaces or no condition, uncited conditions…) and saves your own, for you or for every admin.
+
+**Sorts** include *Address then*, *Buildings, then their spaces* (a tree) and **west → east / north → south**, by where each footprint was that year. Along a street, the two sides are told apart by the widest gap across the run, so each row is labelled *north side* or *south side*.
+
+**Columns:** the name then, condition, address, tags, tenants, lifespan, inside (the building a space is in), spaces, shape, summary, every fact (height, floors, architect…) and every kind of link, both ways. Each value shows ◆ when it's cited and ○ when it isn't; hover for its dates and source.
+
+**3. Edit.**
+- **One cell:** double-click it, or select it and start typing; Enter saves, Esc cancels. Each kind of column gets its own editor: a condition list, street plus number plus unit (or just type *512 Broadway*), tag and page pickers. The editor can change the mode for that one edit.
+- **Many rows:** tick them (Shift-click for a run, or *Select all N matching*), then edit one cell. It applies to all of them, previewed first: what will change, what's already so, what's skipped and why, and which rows another source disagrees with.
+- **Paste a column** from a spreadsheet into the selected cell: one value per row, downwards.
+- **Fill series** numbers the ticked rows in the order shown: *start 500, step 2*, odd numbers on one side of the street and even on the other. It also fills text (*Storefront {n}*) and numeric facts.
+- **Confirm** cites what each row shows as seen in the year, and joins it up with the same value either side. This makes a directory pass one click per row.
+- **Delete…** asks you to type the count, and can take the spaces inside too. **CSV** exports what's shown.
+- **Ctrl+Z** undoes your last edit.
+
+**4. The workflows it was built for:**
+- **A business that only existed as named spaces.** List the spaces with that name (*kind: space*, search *Kresge*: any name they ever had), tick them, then **Make tenant…**. Pick the organization or name a new one. For each space, the years it carried that name become years of tenancy, cited to the names' own sources. Optionally the name records become the space's unit (*Storefront*), and the organization's lifespan widens to cover its tenancies.
+- **A whole block's addresses.** Select the block in the workbench, Open in Records, sort west → east, tick the rows, then *Fill series* on the address column.
+- **Stubbing in spaces, building by building.** Filter to buildings with no spaces, then **Work through**. One building at a time opens in a side panel: what it shows that year and its existing spaces. Describe the new ones (*3 storefronts, 2 offices upstairs, a basement bar*), adjust units, floors, first names, addresses and tenants, and press **Ctrl+Enter** to save and move on. They're added as seen in the year, without shapes, for you to draw in the workbench later. The change set remembers where you stopped (*Resume at …*).
+- **Tags from names.** For the ticked rows, **Tags from names…** finds tags whose name appears in a page's names (*Joe's Taverns* → *Tavern*), dated like those names, for you to tick through.
+
+**5. Each record, the audit log and change sets.**
+- **Each record** lists the records themselves: every condition, name, address, fact, tag, link or shape as its own row. Filter them (uncited, a confidence level, in force between years, a fact or link type, the pages you ticked), then **cite** a whole list with the open source, set confidence, delete, or double-click one to correct its value, dates, source or note in place.
+- **Audit log** is everything anyone changed, newest first, field by field (before → after). Filter it by what, kind of change, who, page and date. **Take back** undoes one change (anyone's) inside your open change set, unless that record was changed again since.
+- **Change sets** lists yours. Each one's review page shows every change it made, before and after. **Undo the whole set** puts every row it touched back as it was before the set, deleted pages included, with their articles, shapes and sources. If something outside the set changed those rows since, it lists them and doesn't undo.
+
+Every edit goes through the same database rules as the rest of the site (row-level security, the change log, the checks on dates and kinds). Shapes, a page's kind and its URL aren't edited here: use the workbench and *Duplicate as another kind*.
 
 ### Starter pages from OpenHistoricalMap & Wikidata
 
@@ -532,6 +587,7 @@ Tick a box to grant a permission to a role, and add your own roles (e.g. "Archiv
 | Clean up timelines (review and apply timeline fixes) | | | ✓ | ✓ |
 | Manage users | | | | ✓ |
 | Manage site settings | | | | ✓ |
+| Manage records (Admin → Records: bulk edits, change sets, audit log) | | | | ✓ |
 
 **Users** (*Admin → Users*):
 - Change roles and suspend accounts. Suspended users can still read.

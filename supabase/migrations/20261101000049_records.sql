@@ -1851,6 +1851,238 @@ $$;
 revoke all on function public.records_tag_suggestions(uuid, uuid[]) from public, anon;
 grant execute on function public.records_tag_suggestions(uuid, uuid[]) to authenticated;
 
+
+-- ---------------------------------------------------------------------------------------------
+-- The records themselves: one row per dated fact, for corrections, citing and cleaning up
+
+-- What each table's rows are about, and how its value reads
+create or replace function internal.rec_table(p_table text) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+begin
+  return case p_table
+    when 'entity_names' then jsonb_build_object('ent', 'entity_id', 'value', 't.name', 'search', 't.name', 'cols', '{name,name_type,language}')
+    when 'entity_states' then jsonb_build_object('ent', 'entity_id', 'value', 'coalesce((select label from public.lifecycle_statuses where id = t.status), t.status)', 'search', 't.status || '' '' || coalesce(t.description, '''')', 'cols', '{status,description}')
+    when 'addresses' then jsonb_build_object('ent', 'entity_id', 'value', 'coalesce(public.address_label(t.house_number, (select name from public.entities where id = t.street_id), t.raw_address), '''') || coalesce('' #'' || t.unit, '''')', 'search', 'coalesce(t.house_number, '''') || '' '' || coalesce((select name from public.entities where id = t.street_id), '''') || '' '' || coalesce(t.raw_address, '''')', 'cols', '{house_number,unit,street_id,raw_address,postal_code}')
+    when 'entity_attributes' then jsonb_build_object('ent', 'entity_id', 'value', '(select label from public.attribute_keys where id = t.key) || '': '' || (t.value #>> ''{}'') || coalesce('' '' || (select unit from public.attribute_keys where id = t.key), '''')', 'search', 't.key || '' '' || (t.value #>> ''{}'')', 'cols', '{value}')
+    when 'entity_tags' then jsonb_build_object('ent', 'entity_id', 'value', '(select path from public.tag_index where id = t.tag_id)', 'search', '(select path from public.tag_index where id = t.tag_id)', 'cols', '{}')
+    when 'relations' then jsonb_build_object('ent', 'subject_id', 'value', '(select label from public.relation_types where id = t.predicate) || '' '' || (select name from public.entities where id = t.object_id)', 'search', 't.predicate || '' '' || (select name from public.entities where id = t.object_id)', 'cols', '{qualifiers}')
+    when 'entity_geometries' then jsonb_build_object('ent', 'entity_id', 'value', 't.role', 'search', 't.role', 'cols', '{}')
+    else null end;
+end;
+$$;
+revoke all on function internal.rec_table(text) from public;
+
+-- One table's rows. p: {table, ids?, kinds?, uncited?, confidences?, from_year?, to_year?,
+-- text?, key?, predicate?, set?, sort: page|start|updated, limit, offset}
+-- Returns {total, rows: [{id, entity_id, slug, name, kind, value, f, fp, t, tp, span, conf,
+--          src, src_title, detail, note, updated_at, raw}]}
+create or replace function public.records_facts(p jsonb) returns jsonb
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare
+  v_table text := p ->> 'table';
+  d jsonb := internal.rec_table(p ->> 'table');
+  w text[] := '{}';
+  v_lim int := least(greatest(coalesce(nullif(p ->> 'limit', '')::int, 100), 1), 500);
+  v_off int := greatest(coalesce(nullif(p ->> 'offset', '')::int, 0), 0);
+  arr text[];
+  v_order text;
+  v jsonb;
+begin
+  if not public.has_permission('manage_records') then
+    raise exception 'You need the manage records permission' using errcode = '42501';
+  end if;
+  if d is null then
+    raise exception 'Unknown table' using errcode = '22023';
+  end if;
+  arr := (select array_agg(x) from jsonb_array_elements_text(p -> 'ids') x);
+  if arr is not null then w := w || format('t.%I = any (%L::uuid[])', d ->> 'ent', arr); end if;
+  arr := (select array_agg(x) from jsonb_array_elements_text(p -> 'kinds') x);
+  if arr is not null then w := w || format('e.kind = any (%L::text[])', arr); end if;
+  if coalesce((p ->> 'uncited')::boolean, false) then w := w || 't.source_id is null'::text; end if;
+  arr := (select array_agg(x) from jsonb_array_elements_text(p -> 'confidences') x);
+  if arr is not null then w := w || format('t.confidence = any (%L::public.confidence_level[])', arr); end if;
+  if nullif(p ->> 'from_year', '') is not null or nullif(p ->> 'to_year', '') is not null then
+    w := w || format('t.valid && daterange(%L::date, %L::date, ''[)'')',
+      case when nullif(p ->> 'from_year', '') is not null then make_date((p ->> 'from_year')::int, 1, 1) end,
+      case when nullif(p ->> 'to_year', '') is not null then make_date((p ->> 'to_year')::int + 1, 1, 1) end);
+  end if;
+  if nullif(btrim(p ->> 'text'), '') is not null then
+    w := w || format('(%s) ilike %L', d ->> 'search', '%' || replace(replace(btrim(p ->> 'text'), '%', '\%'), '_', '\_') || '%');
+  end if;
+  if v_table = 'entity_attributes' and nullif(p ->> 'key', '') is not null then w := w || format('t.key = %L', p ->> 'key'); end if;
+  if v_table = 'relations' and nullif(p ->> 'predicate', '') is not null then w := w || format('t.predicate = %L', p ->> 'predicate'); end if;
+  if v_table = 'entity_names' and nullif(p ->> 'name_type', '') is not null then w := w || format('t.name_type = %L', p ->> 'name_type'); end if;
+  if nullif(p ->> 'set', '') is not null then
+    w := w || format('t.id in (select row_id from public.change_log where change_set_id = %L::uuid)', (p ->> 'set')::uuid);
+  end if;
+  v_order := case p ->> 'sort' when 'start' then 'lower(t.valid) nulls first, lower(e.name)'
+                               when 'updated' then 't.updated_at desc'
+                               else 'lower(e.name), lower(t.valid) nulls first' end;
+  execute format($q$
+    with hit as (
+      select t.*, e.slug, e.name as page_name, e.kind, %1$s as value_label, count(*) over () as total
+        from public.%2$I t join public.entities e on e.id = t.%3$I
+       where %4$s
+       order by %5$s
+       limit %6$s offset %7$s)
+    select jsonb_build_object('total', coalesce(max(total), 0), 'rows', coalesce(jsonb_agg(jsonb_build_object(
+             'id', h.id, 'entity_id', h.%3$I, 'slug', h.slug, 'name', h.page_name, 'kind', h.kind, 'value', h.value_label,
+             'f', h.valid_from, 'fp', h.valid_from_precision, 't', h.valid_to, 'tp', h.valid_to_precision,
+             'span', internal.rec_span(h.valid_from, h.valid_from_precision, h.valid_to, h.valid_to_precision),
+             'conf', h.confidence, 'src', h.source_id, 'src_title', (select title from public.sources where id = h.source_id),
+             'detail', h.source_detail, 'note', h.note, 'updated_at', h.updated_at,
+             'raw', to_jsonb(h) - 'geom' - 'valid' - 'total' - 'slug' - 'page_name' - 'kind' - 'value_label')), '[]'::jsonb))
+      from hit h$q$,
+    d ->> 'value', v_table, d ->> 'ent', case when cardinality(w) = 0 then 'true' else array_to_string(w, ' and ') end,
+    v_order, v_lim, v_off)
+  into v;
+  -- the total of every match, not just this page (the window counts within the limit when empty)
+  if (v ->> 'total')::int = 0 and v_off > 0 then
+    execute format('select count(*) from public.%I t join public.entities e on e.id = t.%I where %s', v_table, d ->> 'ent',
+                   case when cardinality(w) = 0 then 'true' else array_to_string(w, ' and ') end) into v_lim;
+    v := v || jsonb_build_object('total', v_lim);
+  end if;
+  return v;
+end;
+$$;
+revoke all on function public.records_facts(jsonb) from public, anon;
+grant execute on function public.records_facts(jsonb) to authenticated;
+
+-- Correct records in place (no new history): dates, confidence, source, note, and the value
+-- columns of their table. Returns {changed, after}
+create or replace function public.records_fact_update(p_set uuid, p_table text, p_ids uuid[], p_patch jsonb) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_set public.change_sets := internal.rec_open_set(p_set);
+  d jsonb := internal.rec_table(p_table);
+  v_sets text[] := '{}';
+  k text;
+  v_n int;
+  v_before bigint := (select coalesce(max(id), 0) from public.change_log);
+begin
+  if d is null or p_table = 'entity_geometries' then
+    raise exception 'Records can''t change that table here' using errcode = '22023';
+  end if;
+  for k in select jsonb_object_keys(p_patch) loop
+    if k in ('valid_from', 'valid_to') then
+      v_sets := v_sets || format('%I = %L::date', k, nullif(p_patch ->> k, ''));
+    elsif k in ('valid_from_precision', 'valid_to_precision') then
+      v_sets := v_sets || format('%I = %L::public.date_precision', k, p_patch ->> k);
+    elsif k = 'confidence' then
+      v_sets := v_sets || format('confidence = %L::public.confidence_level', p_patch ->> k);
+    elsif k = 'source_id' then
+      v_sets := v_sets || format('source_id = %L::uuid', nullif(p_patch ->> k, ''));
+    elsif k in ('source_detail', 'note') then
+      v_sets := v_sets || format('%I = %L', k, nullif(btrim(p_patch ->> k), ''));
+    elsif k = any (array(select jsonb_array_elements_text(to_jsonb((d ->> 'cols')::text[])))) then
+      if k = 'value' then
+        v_sets := v_sets || format('value = %L::jsonb', p_patch -> k);
+      elsif k = 'street_id' then
+        v_sets := v_sets || format('street_id = %L::uuid', nullif(p_patch ->> k, ''));
+      elsif k = 'qualifiers' then
+        v_sets := v_sets || format('qualifiers = %L::jsonb', coalesce(p_patch -> k, '{}'));
+      else
+        v_sets := v_sets || format('%I = %L', k, nullif(btrim(p_patch ->> k), ''));
+      end if;
+    else
+      raise exception 'Records can''t change “%” here', k using errcode = '22023';
+    end if;
+  end loop;
+  if cardinality(v_sets) = 0 then
+    return jsonb_build_object('changed', 0, 'after', v_before);
+  end if;
+  perform set_config('decaynet.change_set', p_set::text, true);
+  execute format('update public.%I set %s where id = any ($1)', p_table, array_to_string(v_sets, ', ')) using p_ids;
+  get diagnostics v_n = row_count;
+  update public.change_sets set updated_at = now() where id = p_set;
+  perform set_config('decaynet.change_set', '', true);
+  return jsonb_build_object('changed', v_n, 'after', v_before);
+end;
+$$;
+revoke all on function public.records_fact_update(uuid, text, uuid[], jsonb) from public, anon;
+grant execute on function public.records_fact_update(uuid, text, uuid[], jsonb) to authenticated;
+
+create or replace function public.records_fact_delete(p_set uuid, p_table text, p_ids uuid[]) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_set public.change_sets := internal.rec_open_set(p_set);
+  v_n int;
+  v_before bigint := (select coalesce(max(id), 0) from public.change_log);
+begin
+  if internal.rec_table(p_table) is null then
+    raise exception 'Unknown table' using errcode = '22023';
+  end if;
+  perform set_config('decaynet.change_set', p_set::text, true);
+  execute format('delete from public.%I where id = any ($1)', p_table) using p_ids;
+  get diagnostics v_n = row_count;
+  update public.change_sets set updated_at = now() where id = p_set;
+  perform set_config('decaynet.change_set', '', true);
+  return jsonb_build_object('deleted', v_n, 'after', v_before);
+end;
+$$;
+revoke all on function public.records_fact_delete(uuid, text, uuid[]) from public, anon;
+grant execute on function public.records_fact_delete(uuid, text, uuid[]) to authenticated;
+
+-- Take back one logged change (anyone's), as part of the open change set: an addition is
+-- removed, an edit or removal put back. Refused when the row changed again since.
+-- Returns {reverted, conflict?, after}
+create or replace function public.records_revert(p_set uuid, p_log bigint) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_set public.change_sets := internal.rec_open_set(p_set);
+  c public.change_log;
+  v_later public.change_log;
+  v_before bigint := (select coalesce(max(id), 0) from public.change_log);
+  v_key text;
+begin
+  select * into c from public.change_log where id = p_log;
+  if not found or c.row_id is null then
+    raise exception 'No such change' using errcode = '22023';
+  end if;
+  if internal.rec_table(c.table_name) is null and c.table_name not in ('entities', 'event_details', 'media_items') then
+    raise exception 'Records can''t take back changes to %', c.table_name using errcode = '22023';
+  end if;
+  if c.table_name = 'entity_geometries' and c.op <> 'INSERT' and not (c.old_data ? 'geom') then
+    raise exception 'That shape change was made outside Records, so its outline wasn''t kept: redraw it in the workbench' using errcode = '22023';
+  end if;
+  select * into v_later from public.change_log where row_id = c.row_id and table_name = c.table_name and id > c.id order by id limit 1;
+  if found then
+    return jsonb_build_object('reverted', false, 'conflict', 'it was changed again since, ' || to_char(v_later.created_at, 'YYYY-MM-DD HH24:MI'));
+  end if;
+  perform set_config('decaynet.change_set', p_set::text, true);
+  v_key := case when c.table_name in ('event_details', 'media_items') then 'entity_id' else 'id' end;
+  if c.op = 'INSERT' then
+    execute format('delete from public.%I where %I = $1', c.table_name, v_key) using c.row_id;
+  elsif not internal.rec_restore(c.table_name, c.row_id, c.old_data, p_set) then
+    raise exception 'Can''t put it back: what it belonged to is gone' using errcode = '23503';
+  end if;
+  update public.change_sets set updated_at = now() where id = p_set;
+  perform set_config('decaynet.change_set', '', true);
+  return jsonb_build_object('reverted', true, 'after', v_before);
+end;
+$$;
+revoke all on function public.records_revert(uuid, bigint) from public, anon;
+grant execute on function public.records_revert(uuid, bigint) to authenticated;
+
+-- Saved views: a Records URL with a name, yours or shared with the other admins
+create table public.records_views (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (btrim(name) <> ''),
+  query text not null,
+  owner_id uuid not null default auth.uid() references public.profiles (id) on delete cascade,
+  shared boolean not null default false,
+  created_at timestamptz not null default now()
+);
+alter table public.records_views enable row level security;
+create policy "record managers read views" on public.records_views for select
+  using ((select public.has_permission('manage_records')) and (shared or owner_id = (select auth.uid())));
+create policy "record managers save views" on public.records_views for insert
+  with check ((select public.has_permission('manage_records')) and owner_id = (select auth.uid()));
+create policy "record managers change their views" on public.records_views for update
+  using (owner_id = (select auth.uid()));
+create policy "record managers delete their views" on public.records_views for delete
+  using (owner_id = (select auth.uid()));
+
 revoke all on function internal.rec_field(text) from public;
 revoke all on function internal.rec_norm(jsonb, jsonb) from public;
 revoke all on function internal.rec_value_label(jsonb, jsonb, date) from public;

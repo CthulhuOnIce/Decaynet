@@ -15,7 +15,10 @@ type Body =
 	| { op: 'tagSuggestions'; ids: string[] }
 	| { op: 'spaces'; id: string }
 	| { op: 'addSpaces'; building: string; rows: Record<string, unknown>[]; preview?: boolean }
-	| { op: 'progress'; progress: Record<string, unknown> };
+	| { op: 'progress'; progress: Record<string, unknown> }
+	| { op: 'factUpdate'; table: string; ids: string[]; patch: Record<string, unknown> }
+	| { op: 'factDelete'; table: string; ids: string[] }
+	| { op: 'revert'; log: number };
 
 /** Records' edits, as JSON: write (or preview) items, undo the last edit, page fields, delete, list ids. */
 export const POST: RequestHandler = async ({ request, locals, cookies }) => {
@@ -126,6 +129,24 @@ export const POST: RequestHandler = async ({ request, locals, cookies }) => {
 		const { error: err } = await sb.from('change_sets').update({ progress: body.progress }).eq('id', needSet());
 		if (err) error(400, dbMessage(err));
 		return json({ ok: true });
+	}
+
+	if (body.op === 'factUpdate') {
+		const { data, error: err } = await sb.rpc('records_fact_update', { p_set: needSet(), p_table: body.table, p_ids: body.ids, p_patch: body.patch });
+		if (err) error(400, dbMessage(err));
+		return json(data);
+	}
+
+	if (body.op === 'factDelete') {
+		const { data, error: err } = await sb.rpc('records_fact_delete', { p_set: needSet(), p_table: body.table, p_ids: body.ids });
+		if (err) error(400, dbMessage(err));
+		return json(data);
+	}
+
+	if (body.op === 'revert') {
+		const { data, error: err } = await sb.rpc('records_revert', { p_set: needSet(), p_log: body.log });
+		if (err) error(400, dbMessage(err));
+		return json(data);
 	}
 
 	error(400, 'Unknown request');
