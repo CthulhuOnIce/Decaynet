@@ -244,11 +244,23 @@ At country or world scale, the map only fetches what's in view (plus a margin) a
 - **Click anything** to see it *as of that year*: its name then, its condition, address, tenants, connections and photos. Links in the panel jump to other pages at the same year.
 - **Colours** show condition: green for active, amber for declining or vacant, rust for abandoned, dark red for ruin. *Ghosts* (dashed outlines) are places already gone by the chosen year.
 - **Layers panel:**
+  - **Find in 1945–1950**: search what was there in the slider's year and the five before, by the names and addresses it had then. Type "Gary Arcade" with the slider at 1950 and the building comes up under that name, with its later name beside it, and anything already gone by the year is marked *gone*. Click a result to fly to it. The years follow the slider, and *More filters* opens advanced search with the same words and years;
   - toggle kinds (streets, buildings, spaces, water…);
   - choose how the modern basemap behaves (*fade with time*, *always*, *hidden*);
   - filter to things carrying a tag, including its sub-traits.
 - **Events ±5 years** appear as glowing dots and in a list. Things fade with distance in time.
 - **Share a view:** the URL keeps the year, selection, map position and tag filter, for example `/?y=1955&sel=…&c=-87.338,41.601,15.4&tag=entertainment`.
+- **Advanced search** (`/search/advanced`, linked from the search page) combines any of these filters. The whole search is in the URL, so a link brings it back:
+  - **Text** in names (every name a page had), addresses, summaries or article text. It can match *fuzzy* (close spellings and parts of words: "Hotl Gary"), *contains*, *starts with* or *exactly*. An address with a house number only matches that number.
+  - **Kind**.
+  - **When:** *existed between* two years (with a *time machine* shortcut: a year and the five before), *started between*, *ended between*. Within the years, names and addresses are matched as they were then, and each result shows its name and condition then.
+  - **Condition** in a year, or *none recorded*.
+  - **Tag**, including its sub-traits.
+  - **Has or lacks**, for each of: start or end date, a shape on the map, an address, a condition, other names, citations, an article of 60+ words, photos, tags, links. For example, every building with no condition yet.
+  - **Facts:** in a range (floors ≥ 3, employees 50–200), matching text, or *not recorded*.
+  - **Address:** a street, by any of its names and allowing close spellings, between house numbers.
+  - **Article status** and how certain the dates are.
+  - **Sort** by best match, name, oldest, gone first or recently edited. Results come 50 a page, each with a link to it on the map in that year. On a phone the filters fold away once there are results.
 - **Search** matches historic names too: "Genesis Towers" finds Hotel Gary. It also finds street addresses: "577 Washington St" lists the buildings at that address, links to their pages and jumps to them on the map. Addresses the wiki doesn't know yet are geocoded from OpenStreetMap, with a *Create a page here* shortcut that carries the address and map point onto the new page.
 
 ### Adding and editing pages
@@ -583,6 +595,7 @@ Key RPCs:
 | `entity_snapshot(id, at)` / `entity_timeline(id)` / `entity_relations(id)` | One entity folded to a date / every fact in order / all edges with period-correct names |
 | `moments_near(at, years)` / `chronology(from, to)` | Events and photos near a date / the city-wide chronology |
 | `search_entities(q)` | Fuzzy search across current and historic names |
+| `advanced_search(p)` | Every filter at once (one JSON object), within years; the map's *Find in* uses it for the year and the five before |
 | `search_addresses(q)` | Fuzzy search across street addresses, with the linked page and a map point |
 | `building_spaces(id, at)` / `add_space(...)` | Spaces and tenants of a building / validated space creation |
 | `entities_in_area(...)` / `retire_area(...)` / `import_features(...)` | Workbench bulk tools |
@@ -647,7 +660,9 @@ supabase/migrations/             0001 foundation · 0002 components · 0003 arti
                                  0014 private pages (visibility enforced by RLS)
                                  … 0041 cleanup reaches interior spaces · 0042 move / name / redraw
                                  0043 spreadsheet import · 0044 its citations, spaces' first names
-                                 and addresses (each file's header explains it)
+                                 and addresses · 0045–0047 sheet rows over time, not seen yet,
+                                 spaces fit any footprint · 0048 advanced search
+                                 (each file's header explains it)
 supabase/seed.sql                optional Gary, Indiana demo (settings, pages, eras)
 src/lib/map/style.ts             MapLibre layers for snapshots, ghosts, spaces, moments
 src/lib/components/              TimeMachineMap, YearSlider, EntityPanel, Timeline, MiniMap,

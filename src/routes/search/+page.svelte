@@ -39,6 +39,7 @@
 		<input type="hidden" name="go" value="0" />
 		<button class="primary">Search</button>
 	</form>
+	<p class="small"><a href="/search/advanced{data.q ? `?q=${encodeURIComponent(data.q)}` : ''}">Advanced search →</a> filters by kind, years, condition, tags, facts, addresses, and what a page has or lacks.</p>
 	<p class="hint">
 		Matches current <em>and historic</em> names, and street addresses such as <code>577 Washington St</code>, so a
 		building's old name still finds it.

@@ -5,6 +5,7 @@
 	import SourcePicker from '$lib/components/SourcePicker.svelte';
 	import SourceFields from '$lib/components/SourceFields.svelte';
 	import { NEW_SOURCE } from '$lib/sources';
+	import { CONFIDENCES } from '$lib/types';
 	import { TABLE_FIELDS, TEMPLATE_CSV, guessFields, parseDelimited, type SheetOptions, type SheetRow } from '$lib/tableImport';
 
 	let { data, form } = $props();
@@ -256,7 +257,7 @@
 				<div>
 					<label for="so-conf">Confidence</label>
 					<select id="so-conf" bind:value={options.confidence}>
-						{#each ['certain', 'probable', 'approximate', 'speculative'] as c (c)}<option>{c}</option>{/each}
+						{#each CONFIDENCES as c (c)}<option>{c}</option>{/each}
 					</select>
 				</div>
 				<div class="wide">

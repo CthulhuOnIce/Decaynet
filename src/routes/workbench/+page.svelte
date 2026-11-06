@@ -8,6 +8,7 @@
 	import TemporalFields from '$lib/components/TemporalFields.svelte';
 	import SourcePicker from '$lib/components/SourcePicker.svelte';
 	import { JPEG2000_ACCEPT, decodeJpeg2000, isJpeg2000 } from '$lib/jp2';
+	import { CONFIDENCES } from '$lib/types';
 	import ScanPinView from '$lib/components/ScanPinView.svelte';
 	import { apply, cornersFor, fit, fromMerc, metres, minPins, toMerc, type FitKind, type XY } from '$lib/map/georef';
 	import { baseStyle, colorFeatures, mapView, snapshotLayers, type ColorBy } from '$lib/map/style';
@@ -1506,7 +1507,7 @@
 						<div>
 							<label for="rd-conf">Confidence</label>
 							<select id="rd-conf" name="confidence">
-								{#each ['certain', 'probable', 'approximate', 'speculative'] as c (c)}<option selected={c === 'probable'}>{c}</option>{/each}
+								{#each CONFIDENCES as c (c)}<option selected={c === 'probable'}>{c}</option>{/each}
 							</select>
 						</div>
 					</div>

@@ -10,6 +10,7 @@
 	import { loadView, saveView, loadYear, saveYear } from '$lib/mapMemory';
 	import { formatFuzzy, yearToDate } from '$lib/time';
 	import type { EntitySnapshot, Picked } from '$lib/types';
+	import { TIME_WINDOW, type SearchResult } from '$lib/advancedSearch';
 
 	let { data } = $props();
 
@@ -98,6 +99,45 @@
 		}
 	}
 
+	// ---- the time machine's search: what was there in this year and the few before, by its names then
+	let findQ = $state('');
+	let findHits = $state<SearchResult[]>([]);
+	let findBusy = $state(false);
+	let findFor = $state('');
+	$effect(() => {
+		const q = findQ.trim();
+		const y = year;
+		if (q.length < 2) {
+			findHits = [];
+			findFor = '';
+			return;
+		}
+		const ctrl = new AbortController();
+		findBusy = true;
+		const t = setTimeout(async () => {
+			try {
+				const res = await fetch(`/api/search/at?${new URLSearchParams({ q, year: String(y) })}`, { signal: ctrl.signal });
+				findHits = res.ok ? await res.json() : [];
+				findFor = `${q}|${y}`;
+			} catch {
+				/* aborted: a newer search is on its way */
+			} finally {
+				if (!ctrl.signal.aborted) findBusy = false;
+			}
+		}, 220);
+		return () => {
+			clearTimeout(t);
+			ctrl.abort();
+		};
+	});
+	const kindColor = (k: string) => data.vocab.kinds.find((x) => x.id === k)?.color ?? '#888';
+	function goTo(h: SearchResult) {
+		selected = h.id;
+		if (h.lon != null && h.lat != null) mapRef?.flyTo(h.lon, h.lat, 16.5);
+		else void focusOn(h.id);
+	}
+	const advancedHref = $derived(`/search/advanced?${new URLSearchParams({ q: findQ.trim(), from: String(year - TIME_WINDOW), to: String(year) })}`);
+
 	function pickById(id: string, fly = true) {
 		selected = id;
 		if (fly) void focusOn(id);
@@ -180,6 +220,31 @@
 				{panelOpen ? '‹ Layers' : 'Layers ›'}
 			</button>
 			{#if panelOpen}
+				<div class="group find" role="search">
+					<label class="eyebrow" for="find">Find in {year - TIME_WINDOW}–{year}</label>
+					<input id="find" type="search" bind:value={findQ} placeholder="A name or address of then" autocomplete="off" />
+					{#if findQ.trim().length >= 2}
+						{#if findHits.length}
+							<ul class="plain-list hits">
+								{#each findHits as h (h.id)}
+									{@const gone = h.exists_to && Number(h.exists_to.slice(0, 4)) <= year}
+									<li>
+										<button class="hit" class:on={selected === h.id} onclick={() => goTo(h)} title={h.lon == null ? 'Not on the map: opens its panel' : 'Show it on the map'}>
+											<span class="sw" style:background={kindColor(h.kind)}></span>
+											<span class="hit-name">{h.name_then ?? h.name}</span>
+											{#if gone}<span class="muted small">gone {h.exists_to?.slice(0, 4)}</span>{/if}
+										</button>
+										{#if h.name_then && h.name_then !== h.name}<span class="muted small later">now “{h.name}”</span>{/if}
+										{#if h.matched_in === 'address' && h.matched}<span class="muted small later">{h.matched}</span>{/if}
+									</li>
+								{/each}
+							</ul>
+						{:else if !findBusy && findFor}
+							<p class="hint">Nothing by that name or address in {year - TIME_WINDOW}–{year}.</p>
+						{/if}
+					{/if}
+					<a class="small" href={advancedHref}>More filters →</a>
+				</div>
 				<div class="group">
 					<div class="eyebrow">Show</div>
 					{#each spatialKinds as k (k.id)}
@@ -323,6 +388,48 @@
 	}
 	.group {
 		margin-top: 12px;
+	}
+	.find input {
+		width: 100%;
+	}
+	.find label.eyebrow {
+		display: block;
+	}
+	.hits {
+		margin: 6px 0;
+	}
+	.hits li {
+		display: grid;
+		padding: 1px 0;
+	}
+	.hit {
+		display: flex;
+		gap: 6px;
+		align-items: center;
+		width: 100%;
+		padding: 3px 4px;
+		background: none;
+		border: 0;
+		border-radius: 4px;
+		color: var(--ink);
+		font: inherit;
+		font-size: 0.86rem;
+		text-align: left;
+		cursor: pointer;
+	}
+	.hit:hover,
+	.hit.on {
+		background: var(--panel-2);
+	}
+	.hit-name {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.later {
+		padding-left: 20px;
 	}
 	.group .eyebrow {
 		margin-bottom: 6px;
