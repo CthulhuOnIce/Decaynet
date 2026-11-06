@@ -7,6 +7,7 @@
 	import EntityPicker from '$lib/components/EntityPicker.svelte';
 	import TemporalFields from '$lib/components/TemporalFields.svelte';
 	import SourcePicker from '$lib/components/SourcePicker.svelte';
+	import { JPEG2000_ACCEPT, decodeJpeg2000, isJpeg2000 } from '$lib/jp2';
 	import ScanPinView from '$lib/components/ScanPinView.svelte';
 	import { apply, cornersFor, fit, fromMerc, metres, minPins, toMerc, type FitKind, type XY } from '$lib/map/georef';
 	import { baseStyle, colorFeatures, mapView, snapshotLayers, type ColorBy } from '$lib/map/style';
@@ -57,6 +58,9 @@
 	let depictsYear = $state(''); // year the scan shows; pre-fills traced shapes
 	let markers: Marker[] = [];
 	let scanError = $state<string | null>(null);
+	let scanBusy = $state<string | null>(null);
+	/** set when a big JPEG 2000 sheet was decoded at a reduced resolution to fit the browser */
+	let scanNote = $state<string | null>(null);
 
 	// Two ways to align a scan: drag its four corners, or match pins (control
 	// points) on the scan to the same spots on the map and fit the sheet to them.
@@ -181,12 +185,23 @@
 	}
 
 	async function openScan(e: Event) {
-		const file = (e.currentTarget as HTMLInputElement).files?.[0];
+		const input = e.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
 		if (!file || !map) return;
 		scanError = null;
+		scanNote = null;
 		try {
 			if (scan) URL.revokeObjectURL(scan.url);
-			const url = URL.createObjectURL(file);
+			let image: Blob = file;
+			// JPEG 2000 (the Library of Congress's Sanborn sheets): decoded here, in a worker
+			if (await isJpeg2000(file)) {
+				scanBusy = `Decoding ${file.name}…`;
+				const t = await decodeJpeg2000(file).finally(() => (scanBusy = null));
+				image = t.blob;
+				if (t.width < t.fullWidth)
+					scanNote = `Shown at ${t.width.toLocaleString()} × ${t.height.toLocaleString()} px (the sheet is ${t.fullWidth.toLocaleString()} × ${t.fullHeight.toLocaleString()}): as much as this browser can draw. Alignment files still match it on any device.`;
+			}
+			const url = URL.createObjectURL(image);
 			const img = new Image();
 			img.src = url;
 			await img.decode();
@@ -219,6 +234,8 @@
 		} catch (err) {
 			scanError = `Couldn't open that image: ${(err as Error).message}`;
 		}
+		// so choosing the same file again opens it again
+		input.value = '';
 	}
 
 	/** "Remove scan": confirm when an alignment would be lost. */
@@ -232,6 +249,7 @@
 	function closeScan() {
 		if (scan) URL.revokeObjectURL(scan.url);
 		scan = null;
+		scanNote = null;
 		markers.forEach((m) => m.remove());
 		markers = [];
 		clearPins();
@@ -353,7 +371,11 @@
 			const ok = (v: unknown): v is XY => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number');
 			if (Array.isArray(j.pins)) {
 				const loaded = (j.pins as { image?: unknown; map?: unknown }[]).filter((p) => ok(p?.image) && ok(p?.map));
-				pins = loaded.map((p, i) => ({ id: i + 1, img: p.image as XY, map: p.map as XY }));
+				// pins are in the scan's pixels: a sheet opened at another resolution (a big JPEG 2000 on
+				// another device) scales them to this one
+				const sx = typeof j.width === 'number' && j.width > 0 ? scan.width / j.width : 1;
+				const sy = typeof j.height === 'number' && j.height > 0 ? scan.height / j.height : 1;
+				pins = loaded.map((p, i) => ({ id: i + 1, img: [(p.image as XY)[0] * sx, (p.image as XY)[1] * sy] as XY, map: p.map as XY }));
 				pinSeq = pins.length;
 			}
 			placeMarkers();
@@ -1297,8 +1319,12 @@
 
 			{#if !scan && !tileUrl}
 				<h3>Open a scan</h3>
-				<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onchange={openScan} />
-				<p class="hint">It appears with four corner handles. Drag each corner onto the matching intersection.</p>
+				<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,{JPEG2000_ACCEPT}" onchange={openScan} disabled={!!scanBusy} />
+				{#if scanBusy}<p class="notice small">{scanBusy} Big sheets take a few seconds.</p>{/if}
+				<p class="hint">
+					It appears with four corner handles. Drag each corner onto the matching intersection. PNG, JPEG, WebP, GIF, or JPEG 2000
+					(<code>.jp2</code>, as the Library of Congress serves its Sanborn sheets).
+				</p>
 				<h3>…or a tile layer</h3>
 				<p class="hint">Already georeferenced in Map Warper, Allmaps or similar? Paste its XYZ URL.</p>
 				<div class="row">
@@ -1311,6 +1337,7 @@
 						<strong class="scan-name">{scan ? scan.name : 'Tile layer'}</strong>
 						<span class="session" title="Not uploaded or saved anywhere; gone when you close the page">this session only</span>
 					</div>
+					{#if scan && scanNote}<p class="hint scan-note">{scanNote}</p>{/if}
 					<div class="row scan-actions">
 						{#if scan}
 							{#if aligning}
