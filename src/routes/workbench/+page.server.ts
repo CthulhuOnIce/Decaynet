@@ -210,6 +210,19 @@ export const actions: Actions = {
 		return { bulk: { ...(res.data as BulkResult), action: 'standing' as const, at: str(fd, 'at') } };
 	}),
 
+	/** Selected pages not built yet in a year (missing from an aerial older than the one they were plotted from). */
+	bulkNotYet: wrap(async (fd, locals) => {
+		await requirePermission(locals, 'edit_content');
+		const ids = fd.getAll('ids').map(String).filter(Boolean);
+		if (!ids.length) throw new FormError('Select some buildings first.');
+		const at = bulkDate(fd);
+		if (!at?.date) throw new FormError('Not seen yet in which year? Enter one, like 1955.');
+		const res = await locals.supabase.rpc('start_after_pages', { p_ids: ids, p_at: at.date, p_precision: at.precision });
+		check(res);
+		const r = res.data as BulkResult & { starts: string };
+		return { bulk: { ...r, action: 'notyet' as const, at: str(fd, 'at') } };
+	}),
+
 	/** Selected pages: an official name from a year (e.g. the label on that year's sanborn sheet). */
 	bulkName: wrap(async (fd, locals) => {
 		await requirePermission(locals, 'edit_content');

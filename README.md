@@ -371,6 +371,10 @@ The modern grid is a poor guide to the past. The lakefront was filled for the mi
 - Then **trace the new layout** from a later scan or import it.
 - **Select buildings** (Shift-click or Shift-drag a box; *Select* on a phone) to work on several at once:
   - *Gone by*, *Condition from*, *Still standing in* and *Name from* a year. A name runs from then until the next recorded one, and the name running then ends there; the page title stays.
+  - *Gone by* asks why it's missing from the map:
+    - **Demolished here** ends each lifespan then, with a condition (*Demolished*, *Empty lot*…).
+    - **Not seen yet** is for an aerial older than the one it was plotted from: the building isn't built yet. Its start moves to just after that year ("not seen yet in 1955": from 1956), along with what began with it. Pages that already start later, or have something recorded before then, are skipped with the reason.
+  The year box takes "May 1958" or "1950s" too.
   - **✥ Move / turn**: drag the handle (arrow keys nudge, `[` `]` turn) to fix shapes traced from a sheet that was aligned a little off. The shapes shown in that year move where they always were, with no new version, and the storefronts and suites inside them come along.
   - **✎ Redraw from a year** (one building): its shape loads into Trace with a handle on each corner. Drag corners, click beside a side to add one, or pick one and remove it. Saving ends the old shape at that year and starts the new one, up to the old one's end (a renovation, or a better map from then on).
 
@@ -581,6 +585,7 @@ Key RPCs:
 | `building_spaces(id, at)` / `add_space(...)` | Spaces and tenants of a building / validated space creation |
 | `entities_in_area(...)` / `retire_area(...)` / `import_features(...)` | Workbench bulk tools |
 | `move_shapes(...)` / `name_pages(...)` / `redraw_shape(...)` | Workbench selection: move in place, name from a year, new shape from a year |
+| `end_pages(...)` / `start_after_pages(...)` / `reopen_pages(...)` / `set_condition_pages(...)` | Workbench selection: demolished by a year, not built yet in a year, still standing in a year, a condition from a year |
 | `match_import_candidates(...)` / `apply_import(...)` / `undo_import(...)` | OHM / Wikidata import: match, apply a reviewed plan, undo |
 | `match_table_rows(...)` / `apply_table_import(...)` | Spreadsheet import: match rows to pages, buildings (by address in a year) and storefronts; write the reviewed rows as one undoable import |
 | `add_spaces(building, spaces)` | Spaces in one go (one per pasted polygon), each with an optional first name and address; all or none |

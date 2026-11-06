@@ -588,16 +588,20 @@
 	let boxMode = $state(false);
 	let box = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
 	let bulkResult = $state<{
-		action: 'gone' | 'condition' | 'standing' | 'name';
+		action: 'gone' | 'condition' | 'standing' | 'name' | 'notyet';
 		at: string;
 		status?: string;
 		name?: string;
+		starts?: string;
 		done: number;
 		skipped: { id: string; name: string; slug: string; reason: string }[];
 	} | null>(null);
 	/** what the selection gets: gone by a year, a condition from a year, still standing in a year, or a name from a year */
 	let bulkMode = $state<'gone' | 'condition' | 'standing' | 'name'>('gone');
 	let bulkName = $state('');
+	/** "Gone by": demolished (it was there, now gone), or not there yet (built after this map) */
+	let goneKind = $state<'demolished' | 'notyet'>('demolished');
+	const notYet = $derived(bulkMode === 'gone' && goneKind === 'notyet');
 	let bulkCondition = $state('abandoned');
 	let bulkBusy = $state(false);
 	let bulkYearInput = $state<string | null>(null);
@@ -1893,7 +1897,9 @@
 								? `${statusLabel(bulkResult.status)} from ${bulkResult.at}`
 								: bulkResult.action === 'name'
 									? `“${bulkResult.name}” from ${bulkResult.at}`
-									: `still standing in ${bulkResult.at}`
+									: bulkResult.action === 'notyet'
+										? `not seen yet in ${bulkResult.at} (built from ${bulkResult.starts})`
+										: `still standing in ${bulkResult.at}`
 					}.`
 				: 'Nothing changed.'}
 			{#if bulkResult.skipped.length}
@@ -1969,7 +1975,7 @@
 				<button class="ghost small-btn" onclick={startRedraw} title="Reshape it: the shape shown in {bulkYear} ends then, the new one starts">✎ Redraw from {bulkYear}</button>
 			{/if}
 		</div>
-		<form method="post" action={bulkMode === 'gone' ? '?/bulkGone' : bulkMode === 'condition' ? '?/bulkCondition' : bulkMode === 'name' ? '?/bulkName' : '?/bulkStanding'} class="bulk" use:enhance={afterBulk}>
+		<form method="post" action={notYet ? '?/bulkNotYet' : bulkMode === 'gone' ? '?/bulkGone' : bulkMode === 'condition' ? '?/bulkCondition' : bulkMode === 'name' ? '?/bulkName' : '?/bulkStanding'} class="bulk" use:enhance={afterBulk}>
 			<input type="hidden" name="tool" value="select" />
 			{#each selected as x (x.id)}<input type="hidden" name="ids" value={x.id} />{/each}
 			<div class="seg bulk-mode" role="radiogroup" aria-label="What to record">
@@ -1978,12 +1984,19 @@
 				<button type="button" class:on={bulkMode === 'standing'} onclick={() => (bulkMode = 'standing')}>Still standing in</button>
 				<button type="button" class:on={bulkMode === 'name'} onclick={() => ((bulkMode = 'name'), (bulkNoteInput = null))}>Name from</button>
 			</div>
+			{#if bulkMode === 'gone'}
+				<div class="gone-kind" role="radiogroup" aria-label="Why it isn't on the map">
+					<span class="why">It's missing because it's</span>
+					<button type="button" role="radio" aria-checked={goneKind === 'demolished'} class:on={goneKind === 'demolished'} onclick={() => (goneKind = 'demolished')}>Demolished here</button>
+					<button type="button" role="radio" aria-checked={goneKind === 'notyet'} class:on={goneKind === 'notyet'} onclick={() => (goneKind = 'notyet')}>Not seen yet</button>
+				</div>
+			{/if}
 			<div class="bulk-fields">
 				<label>
-					<span>{bulkMode === 'gone' ? 'Gone by' : bulkMode === 'condition' || bulkMode === 'name' ? 'From' : 'Standing in'}</span>
+					<span>{notYet ? 'Not seen in' : bulkMode === 'gone' ? 'Gone by' : bulkMode === 'condition' || bulkMode === 'name' ? 'From' : 'Standing in'}</span>
 					<input name="at" value={bulkYear} oninput={(e) => (bulkYearInput = e.currentTarget.value)} placeholder="1958 · May 1958 · 1950s" title="A year, a month, a day, or a decade" />
 				</label>
-				{#if bulkMode === 'gone'}
+				{#if bulkMode === 'gone' && !notYet}
 					<label>
 						<span>Now</span>
 						<select name="status">{#each goneStatuses as st (st.id)}<option value={st.id} selected={st.id === 'demolished'}>{st.label}</option>{/each}</select>
@@ -2002,14 +2015,16 @@
 					</label>
 				{/if}
 			</div>
-			{#if bulkMode !== 'standing'}
+			{#if bulkMode !== 'standing' && !notYet}
 				<label class="bulk-note">
 					<span>Note</span>
 					<input name="note" value={bulkNote} oninput={(e) => (bulkNoteInput = e.currentTarget.value)} />
 				</label>
 			{/if}
 			<button class="primary" disabled={bulkBusy || (bulkMode === 'name' && !bulkName.trim())}>
-				{bulkMode === 'gone'
+				{notYet
+					? `Mark ${selected.length} not seen yet in ${bulkYear}`
+					: bulkMode === 'gone'
 					? `Mark ${selected.length} gone by ${bulkYear}`
 					: bulkMode === 'condition'
 						? `Mark ${selected.length} ${statusLabel(bulkCondition)} from ${bulkYear}`
@@ -2018,7 +2033,10 @@
 							: `Mark ${selected.length} still standing in ${bulkYear}`}
 			</button>
 			<p class="hint">
-				{#if bulkMode === 'gone'}
+				{#if notYet}
+					Not built yet then: each start moves to just after that year, with what began with it. Pages that already start later, or
+					with something recorded before then, are skipped.
+				{:else if bulkMode === 'gone'}
 					Ends each lifespan then, closes what was still running, and adds the condition (marked approximate). Pages with facts after
 					that year are skipped.
 				{:else if bulkMode === 'condition'}
@@ -2626,6 +2644,31 @@
 	}
 	.redraw-box h3 {
 		margin: 0;
+	}
+	/* a choice within "Gone by", not another mode */
+	.gone-kind {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 4px 6px;
+		margin: 0 0 0 4px;
+		padding-left: 8px;
+		border-left: 2px solid var(--amber);
+	}
+	.gone-kind .why {
+		flex-basis: 100%;
+		font-size: 0.72rem;
+		color: var(--muted);
+	}
+	.gone-kind button {
+		padding: 3px 10px;
+		font-size: 0.75rem;
+		border-radius: 999px;
+	}
+	.gone-kind button.on {
+		background: var(--amber);
+		border-color: var(--amber);
+		color: #17130f;
 	}
 	/* four of them: two by two */
 	.bulk-mode {
