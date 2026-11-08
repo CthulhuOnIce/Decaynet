@@ -26,6 +26,7 @@
 	import { CONFIDENCES } from '$lib/types';
 	import ScanPinView from '$lib/components/ScanPinView.svelte';
 	import { apply, cornersFor, fit, fromMerc, metres, minPins, toMerc, type FitKind, type XY } from '$lib/map/georef';
+	import { fitStreets, onLine, placed, poseFromAffine, poseToAffine, scalePose, slidePose, type Pose } from '$lib/map/streetfit';
 	import { baseStyle, colorFeatures, mapView, snapshotLayers, type ColorBy } from '$lib/map/style';
 	import { loadView, saveView, loadYear, saveYear } from '$lib/mapMemory';
 	import { can } from '$lib/perms';
@@ -86,7 +87,7 @@
 	// Two ways to align a scan: drag its four corners, or match pins (control
 	// points) on the scan to the same spots on the map and fit the sheet to them.
 	type Pin = { id: number; img: XY | null; map: XY | null };
-	let alignMode = $state<'corners' | 'pins'>('corners');
+	let alignMode = $state<'corners' | 'pins' | 'streets'>('corners');
 	let pins = $state<Pin[]>([]);
 	let pinSeq = $state(0);
 	let fitChoice = $state<'auto' | FitKind>('auto');
@@ -260,6 +261,7 @@
 			aligning = true;
 			panelOpen = false;
 			clearPins();
+			clearStreets();
 			scan = {
 				name: file.name,
 				url,
@@ -369,6 +371,7 @@
 		scan = null;
 		scanNote = null;
 		scanGeo = null;
+		clearStreets();
 		markers.forEach((m) => m.remove());
 		markers = [];
 		clearPins();
@@ -448,6 +451,240 @@
 			});
 			pinMarkers.push(m);
 		}
+	}
+
+	// ---------------------------------------------------------------- street alignment
+	// A street drawn on the scan and the same street drawn on the map are lines, not matching
+	// points: the sheet turns, slides and scales until they lie on each other. What the streets
+	// leave free (sliding along a street, the scale) is set with the ⇕ and ⤢ handles.
+	type Street = { id: number; scan: XY[]; map: XY[] };
+	let streets = $state<Street[]>([]);
+	let streetSeq = 0;
+	/** the placement the fit stays closest to (where the sheet is, or was dragged to) */
+	let streetPose = $state<Pose | null>(null);
+	let streetHistory: { id: number; side: 'scan' | 'map' }[] = [];
+	let streetMarkers: Marker[] = [];
+	let streetLabels: Marker[] = [];
+	let streetDragging = false;
+	const streeting = $derived(tool === 'overlay' && !!scan && aligning && alignMode === 'streets');
+	/** the scan's own pane beside the map: matching pins, or drawing streets */
+	const scanPicking = $derived(pinning || streeting);
+	const streetPairs = $derived(
+		streets
+			.filter((s) => s.scan.length === 2 && s.map.length === 2)
+			.map((s) => ({ id: s.id, scan: [s.scan[0], s.scan[1]] as [XY, XY], merc: [toMerc(s.map[0]), toMerc(s.map[1])] as [XY, XY] }))
+	);
+	const streetFit = $derived(scan && streetPose && streetPairs.length ? fitStreets(streetPairs, streetPose, scan) : null);
+	/** where the next click goes: the scan or the map, for which street, and how many points it has there */
+	const streetStep = $derived.by((): { where: 'scan' | 'map'; id: number; have: number } => {
+		const half = streets.find((s) => s.scan.length === 1) ?? streets.find((s) => s.map.length === 1);
+		if (half) return half.scan.length === 1 ? { where: 'scan', id: half.id, have: 1 } : { where: 'map', id: half.id, have: 1 };
+		const needsMap = streets.find((s) => s.scan.length === 2 && s.map.length < 2);
+		if (needsMap) return { where: 'map', id: needsMap.id, have: needsMap.map.length };
+		const needsScan = streets.find((s) => s.map.length === 2 && s.scan.length < 2);
+		if (needsScan) return { where: 'scan', id: needsScan.id, have: needsScan.scan.length };
+		return { where: 'scan', id: streetSeq + 1, have: 0 };
+	});
+
+	/** The sheet's current placement as a pose (its corners, fitted as a move-turn-scale). */
+	function poseNow(): Pose | null {
+		if (!scan) return null;
+		const box: XY[] = [
+			[0, 0],
+			[scan.width, 0],
+			[scan.width, scan.height],
+			[0, scan.height]
+		];
+		const f = fit(box, scan.corners.map((c) => toMerc(c)), 'affine');
+		return f ? poseFromAffine(f.m) : null;
+	}
+	/** Before the streets change: keep where the fit put the sheet as the placement to stay near. */
+	function commitPose() {
+		if (streetFit) streetPose = streetFit.pose;
+	}
+	function addStreetPoint(side: 'scan' | 'map', pt: XY) {
+		commitPose();
+		const open = streets.find((s) => s[side].length === 1) ?? streets.find((s) => s[side].length === 0 && s[side === 'scan' ? 'map' : 'scan'].length > 0);
+		if (open) {
+			open[side].push(pt);
+			streetHistory.push({ id: open.id, side });
+		} else {
+			const id = ++streetSeq;
+			streets.push({ id, scan: side === 'scan' ? [pt] : [], map: side === 'map' ? [pt] : [] });
+			streetHistory.push({ id, side });
+		}
+	}
+	function undoStreetPoint() {
+		const last = streetHistory.pop();
+		if (!last) return;
+		commitPose();
+		const s = streets.find((x) => x.id === last.id);
+		if (!s) return;
+		s[last.side].pop();
+		if (!s.scan.length && !s.map.length) streets = streets.filter((x) => x.id !== s.id);
+	}
+	function removeStreet(id: number) {
+		commitPose();
+		streets = streets.filter((s) => s.id !== id);
+		streetHistory = streetHistory.filter((h) => h.id !== id);
+	}
+	function clearStreets() {
+		streets = [];
+		streetSeq = 0;
+		streetHistory = [];
+	}
+	/** Turn the sheet round 180° about its street (it can lie either way round along one). */
+	function flipStreets() {
+		if (!scan) return;
+		const p = streetFit?.pose ?? streetPose ?? poseNow();
+		if (!p) return;
+		const centre = placed(p, [scan.width / 2, scan.height / 2]);
+		const first = streetPairs[0];
+		const about = first ? onLine(centre, first.merc) : centre;
+		streetPose = { s: p.s, th: p.th + Math.PI, tx: 2 * about[0] - p.tx, ty: 2 * about[1] - p.ty };
+	}
+
+	/** metres per Mercator unit where the sheet is (for "off by" readouts) */
+	const mercMetres = $derived.by(() => {
+		if (!scan) return 0;
+		const c = toMerc(scan.corners[0]);
+		return metres(fromMerc(c), fromMerc([c[0] + 1e-6, c[1]])) / 1e-6;
+	});
+	const streetRms = $derived(
+		streetFit && streetFit.free === 'none' && streetPairs.length > 3
+			? Math.sqrt(streetFit.residuals.reduce((s, r) => s + r * r, 0) / streetFit.residuals.length) * mercMetres
+			: null
+	);
+
+	// starting Streets: from where the sheet is now (it may have been moved by other means since)
+	$effect(() => {
+		const on = streeting;
+		untrack(() => (streetPose = on ? poseNow() : null));
+	});
+	// the fit moves the sheet
+	$effect(() => {
+		const f = streetFit;
+		if (!f || !streeting) return;
+		untrack(() => scan && setCorners(cornersFor({ kind: 'similarity', m: poseToAffine(f.pose) }, scan.width, scan.height)));
+	});
+	// the streets on the map: drawn on the map (solid), and the scan's, where they land now (dashed)
+	$effect(() => {
+		const on = streeting && ready;
+		const f = streetFit;
+		void streets.map((s) => `${s.id}:${s.scan.length}:${s.map.length}:${s.map.flat().join()}`).join();
+		untrack(() => drawStreets(on, f));
+	});
+	function drawStreets(on: boolean, f: typeof streetFit) {
+		if (!map) return;
+		const src = map.getSource('align-streets') as GeoJSONSource | undefined;
+		const features: GeoJSON.Feature[] = [];
+		if (on) {
+			for (const s of streets) {
+				if (s.map.length === 2) features.push({ type: 'Feature', properties: { kind: 'map' }, geometry: { type: 'LineString', coordinates: s.map } });
+				for (const q of s.map) features.push({ type: 'Feature', properties: { kind: 'pt' }, geometry: { type: 'Point', coordinates: q } });
+				const pose = f?.pose ?? streetPose;
+				if (s.scan.length === 2 && pose) {
+					features.push({ type: 'Feature', properties: { kind: 'scan' }, geometry: { type: 'LineString', coordinates: s.scan.map((q) => fromMerc(placed(pose, q))) } });
+				}
+			}
+		}
+		const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features };
+		if (src) src.setData(fc);
+		else if (on) {
+			map.addSource('align-streets', { type: 'geojson', data: fc });
+			map.addLayer({ id: 'align-streets-scan', type: 'line', source: 'align-streets', filter: ['==', ['get', 'kind'], 'scan'], paint: { 'line-color': '#5fd0e8', 'line-width': 2.5, 'line-dasharray': [2, 1.5] } });
+			map.addLayer({ id: 'align-streets-map', type: 'line', source: 'align-streets', filter: ['==', ['get', 'kind'], 'map'], paint: { 'line-color': '#f0a030', 'line-width': 3.5, 'line-opacity': 0.9 } });
+			map.addLayer({ id: 'align-streets-pt', type: 'circle', source: 'align-streets', filter: ['==', ['get', 'kind'], 'pt'], paint: { 'circle-radius': 5, 'circle-color': '#f0a030', 'circle-stroke-color': '#17130f', 'circle-stroke-width': 2 } });
+		}
+		for (const id of ['align-streets-scan', 'align-streets-map', 'align-streets-pt']) if (map.getLayer(id)) map.moveLayer(id);
+		// a number at the end of each street drawn on the map
+		streetLabels.forEach((m) => m.remove());
+		streetLabels = [];
+		if (on && maplibre)
+			for (const s of streets) {
+				if (!s.map.length) continue;
+				const el = document.createElement('div');
+				el.className = 'street-no';
+				el.textContent = String(s.id);
+				streetLabels.push(new maplibre.Marker({ element: el, offset: [10, -10] }).setLngLat(s.map[s.map.length - 1]).addTo(map));
+			}
+		placeStreetHandles(on, f);
+	}
+	/** ⇕ slides along the street(s); ⤢ scales (about the crossing, or the slide handle) */
+	function placeStreetHandles(on: boolean, f: typeof streetFit) {
+		if (streetDragging) return;
+		streetMarkers.forEach((m) => m.remove());
+		streetMarkers = [];
+		if (!on || !f || f.free === 'none' || !map || !maplibre || !scan) return;
+		const w = scan.width;
+		const h = scan.height;
+		const m0 = map;
+		// handles where they can be reached: on the street, nearest the middle of the view
+		const c = m0.getCenter();
+		const viewMid = toMerc([c.lng, c.lat]);
+		const first = streetPairs[0];
+		const slideAt = first ? onLine(viewMid, first.merc) : viewMid;
+		const mk = (cls: string, text: string, title: string, at: XY) => {
+			const el = document.createElement('div');
+			el.className = `handle ${cls}`;
+			el.textContent = text;
+			el.title = title;
+			const m = new maplibre!.Marker({ element: el, draggable: true }).setLngLat(fromMerc(at)).addTo(map!);
+			streetMarkers.push(m);
+			return m;
+		};
+		if (f.slide) {
+			const dir = f.slide;
+			const m = mk('slide', '⇕', 'Drag to slide the sheet along the street', slideAt);
+			const start = { pose: f.pose, at: slideAt };
+			m.on('dragstart', () => (streetDragging = true));
+			m.on('drag', () => {
+				const ll = m.getLngLat();
+				const now = toMerc([ll.lng, ll.lat]);
+				streetPose = slidePose(start.pose, [now[0] - start.at[0], now[1] - start.at[1]], dir);
+			});
+			m.on('dragend', () => {
+				streetDragging = false;
+				placeStreetHandles(streeting && ready, streetFit);
+			});
+		}
+		if (f.free === 'scale' || f.free === 'slide+scale') {
+			const anchor = f.anchor ?? slideAt;
+			// a little way from the point it scales about, along the sheet's top edge; the middle of
+			// the view when that point is off screen
+			const box = m0.getContainer();
+			const ap = m0.project(fromMerc(anchor));
+			const e0 = m0.project(fromMerc(placed(f.pose, [w / 2, h / 2])));
+			const e1 = m0.project(fromMerc(placed(f.pose, [w / 2 + w / 10, h / 2])));
+			const len = Math.hypot(e1.x - e0.x, e1.y - e0.y) || 1;
+			const visible = ap.x > 40 && ap.y > 40 && ap.x < box.clientWidth - 40 && ap.y < box.clientHeight - 40;
+			let pt = visible ? { x: ap.x + ((e1.x - e0.x) / len) * 140, y: ap.y + ((e1.y - e0.y) / len) * 140 } : { x: box.clientWidth / 2 + 90, y: box.clientHeight / 2 };
+			if (pt.x < 20 || pt.y < 20 || pt.x > box.clientWidth - 20 || pt.y > box.clientHeight - 20) pt = { x: ap.x - ((e1.x - e0.x) / len) * 140, y: ap.y - ((e1.y - e0.y) / len) * 140 };
+			const ll = m0.unproject([pt.x, pt.y]);
+			const at = toMerc([ll.lng, ll.lat]);
+			const m = mk('scale', '⤢', 'Drag to scale the sheet', at);
+			const start = { pose: f.pose, v: [at[0] - anchor[0], at[1] - anchor[1]] as XY };
+			const len2 = start.v[0] ** 2 + start.v[1] ** 2 || 1;
+			m.on('dragstart', () => (streetDragging = true));
+			m.on('drag', () => {
+				const ll = m.getLngLat();
+				const now = toMerc([ll.lng, ll.lat]);
+				const k = Math.max(0.05, Math.min(20, ((now[0] - anchor[0]) * start.v[0] + (now[1] - anchor[1]) * start.v[1]) / len2));
+				streetPose = scalePose(start.pose, k, anchor);
+			});
+			m.on('dragend', () => {
+				streetDragging = false;
+				placeStreetHandles(streeting && ready, streetFit);
+			});
+		}
+	}
+	/** − / + for the scale, without a drag */
+	function nudgeStreetScale(k: number) {
+		const f = streetFit;
+		if (!f || !scan) return;
+		const centre = placed(f.pose, [scan.width / 2, scan.height / 2]);
+		const anchor = f.anchor ?? (streetPairs[0] ? onLine(centre, streetPairs[0].merc) : centre);
+		streetPose = scalePose(f.pose, k, anchor);
 	}
 
 	/** Save the alignment to a small file so the same scan can be re-aligned instantly next time. */
@@ -1139,7 +1376,7 @@
 		resizeObs = new ResizeObserver(() => {
 			const w = mapEl.clientWidth;
 			const h = mapEl.clientHeight;
-			const layout = `${focus}|${selectFocus}|${pinning}`;
+			const layout = `${focus}|${selectFocus}|${scanPicking}`;
 			map?.resize();
 			top?.resize();
 			// Only the bottom bar grew or shrank (same layout, same width): resizing keeps the centre,
@@ -1209,7 +1446,7 @@
 					pickAt(e.point.x, e.point.y);
 					return;
 				}
-				if (!drawing && !pinning) return;
+				if (!drawing && !pinning && !streeting) return;
 				// clicking a handle isn't a new vertex
 				if ((e.originalEvent.target as HTMLElement | null)?.closest('.maplibregl-marker')) return;
 				let c: [number, number] = [+e.lngLat.lng.toFixed(7), +e.lngLat.lat.toFixed(7)];
@@ -1223,6 +1460,7 @@
 					}
 				}
 				if (pinning) addMapPin(c);
+				else if (streeting) addStreetPoint('map', c);
 				else if (redraw && tool === 'trace') insertCorner(c, e.point);
 				else pts = effectiveMode === 'point' ? [c] : [...pts, c];
 			});
@@ -1327,7 +1565,7 @@
 		untrack(() => highlight(ids));
 	});
 	$effect(() => {
-		if (map) map.getCanvas().style.cursor = drawing || pinning || boxMode ? 'crosshair' : selecting ? 'pointer' : '';
+		if (map) map.getCanvas().style.cursor = drawing || pinning || streeting || boxMode ? 'crosshair' : selecting ? 'pointer' : '';
 	});
 
 	function onkey(e: KeyboardEvent) {
@@ -1361,6 +1599,10 @@
 		if (pinning && e.key === 'Backspace' && pins.length) {
 			e.preventDefault();
 			removePin(pins[pins.length - 1].id);
+		}
+		if (streeting && e.key === 'Backspace' && streets.length && !(e.target as HTMLElement).closest('input, textarea, select')) {
+			e.preventDefault();
+			undoStreetPoint();
 		}
 	}
 	function onkeyup(e: KeyboardEvent) {
@@ -1515,6 +1757,7 @@
 						<div class="seg">
 							<button class:on={alignMode === 'corners'} onclick={() => (alignMode = 'corners')} title="Drag the sheet's corners into place">Drag corners</button>
 							<button class:on={alignMode === 'pins'} onclick={() => (alignMode = 'pins')} title="Pin matching spots on the scan and the map">Match pins</button>
+							<button class:on={alignMode === 'streets'} onclick={() => (alignMode = 'streets')} title="Draw the same streets on the scan and the map">Streets</button>
 						</div>
 						{#if alignMode === 'corners'}
 							<p class="hint">Drag the <span class="sw corner"></span> corners onto matching intersections; drag <span class="sw move"></span> to move the sheet. Lower the opacity to see streets beneath.</p>
@@ -1526,7 +1769,7 @@
 								<button title="Shrink" onclick={() => transform(0, 0.98)}>− 2%</button>
 								<button title="Grow" onclick={() => transform(0, 1.02)}>+ 2%</button>
 							</div>
-						{:else}
+						{:else if alignMode === 'pins'}
 							<p class="hint">
 								Click a recognisable spot on the scan (a street corner, a church, a bridge), then click the same spot on the map.
 								Map clicks snap to existing shapes. With <strong>2 pins</strong> the sheet moves, turns and scales into place;
@@ -1576,6 +1819,58 @@
 								</select>
 							</div>
 							{#if pins.length}<button class="ghost" onclick={clearPins}>Clear pins</button>{/if}
+						{:else if alignMode === 'streets'}
+							<p class="hint">
+								Click two points along a street on the <strong>scan</strong>, then two points anywhere along the same street on the <strong>map</strong>:
+								centrelines, not spots that have to match. One street turns the sheet and puts it on that line; a <strong>parallel</strong> one
+								also sets the scale; a <strong>crossing</strong> one sets where it sits; three settle everything.
+							</p>
+							<p class="next">
+								<span class="sw street"></span>
+								Street {streetStep.id}: {streetStep.have === 1 ? 'one more point' : 'two points'} along it on the <strong>{streetStep.where}</strong>.
+							</p>
+							{#if streets.length}
+								<table class="pins">
+									<thead><tr><th>#</th><th>Scan</th><th>Map</th><th></th></tr></thead>
+									<tbody>
+										{#each streets as s (s.id)}
+											<tr>
+												<td><span class="pin-no street-no-cell">{s.id}</span></td>
+												<td>{s.scan.length === 2 ? '✓' : s.scan.length ? '½' : '—'}</td>
+												<td>{s.map.length === 2 ? '✓' : s.map.length ? '½' : '—'}</td>
+												<td><button class="ghost x" title="Remove street {s.id}" onclick={() => removeStreet(s.id)}>✕</button></td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							{/if}
+							{#if streetFit}
+								<p class="hint fitted">
+									{#if streetFit.free === 'slide+scale'}
+										On its street. Drag <span class="sw slide">⇕</span> to slide it along and <span class="sw scale">⤢</span> to scale it, or draw a
+										parallel street to set the scale, or a crossing one to set where it sits.
+									{:else if streetFit.free === 'slide'}
+										The scale is set by the parallel streets. Drag <span class="sw slide">⇕</span> to slide it along them, or draw a crossing street.
+									{:else if streetFit.free === 'scale'}
+										Placed at the crossing. Drag <span class="sw scale">⤢</span> to scale it about the crossing, or draw a street parallel to one of these.
+									{:else}
+										Placed by {streetPairs.length} streets (move, turn and scale; no stretch){#if streetRms != null}; typical error {streetRms.toFixed(1)} m{/if}.
+									{/if}
+									{#if streetFit.turnSpread > 1.5}
+										<br /><strong>The streets disagree about the turn by {streetFit.turnSpread.toFixed(1)}°</strong>: one may be on the wrong street, or the sheet is
+										stretched (<em>Match pins</em> can correct stretch).
+									{/if}
+								</p>
+							{/if}
+							<div class="row">
+								{#if streetFit && (streetFit.free === 'scale' || streetFit.free === 'slide+scale')}
+									<button title="Shrink" onclick={() => nudgeStreetScale(0.98)}>− 2%</button>
+									<button title="Grow" onclick={() => nudgeStreetScale(1.02)}>+ 2%</button>
+								{/if}
+								{#if streetFit}<button title="The sheet the other way round along its street" onclick={flipStreets}>Flip round</button>{/if}
+								{#if streets.length}<button class="ghost" onclick={undoStreetPoint}>Undo point</button>{/if}
+								{#if streets.length}<button class="ghost" onclick={clearStreets}>Clear streets</button>{/if}
+							</div>
 						{/if}
 						{#if narrow}
 							<button class="primary" onclick={() => (panelOpen = false)}>Back to full-screen aligning</button>
@@ -1867,21 +2162,23 @@
 		{/if}
 	</aside>
 
-	<div class="stage" class:split={pinning}>
-		{#if pinning && scan}
-			<div class="scanpane" class:await={pinStep.where === 'scan'}>
+	<div class="stage" class:split={scanPicking}>
+		{#if scanPicking && scan}
+			<div class="scanpane" class:await={streeting ? streetStep.where === 'scan' : pinStep.where === 'scan'}>
 				<ScanPinView
 					url={scan.url}
 					width={scan.width}
 					height={scan.height}
-					{pins}
+					pins={streeting ? [] : pins}
+					lines={streeting ? streets.map((s) => ({ id: s.id, pts: s.scan })) : []}
+					tip={streeting && streetStep.where === 'scan' ? `Street ${streetStep.id}: ${streetStep.have === 1 ? 'one more point' : 'two points'} along it on the scan` : null}
 					waiting={waitingImg != null && !(waitingMap != null && pins.find((p) => p.id === waitingMap)?.img) ? waitingImg : null}
-					onpin={addImgPin}
+					onpin={(px) => (streeting ? addStreetPoint('scan', px) : addImgPin(px))}
 					onmove={moveImgPin}
 				/>
 			</div>
 		{/if}
-		<div class="mapwrap" class:await={pinning && pinStep.where === 'map'}>
+		<div class="mapwrap" class:await={(pinning && pinStep.where === 'map') || (streeting && streetStep.where === 'map')}>
 			<div class="map" bind:this={mapEl}></div>
 			<div class="top" bind:this={topEl} class:hidden={compare !== 'swipe' || !activeSource || scanOff} style:clip-path="inset(0 {100 - swipe * 100}% 0 0)"></div>
 			{#if compare === 'swipe' && activeSource}
@@ -1893,6 +2190,8 @@
 				<div class="banner">
 					{#if alignMode === 'pins'}
 						Pinning: a spot on the scan, then the same spot here
+					{:else if alignMode === 'streets'}
+						Streets: {streetStep.where === 'map' ? `two points along street ${streetStep.id} here` : `a street on the scan (two points), then the same street here`}
 					{:else}
 						Aligning: drag the corners · lower the opacity to see streets beneath
 					{/if}
@@ -1976,6 +2275,7 @@
 				<div class="seg">
 					<button class:on={alignMode === 'corners'} onclick={() => (alignMode = 'corners')}>Corners</button>
 					<button class:on={alignMode === 'pins'} onclick={() => (alignMode = 'pins')}>Pins</button>
+					<button class:on={alignMode === 'streets'} onclick={() => (alignMode = 'streets')}>Streets</button>
 				</div>
 				<button class="primary" onclick={() => (aligning = false)}>Finish aligning</button>
 			</div>
@@ -1992,6 +2292,20 @@
 					<button title="Rotate right a little" onclick={() => transform(0.2, 1)}>⟳ .2°</button>
 					<button title="Shrink" onclick={() => transform(0, 0.98)}>− 2%</button>
 					<button title="Grow" onclick={() => transform(0, 1.02)}>+ 2%</button>
+				</div>
+			{:else if alignMode === 'streets'}
+				<p class="bar-next">
+					<span class="pin-no street-no-cell">{streetStep.id}</span>
+					<span>{streetStep.have === 1 ? 'One more point' : 'Two points'} along a street on the <strong>{streetStep.where}</strong> {streetStep.where === 'map' ? '↓' : '↑'}</span>
+				</p>
+				<div class="bar-row">
+					<span class="muted small">
+						{#if !streetFit}Draw a street on both{:else if streetFit.free === 'slide+scale'}Drag ⇕ to slide, ⤢ to scale{:else if streetFit.free === 'slide'}Scale set · drag ⇕ to slide{:else if streetFit.free === 'scale'}Placed · drag ⤢ to scale{:else}Placed by {streetPairs.length} streets{/if}
+					</span>
+					<span class="spacer"></span>
+					{#if streetFit}<button class="ghost" onclick={flipStreets}>Flip</button>{/if}
+					<button class="ghost" disabled={!streets.length} onclick={undoStreetPoint}>Undo</button>
+					<button class="ghost" disabled={!streets.length} onclick={clearStreets}>Clear</button>
 				</div>
 			{:else}
 				<p class="bar-next">
@@ -2345,6 +2659,28 @@
 		background: #e0574a;
 		border-radius: 50%;
 	}
+	.sw.street {
+		width: 16px;
+		height: 3px;
+		background: #f0a030;
+	}
+	.sw.slide,
+	.sw.scale {
+		width: auto;
+		height: auto;
+		padding: 0 4px;
+		border-radius: 3px;
+		background: #5fd0c4;
+		color: #17130f;
+		font-weight: 700;
+	}
+	.street-no-cell {
+		background: #f0a030 !important;
+		color: #17130f !important;
+	}
+	.fitted {
+		color: var(--ink-2);
+	}
 	.stage {
 		position: relative;
 		min-width: 0;
@@ -2527,6 +2863,26 @@
 		box-shadow:
 			0 0 0 2px #17130f,
 			0 0 0 4px rgba(255, 255, 255, 0.85);
+	}
+	/* Streets alignment: slide along the street, scale */
+	:global(.handle.slide),
+	:global(.handle.scale) {
+		width: 28px;
+		height: 28px;
+		display: grid;
+		place-items: center;
+		background: #5fd0c4;
+		color: #17130f;
+		border-radius: 50%;
+		font: 700 16px/1 var(--sans);
+	}
+	:global(.street-no) {
+		color: #f0a030;
+		font: 700 13px/1 var(--sans);
+		text-shadow:
+			0 0 3px #17130f,
+			0 0 3px #17130f;
+		pointer-events: none;
 	}
 	:global(.handle.pin.half) {
 		opacity: 0.75;

@@ -375,6 +375,16 @@ The **workbench** lays a Sanborn fire-insurance sheet, an old plat or an aerial 
 2. **Align it**, either way (switch under *Alignment*):
    - **Drag corners:** drag each corner onto the matching street intersection; drag the blue centre handle to move the whole sheet. Use the ⟲/⟳ and ±2 % buttons for fine rotation and scale, and lower the opacity to see the streets underneath.
    - **Match pins:** the scan opens in its own pane beside the map. Click a recognisable spot on the scan (a street corner, a church), then click the same spot on the map (map clicks snap to existing shapes); repeat. Two pins move, turn and scale the sheet into place; three or more also correct stretch and skew. Spread pins toward the edges of the sheet. Drag any pin on either side to fine-tune; with more pins than the fit needs, each pin shows how many metres off it is, so a misplaced one stands out. <kbd>Backspace</kbd> removes the last pin.
+   - **Streets:** for sheets where streets are easier to find than matching spots. Click two points along a street on the scan, then two points anywhere along the same street on the map. These are centrelines, not points that have to match, and street width doesn't matter. The sheet moves, turns and scales (no stretch) until the streets lie on each other; the scan's street shows dashed on the map where it currently lands. What's settled depends on the streets:
+
+     | Streets | Settled | Still yours to set |
+     |---|---|---|
+     | 1 | the turn, and which line it's on | drag ⇕ to slide it along the street, ⤢ to scale it |
+     | 2 parallel | also the scale (the gap between them) | ⇕ along the streets |
+     | 2 crossing | also where it sits (the crossing) | ⤢ the scale, about the crossing |
+     | 3 or more | everything (by least squares, with the typical error once there are more than 3) | nothing |
+
+     Streets within 2° of each other count as parallel: their crossing would be far off and unreliable. **Flip round** turns the sheet 180° about its street, since a street fits either way round. If the streets disagree about the turn by more than 1.5°, it says so: one is probably on the wrong street, or the sheet is stretched, which only *Match pins* can correct. <kbd>Backspace</kbd> undoes the last point.
 3. **Compare** in *Blend* or *Swipe* mode, or hold <kbd>F</kbd> to flicker the scan off and on.
 4. Enter the **year the scan shows**. This moves the time slider and pre-fills dates on what you trace.
 5. Switch to **Trace**:

@@ -20,6 +20,8 @@
 		height,
 		pins,
 		waiting = null,
+		lines = [],
+		tip = null,
 		onpin,
 		onmove
 	}: {
@@ -29,6 +31,10 @@
 		pins: Pin[];
 		/** Pin id that is waiting for its image point, highlighted in the status line. */
 		waiting?: number | null;
+		/** street lines drawn on the scan (Streets alignment): one or two points each */
+		lines?: { id: number; pts: XY[] }[];
+		/** the status line, instead of the pin one */
+		tip?: string | null;
 		onpin: (img: XY) => void;
 		onmove: (id: number, img: XY) => void;
 	} = $props();
@@ -178,6 +184,19 @@
 	aria-label="Scan: click or tap to place a pin; pinch or scroll to zoom"
 >
 	<img src={url} alt="" draggable="false" style:width="{width * scale}px" style:height="{height * scale}px" style:transform="translate({tx}px, {ty}px)" />
+	{#if lines.length}
+		<svg class="lines" aria-hidden="true">
+			{#each lines as l (l.id)}
+				{#if l.pts.length === 2}
+					<line x1={tx + l.pts[0][0] * scale} y1={ty + l.pts[0][1] * scale} x2={tx + l.pts[1][0] * scale} y2={ty + l.pts[1][1] * scale} />
+				{/if}
+				{#each l.pts as q, i (i)}<circle cx={tx + q[0] * scale} cy={ty + q[1] * scale} r="5" />{/each}
+				{#if l.pts.length}
+					<text x={tx + l.pts[l.pts.length - 1][0] * scale + 8} y={ty + l.pts[l.pts.length - 1][1] * scale - 8}>{l.id}</text>
+				{/if}
+			{/each}
+		</svg>
+	{/if}
 	{#each pins as p (p.id)}
 		{#if p.img}
 			<button
@@ -198,7 +217,7 @@
 		<button type="button" title="Zoom out" onpointerdown={(e) => e.stopPropagation()} onclick={() => zoomBy(1 / 1.5)}>−</button>
 		<button type="button" title="Fit the whole scan" onpointerdown={(e) => e.stopPropagation()} onclick={fitView}>⤢</button>
 	</div>
-	{#if waiting != null}<div class="tip">Tap the spot for pin {waiting} on the scan</div>{/if}
+	{#if tip}<div class="tip">{tip}</div>{:else if waiting != null}<div class="tip">Tap the spot for pin {waiting} on the scan</div>{/if}
 </div>
 
 <style>
@@ -220,6 +239,30 @@
 		pointer-events: none;
 		image-rendering: auto;
 		box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
+	}
+	.lines {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		overflow: visible;
+	}
+	.lines line {
+		stroke: #f0a030;
+		stroke-width: 3;
+	}
+	.lines circle {
+		fill: #f0a030;
+		stroke: #17130f;
+		stroke-width: 2;
+	}
+	.lines text {
+		fill: #f0a030;
+		font: 700 13px var(--sans);
+		paint-order: stroke;
+		stroke: #17130f;
+		stroke-width: 3;
 	}
 	.pin {
 		position: absolute;
