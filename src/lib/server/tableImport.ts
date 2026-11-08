@@ -232,10 +232,40 @@ export async function preview(sb: SupabaseClient, sheet: Sheet, vocab: Vocabular
 			issues,
 			use_existing: m.same?.id ?? null,
 			place_id: place?.id ?? null,
-			point: sheet.options.points && !place && ((r.lat != null && r.lon != null) || !!r.geometry),
+			// a storefront is never a new building of its own
+			point: sheet.options.points && !place && r.kind !== 'space' && ((r.lat != null && r.lon != null) || !!r.geometry),
 			include: true
 		};
 	});
+
+	// storefronts with a shape: into the building whose footprint holds them (when no building
+	// was named or found by address), and checked against its footprints
+	const spaces = norm.filter((r) => r.kind === 'space' && r.geometry);
+	if (spaces.length) {
+		const byN = new Map(rows.map((r) => [r.n, r]));
+		const { data: placed, error: perr } = await sb.rpc('sheet_space_places', {
+			p_rows: spaces.map((r) => ({ i: r.n, shape: r.geometry, at: r.at.from?.date ?? r.at.to?.date ?? null, place_id: byN.get(r.n)?.place_id ?? null }))
+		});
+		if (perr) throw new FormError(perr.message);
+		type Placed = { i: number; place?: { id: string; slug: string; name: string; kind: string }; how?: 'given' | 'shape'; fits?: boolean; outside_m?: number; footprints?: number; error?: string };
+		for (const s of (placed ?? []) as Placed[]) {
+			const row = byN.get(s.i);
+			if (!row) continue;
+			if (s.error) {
+				row.issues.push(`shape: ${s.error}`);
+				continue;
+			}
+			if (s.how === 'shape' && s.place) {
+				row.place = s.place;
+				row.place_id = s.place.id;
+				row.place_how = 'shape';
+				row.issues = row.issues.filter((x) => !x.startsWith('no building called'));
+			}
+			if (!s.place) row.issues.push('no building’s footprint holds its shape: pick the building');
+			else if (!s.footprints) row.issues.push(`${s.place.name} has no footprint to check its shape against yet`);
+			else if (s.fits === false) row.issues.push(`its shape reaches outside ${s.place.name}'s footprint (by ${s.outside_m} m)`);
+		}
+	}
 
 	// a business's shape goes to the building it's matched to only if that building has none yet
 	const placed = [...new Set(rows.filter((r) => r.shape_use === 'gives place' && r.place_id).map((r) => r.place_id as string))];

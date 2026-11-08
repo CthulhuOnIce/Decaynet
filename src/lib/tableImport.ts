@@ -165,7 +165,7 @@ export interface SheetRow {
 	/** an earlier row with the same name and kind: both go on one page (a business over several years) */
 	shares: number | null;
 	place: { id: string; slug: string; name: string; kind: string } | null;
-	place_how: 'named' | 'address' | 'address, other years' | 'geocoded' | null;
+	place_how: 'named' | 'address' | 'address, other years' | 'geocoded' | 'shape' | null;
 	space: { id: string; slug: string; name: string } | null;
 	tags: { id: string; label: string }[];
 	missing_tags: string[];

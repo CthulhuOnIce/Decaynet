@@ -99,7 +99,7 @@ Each column is guessed from its header; any of them can be changed, or set to
 | **Note** | Note, Notes, Comment, Remarks | A note on the link (or on the kept address, for an unplaced row). |
 | **Source detail** | Page, P, Pg, Entry, Citation, Reference, Folio, Frame | Where in the source: cited with every fact the row adds. A bare number reads as a page: `214` → "p. 214". |
 | **Latitude** / **Longitude** | Lat, Latitude / Lon, Lng, Long, Longitude | A map point, in decimal degrees (WGS 84): for a place row, or a new building when no building matches. |
-| **GeoJSON (shape)** | GeoJSON, Geometry, Geom, Shape, Footprint, Outline, Polygon, Boundary | A shape, as GeoJSON in longitude/latitude (WGS 84 / EPSG:4326): a geometry, a Feature, or a FeatureCollection of one kind of shape (several areas become one shape with several parts). A place row gets it as its own (a building's footprint, a street's centerline, a district's boundary), dated like the row and cited. A business row places itself: a new building with that shape when no building matches, or the matched building's shape if it has none yet. A lone `Point` is the same as Latitude / Longitude. |
+| **GeoJSON (shape)** | GeoJSON, Geometry, Geom, Shape, Footprint, Outline, Polygon, Boundary | A shape, as GeoJSON in longitude/latitude (WGS 84 / EPSG:4326): a geometry, a Feature, or a FeatureCollection of one kind of shape (several areas become one shape with several parts). A place row gets it as its own (a building's footprint, a street's centerline, a district's boundary), dated like the row and cited. A storefront row (Kind `space`) gets it as its outline, goes into the building whose footprint holds it when no Building or Address says which, and is checked against that building's footprints. A business row places itself: a new building with that shape when no building matches, or the matched building's shape if it has none yet. A lone `Point` is the same as Latitude / Longitude. |
 | **A fact** | the fact's label or id, e.g. *Employees*, *Industry*, *Occupation*, *Website* | A dated fact on the page. See [Timed facts](#timed-facts) and the [list of facts](#reference-facts-and-link-types). |
 
 Lists (*Tags*, *Other names*) split on `;`, or on `|` or `,` when there's no `;`.
@@ -185,8 +185,10 @@ storefront it was in:
 - **When.** The row's dates (see [Dates](#dates)).
 - **Rows that are places themselves** (Kind `building`, `site`…) don't link
   anywhere. They get their own shape from *GeoJSON* or map point from
-  *Latitude / Longitude*, and their address. A **`space`** row with a *Building* is made *part of* that building
-  (a storefront listed by number).
+  *Latitude / Longitude*, and their address. A **`space`** row is made *part of*
+  its building: the one in its *Building* column, the one at its *Address* (and
+  *Unit*), or, with a *GeoJSON* outline and neither, the building whose footprint
+  holds it in that year (see [Storefronts with their outlines](#recipes)).
 
 Links between two pages that aren't places (a person *worked for* a company,
 a lodge *member of* a federation, someone *took part in* an event) can't come
@@ -277,9 +279,33 @@ North store,Gary State Bank Building,101,1925
 South store,Gary State Bank Building,102,1925
 ```
 
-To draw their outlines at the same time, paste a GeoJSON of the storefronts
-under the building's **Edit facts → Spaces** instead. Each area becomes a space,
-with a row for its title, first name, address, unit and floor.
+**Storefronts with their outlines.** Kind *space*, with a *GeoJSON* column
+holding each storefront's area. Each row becomes a storefront with that outline,
+dated like the row and cited to the sheet's source. The *Building* column can be
+left out: each one goes into the building whose footprint holds it, in the row's
+year if the building was rebuilt (or, without dates, the smallest footprint
+holding it). The preview says *by its shape* when it found the building that way.
+
+```csv
+Name,Kind,Unit,From,GeoJSON
+North store,space,101,1925,"{""type"":""Polygon"",""coordinates"":[[[-87.33988,41.59987],[-87.33980,41.59987],[-87.33980,41.59998],[-87.33988,41.59998],[-87.33988,41.59987]]]}"
+South store,space,102,1925,"{""type"":""Polygon"",""coordinates"":[[[-87.33978,41.59987],[-87.33972,41.59987],[-87.33972,41.59998],[-87.33978,41.59998],[-87.33978,41.59987]]]}"
+```
+
+Each outline is checked against its building, as **Edit facts → Spaces** checks
+it: it has to lie within 2 m of one of the building's footprints. If it reaches
+further out, or no footprint holds it, the row is flagged in amber. Check it, or
+untick it. For one building at a time, pasting a GeoJSON of its storefronts under
+**Edit facts → Spaces** does the same, with a row each for title, first name,
+address, unit and floor.
+
+**Where per-row GeoJSON comes from.**
+- **Traced in the workbench:** *Copy* a traced shape, and paste it into the cell.
+- **QGIS:** add a field with the expression `geom_to_json($geometry)` (the layer
+  must be in EPSG:4326, so save it as a copy in WGS 84 first), then export the
+  layer as CSV.
+- Other tools that write GeoJSON per feature work too. Coordinates must be
+  longitude, latitude.
 
 ## Importing again, and undoing
 
@@ -347,5 +373,8 @@ Link types are in [Associations](#associations-links).
 | *not looked up (only the first 25 addresses are)* | Import in smaller sheets, or add Latitude / Longitude columns. |
 | *shape: The coordinates are not longitude/latitude…* | Export the shapes as WGS 84 (EPSG:4326), longitude first. |
 | *shape: It mixes kinds of shape…* | One kind per cell: areas, or lines, or a point. |
+| *its shape reaches outside …'s footprint (by 6 m)* | The outline was traced against another map, or the building's footprint is off. Check both in the workbench; untick the row to leave it out. |
+| *no building's footprint holds its shape: pick the building* | The building has no footprint yet (trace it first), or the outline is in the wrong place. *choose…* picks the building by hand. |
+| *… has no footprint to check its shape against yet* | It's imported anyway; trace the building's footprint when you can. |
 | *… has a shape already: this one isn't used* | A business row only gives a building a shape when it has none. Redraw it in the workbench if the sheet's is better. |
 | **Import** stays greyed out | Pick what the sheet was *made from* (step 3). |

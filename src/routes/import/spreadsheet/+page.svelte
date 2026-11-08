@@ -351,13 +351,14 @@
 										<span class="muted small">{r.shape ? `its own shape (${r.shape})` : r.lat != null ? 'its own point' : r.address ? 'address only' : '–'}</span>
 									{:else if r.place_id && r.place}
 										<a href="/e/{r.place.slug}" target="_blank" rel="noopener">{r.place.name}</a>
-										<span class="how small">{r.place_how === 'named' ? 'named' : r.space ? 'by address & unit' : 'by address'}</span>
+										<span class="how small">{r.place_how === 'named' ? 'named' : r.place_how === 'shape' ? 'by its shape' : r.space ? 'by address & unit' : 'by address'}</span>
+										{#if r.kind === 'space' && r.shape}<span class="how small" title="The row's shape becomes the storefront's outline">+ its outline</span>{/if}
 										{#if r.shape_use === 'gives place'}<span class="how small" title="It has no shape yet: the row's {r.shape} becomes its own">+ its shape</span>{/if}
 										<button type="button" class="ghost x" title="Don't link it" onclick={() => pickPlace(r, null)}>✕</button>
 									{:else if picking === r.n}
 										<EntityPicker name="pick-{r.n}" kinds={['building', 'site', 'parcel', 'space']} placeholder="Find the building…" onpick={(p) => pickPlace(r, p)} />
 									{:else}
-										{#if (r.lat != null || r.shape) && options.points}
+										{#if (r.lat != null || r.shape) && options.points && r.kind !== 'space'}
 											<label class="check small"><input type="checkbox" bind:checked={r.point} /> {r.shape ? `new building (${r.shape})` : 'new point'}{r.place_how === 'geocoded' ? ' (looked up)' : ''}</label>
 										{:else}
 											<span class="muted small">not placed</span>
