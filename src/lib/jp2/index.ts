@@ -25,7 +25,7 @@ export interface DecodedImage {
 }
 
 /** What this browser can draw: the GPU's texture limit (the map draws the scan as one) and a memory budget. */
-function limits() {
+export function limits() {
 	let maxSide = 8192;
 	try {
 		const gl = document.createElement('canvas').getContext('webgl');

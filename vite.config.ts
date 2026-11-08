@@ -12,5 +12,7 @@ const schemaVersion = (readdirSync(new URL('./supabase/migrations', import.meta.
 
 export default defineConfig({
 	plugins: [sveltekit()],
-	define: { __SCHEMA_VERSION__: JSON.stringify(schemaVersion) }
+	define: { __SCHEMA_VERSION__: JSON.stringify(schemaVersion) },
+	// the workbench's workers are module workers; the GeoTIFF reader loads its decoders on demand
+	worker: { format: 'es' }
 });

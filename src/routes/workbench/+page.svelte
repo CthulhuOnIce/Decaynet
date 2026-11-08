@@ -8,6 +8,21 @@
 	import TemporalFields from '$lib/components/TemporalFields.svelte';
 	import SourcePicker from '$lib/components/SourcePicker.svelte';
 	import { JPEG2000_ACCEPT, decodeJpeg2000, isJpeg2000 } from '$lib/jp2';
+	import {
+		CRS_PRESETS,
+		GEO_ACCEPT,
+		centreOf,
+		crsFromEpsg,
+		crsFromText,
+		decodeTiff,
+		gatherScanFiles,
+		georefPins,
+		guessCrs,
+		isTiff,
+		worldTransform,
+		type Crs,
+		type Georef
+	} from '$lib/georaster';
 	import { CONFIDENCES } from '$lib/types';
 	import ScanPinView from '$lib/components/ScanPinView.svelte';
 	import { apply, cornersFor, fit, fromMerc, metres, minPins, toMerc, type FitKind, type XY } from '$lib/map/georef';
@@ -62,6 +77,11 @@
 	let scanBusy = $state<string | null>(null);
 	/** set when a big JPEG 2000 sheet was decoded at a reduced resolution to fit the browser */
 	let scanNote = $state<string | null>(null);
+	// a georeferenced scan (GeoTIFF, or a world file): where it says it is, and in which coordinate system
+	type ScanSize = { width: number; height: number; fullWidth: number; fullHeight: number };
+	let scanGeo = $state<{ geo: Georef; size: ScanSize; crs: Crs | null; guessed: boolean; problem: string | null } | null>(null);
+	let crsText = $state('');
+	let crsPaste = $state(false);
 
 	// Two ways to align a scan: drag its four corners, or match pins (control
 	// points) on the scan to the same spots on the map and fit the sheet to them.
@@ -187,21 +207,41 @@
 
 	async function openScan(e: Event) {
 		const input = e.currentTarget as HTMLInputElement;
-		const file = input.files?.[0];
-		if (!file || !map) return;
+		const picked = [...(input.files ?? [])];
+		if (!picked.length || !map) return;
 		scanError = null;
 		scanNote = null;
+		scanGeo = null;
+		crsPaste = false;
 		try {
-			if (scan) URL.revokeObjectURL(scan.url);
+			// a zip, or an image picked with its world file and .prj
+			if (picked.length > 1 || /\.zip$/i.test(picked[0].name)) scanBusy = 'Unpacking…';
+			const set = await gatherScanFiles(picked).finally(() => (scanBusy = null));
+			const file = set.image;
+			const notes: string[] = set.note ? [set.note] : [];
 			let image: Blob = file;
-			// JPEG 2000 (the Library of Congress's Sanborn sheets): decoded here, in a worker
-			if (await isJpeg2000(file)) {
+			let full: { fullWidth: number; fullHeight: number } | null = null;
+			let geo: Georef | null = null;
+			if (await isTiff(file)) {
+				// TIFF / GeoTIFF: decoded here, in a worker, with its georeferencing
+				scanBusy = `Reading ${file.name}…`;
+				const t = await decodeTiff(file).finally(() => (scanBusy = null));
+				image = t.blob;
+				full = t;
+				if (t.width < t.fullWidth)
+					notes.push(`Shown at ${t.width.toLocaleString()} × ${t.height.toLocaleString()} px (the image is ${t.fullWidth.toLocaleString()} × ${t.fullHeight.toLocaleString()}): as much as this browser can draw.`);
+				if (t.geo) geo = { transform: t.geo.transform, epsg: t.geo.epsg, prj: set.prj, citation: t.geo.citation, from: 'GeoTIFF' };
+			} else if (await isJpeg2000(file)) {
+				// JPEG 2000 (the Library of Congress's Sanborn sheets): decoded here, in a worker
 				scanBusy = `Decoding ${file.name}…`;
 				const t = await decodeJpeg2000(file).finally(() => (scanBusy = null));
 				image = t.blob;
+				full = t;
 				if (t.width < t.fullWidth)
-					scanNote = `Shown at ${t.width.toLocaleString()} × ${t.height.toLocaleString()} px (the sheet is ${t.fullWidth.toLocaleString()} × ${t.fullHeight.toLocaleString()}): as much as this browser can draw. Alignment files still match it on any device.`;
+					notes.push(`Shown at ${t.width.toLocaleString()} × ${t.height.toLocaleString()} px (the sheet is ${t.fullWidth.toLocaleString()} × ${t.fullHeight.toLocaleString()}): as much as this browser can draw. Alignment files still match it on any device.`);
 			}
+			if (!geo && set.world) geo = { transform: worldTransform(set.world), epsg: null, prj: set.prj, citation: null, from: 'world file' };
+			if (scan) URL.revokeObjectURL(scan.url);
 			const url = URL.createObjectURL(image);
 			const img = new Image();
 			img.src = url;
@@ -227,16 +267,93 @@
 				height: img.height,
 				corners: [ll(x0, y0), ll(x0 + w, y0), ll(x0 + w, y0 + h), ll(x0, y0 + h)]
 			};
+			scanNote = notes.join(' ') || null;
+			if (geo) placeGeo(geo, { width: img.width, height: img.height, fullWidth: full?.fullWidth ?? img.width, fullHeight: full?.fullHeight ?? img.height });
 			const y = file.name.match(/(1[89]\d\d|20\d\d)/);
 			if (y) {
 				depictsYear = y[1];
 				year = Number(y[1]);
 			}
 		} catch (err) {
-			scanError = `Couldn't open that image: ${(err as Error).message}`;
+			scanError = `Couldn't open that: ${(err as Error).message}`;
 		}
 		// so choosing the same file again opens it again
 		input.value = '';
+	}
+
+	/** A georeferenced scan: work out its coordinate system (named, from its .prj, or guessed), then place it. */
+	function placeGeo(geo: Georef, size: ScanSize) {
+		let crs: Crs | null = null;
+		let guessed = false;
+		let problem: string | null = null;
+		if (geo.epsg) {
+			crs = crsFromEpsg(geo.epsg);
+			if (!crs) problem = `It's in EPSG:${geo.epsg}${geo.citation ? ` (${geo.citation})` : ''}, which isn't built in. Paste its definition below (epsg.io/${geo.epsg} has it as PROJ.4 or WKT).`;
+		}
+		if (!crs && !problem && geo.prj) {
+			crs = crsFromText(geo.prj);
+			if (!crs) problem = 'Its .prj file couldn’t be read. Pick the coordinate system, or paste one below.';
+		}
+		if (!crs && !problem) {
+			const c = map!.getCenter();
+			crs = guessCrs(centreOf(geo.transform, size.fullWidth, size.fullHeight), [c.lng, c.lat]);
+			guessed = !!crs;
+			if (!crs) problem = `Its ${geo.from} doesn't say which coordinate system it's in, and none of the built-in ones put it near here. Pick one, or paste its definition.`;
+		}
+		scanGeo = { geo, size, crs, guessed, problem };
+		if (crs) applyCrs(crs);
+	}
+
+	/** Place the scan by its georeferencing in this coordinate system: four corner pins, fitted like any others. */
+	function applyCrs(crs: Crs) {
+		if (!scanGeo || !scan || !map) return;
+		const placed = georefPins(scanGeo.geo.transform, crs, scanGeo.size);
+		if (!placed) {
+			scanGeo = { ...scanGeo, crs, problem: `Those coordinates don't land on Earth in ${crs.label}: pick another coordinate system.` };
+			return;
+		}
+		scanGeo = { ...scanGeo, crs, problem: null };
+		clearPins();
+		pins = placed.map((p, i) => ({ id: i + 1, img: p.img, map: p.map }));
+		pinSeq = pins.length;
+		fitChoice = 'affine';
+		alignMode = 'pins';
+		aligning = false;
+		const lngs = placed.map((p) => p.map[0]);
+		const lats = placed.map((p) => p.map[1]);
+		map.fitBounds(
+			[
+				[Math.min(...lngs), Math.min(...lats)],
+				[Math.max(...lngs), Math.max(...lats)]
+			],
+			{ padding: 60, duration: 600, maxZoom: 19 }
+		);
+	}
+
+	function chooseCrs(id: string) {
+		if (!scanGeo) return;
+		if (id === '') {
+			crsPaste = true;
+			return;
+		}
+		const c = CRS_PRESETS.find((x) => x.id === id) ?? (scanGeo.crs?.id === id ? scanGeo.crs : null);
+		if (!c) return;
+		crsPaste = false;
+		scanGeo = { ...scanGeo, guessed: false };
+		applyCrs(c);
+	}
+
+	function pasteCrs() {
+		if (!scanGeo) return;
+		const c = crsFromText(crsText, 'Pasted');
+		if (!c) {
+			scanGeo = { ...scanGeo, problem: 'That isn’t a coordinate system proj4 can read: paste an EPSG code Decaynet knows, a PROJ.4 string (+proj=…) or WKT.' };
+			return;
+		}
+		crsPaste = false;
+		crsText = '';
+		scanGeo = { ...scanGeo, guessed: false };
+		applyCrs(c);
 	}
 
 	/** "Remove scan": confirm when an alignment would be lost. */
@@ -251,6 +368,7 @@
 		if (scan) URL.revokeObjectURL(scan.url);
 		scan = null;
 		scanNote = null;
+		scanGeo = null;
 		markers.forEach((m) => m.remove());
 		markers = [];
 		clearPins();
@@ -1324,11 +1442,16 @@
 
 			{#if !scan && !tileUrl}
 				<h3>Open a scan</h3>
-				<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,{JPEG2000_ACCEPT}" onchange={openScan} disabled={!!scanBusy} />
+				<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,{JPEG2000_ACCEPT},{GEO_ACCEPT}" onchange={openScan} disabled={!!scanBusy} />
 				{#if scanBusy}<p class="notice small">{scanBusy} Big sheets take a few seconds.</p>{/if}
 				<p class="hint">
 					It appears with four corner handles. Drag each corner onto the matching intersection. PNG, JPEG, WebP, GIF, or JPEG 2000
 					(<code>.jp2</code>, as the Library of Congress serves its Sanborn sheets).
+				</p>
+				<p class="hint">
+					<strong>Already georeferenced?</strong> A GeoTIFF, an image picked together with its world file (<code>.tfw</code>, <code>.jgw</code>,
+					<code>.j2w</code>…) and <code>.prj</code>, or a zip of them lands in place by itself. ECW and MrSID can't be read in a browser: convert them to
+					GeoTIFF first.
 				</p>
 				<h3>…or a tile layer</h3>
 				<p class="hint">Already georeferenced in Map Warper, Allmaps or similar? Paste its XYZ URL.</p>
@@ -1343,6 +1466,28 @@
 						<span class="session" title="Not uploaded or saved anywhere; gone when you close the page">this session only</span>
 					</div>
 					{#if scan && scanNote}<p class="hint scan-note">{scanNote}</p>{/if}
+					{#if scan && scanGeo}
+						<div class="geo">
+							{#if scanGeo.crs && !scanGeo.problem}
+								<p class="hint">
+									Placed from its {scanGeo.geo.from}{scanGeo.guessed ? ' (the coordinate system is a guess: the one that puts it nearest here)' : ''}. Check it
+									against the streets; <em>Align scan</em> to adjust.
+								</p>
+							{/if}
+							{#if scanGeo.problem}<p class="notice small">{scanGeo.problem}</p>{/if}
+							<label for="crs">Coordinate system</label>
+							<select id="crs" value={crsPaste ? '' : (scanGeo.crs?.id ?? '')} onchange={(e) => chooseCrs((e.currentTarget as HTMLSelectElement).value)}>
+								{#if !scanGeo.crs}<option value="" disabled>Pick one…</option>{/if}
+								{#each CRS_PRESETS as c (c.id)}<option value={c.id}>{c.label}</option>{/each}
+								{#if scanGeo.crs && !CRS_PRESETS.some((c) => c.id === scanGeo?.crs?.id)}<option value={scanGeo.crs.id}>{scanGeo.crs.label}</option>{/if}
+								<option value="">Another: paste it…</option>
+							</select>
+							{#if crsPaste || (scanGeo.problem && !scanGeo.crs)}
+								<textarea rows="3" bind:value={crsText} placeholder="An EPSG code, a PROJ.4 string (+proj=tmerc …) or a .prj file's WKT" aria-label="Coordinate system definition"></textarea>
+								<button onclick={pasteCrs} disabled={!crsText.trim()}>Place it</button>
+							{/if}
+						</div>
+					{/if}
 					<div class="row scan-actions">
 						{#if scan}
 							{#if aligning}
@@ -2494,6 +2639,15 @@
 	.viewpanel .field,
 	.viewpanel .seg {
 		margin: 0 0 0 22px;
+	}
+	.geo {
+		display: grid;
+		gap: 6px;
+		margin: 6px 0;
+	}
+	.geo textarea {
+		font-family: var(--mono);
+		font-size: 0.78rem;
 	}
 	.scan-card {
 		display: grid;
