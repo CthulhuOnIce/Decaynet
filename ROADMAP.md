@@ -55,7 +55,7 @@ Pick any address in Gary and any year since 1906, and see:
 - [x] Alignment files (export / re-load corner positions as JSON) and session XYZ tile layers
 - [x] Blend, swipe and flicker (hold F) comparison of the scan vs. data
 - [x] Trace footprints / streets over a scan with vertex snapping
-- [x] Area change tool (end everything inside a polygon at a date, with preview)
+- [x] End everything in an area at a date: select it with a box or lasso, untick what survived, mark it gone (cited)
 - [x] GeoJSON import with per-feature date properties
 - [ ] Control-point georeferencing (≥ 6 GCPs, polynomial / thin-plate warp) to replace 4-corner pinning ⚑ (client-side warp in WebGL)
 - [ ] Faster handling of very large scans in the browser (tiling in a web worker)

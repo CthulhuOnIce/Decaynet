@@ -14,9 +14,25 @@ function bulkDate(fd: FormData) {
 	}
 }
 
+/** A bulk action on the selection, citing the source picked (if any) on what it adds. */
+function bulk(locals: App.Locals, fd: FormData, action: string, ids: string[], at: { date: string | null; precision: string }, value: string | null = null) {
+	return locals.supabase.rpc('bulk_pages', {
+		p_action: action,
+		p_ids: ids,
+		p_at: at.date,
+		p_precision: at.precision,
+		p_value: value,
+		p_note: str(fd, 'note'),
+		p_source: str(fd, 'source_id'),
+		p_detail: str(fd, 'source_detail')
+	});
+}
+
 interface BulkResult {
 	done: number;
 	skipped: { id: string; name: string; slug: string; reason: string }[];
+	/** rows it added that got the source picked */
+	cited?: number;
 }
 
 export const load: PageServerLoad = async ({ locals, parent }) => {
@@ -128,38 +144,6 @@ export const actions: Actions = {
 		return { ok: 'Shape saved.', slug, newSource: madeSource(made) };
 	}),
 
-	previewArea: wrap(async (fd, locals) => {
-		await requirePermission(locals, 'bulk_edit');
-		const area = parseGeo(str(fd, 'geojson'), 'polygon');
-		const at = fuzzyPair(fd, 'at', 'at_to').from;
-		if (!at) throw new FormError('When did the change happen?');
-		const kinds = fd.getAll('kinds').map(String);
-		const res = await locals.supabase.rpc('entities_in_area', { p_area: area, p_at: at, p_kinds: kinds.length ? kinds : null });
-		check(res);
-		return { preview: res.data as { id: string; slug: string; kind: string; name: string; status: string | null }[] };
-	}),
-
-	retireArea: wrap(async (fd, locals) => {
-		await requirePermission(locals, 'bulk_edit');
-		const area = parseGeo(str(fd, 'geojson'), 'polygon');
-		const life = fuzzyPair(fd, 'at', 'at_to');
-		if (!life.from) throw new FormError('When did the change happen?');
-		const ids = fd.getAll('ids').map(String);
-		if (!ids.length) throw new FormError('Nothing selected.');
-		const res = await locals.supabase.rpc('retire_area', {
-			p_area: area,
-			p_at: life.from,
-			p_precision: life.fromPrecision,
-			p_kinds: null,
-			p_status: str(fd, 'status') ?? 'demolished',
-			p_note: str(fd, 'note'),
-			p_source_id: str(fd, 'source_id'),
-			p_ids: ids
-		});
-		check(res);
-		return { ok: `Retired ${res.data} feature${res.data === 1 ? '' : 's'}.` };
-	}),
-
 	/** Selected pages: gone by a year (e.g. missing from that year's aerial). */
 	bulkGone: wrap(async (fd, locals) => {
 		await requirePermission(locals, 'edit_content');
@@ -167,13 +151,7 @@ export const actions: Actions = {
 		if (!ids.length) throw new FormError('Select some buildings first.');
 		const at = bulkDate(fd);
 		if (!at?.date) throw new FormError('Gone by when? Enter a year, like 1958.');
-		const res = await locals.supabase.rpc('end_pages', {
-			p_ids: ids,
-			p_at: at.date,
-			p_precision: at.precision,
-			p_status: str(fd, 'status') ?? 'demolished',
-			p_note: str(fd, 'note')
-		});
+		const res = await bulk(locals, fd, 'gone', ids, at, str(fd, 'status') ?? 'demolished');
 		check(res);
 		return { bulk: { ...(res.data as BulkResult), action: 'gone' as const, at: str(fd, 'at') } };
 	}),
@@ -187,13 +165,7 @@ export const actions: Actions = {
 		if (!at?.date) throw new FormError('From when? Enter a year, like 1958.');
 		const status = str(fd, 'condition');
 		if (!status) throw new FormError('Pick a condition.');
-		const res = await locals.supabase.rpc('set_condition_pages', {
-			p_ids: ids,
-			p_status: status,
-			p_at: at.date,
-			p_precision: at.precision,
-			p_note: str(fd, 'note')
-		});
+		const res = await bulk(locals, fd, 'condition', ids, at, status);
 		check(res);
 		return { bulk: { ...(res.data as BulkResult), action: 'condition' as const, at: str(fd, 'at'), status } };
 	}),
@@ -205,7 +177,7 @@ export const actions: Actions = {
 		if (!ids.length) throw new FormError('Select some buildings first.');
 		const at = bulkDate(fd);
 		if (!at?.date) throw new FormError('Still standing in which year?');
-		const res = await locals.supabase.rpc('reopen_pages', { p_ids: ids, p_at: at.date, p_precision: at.precision });
+		const res = await bulk(locals, fd, 'standing', ids, at);
 		check(res);
 		return { bulk: { ...(res.data as BulkResult), action: 'standing' as const, at: str(fd, 'at') } };
 	}),
@@ -217,7 +189,7 @@ export const actions: Actions = {
 		if (!ids.length) throw new FormError('Select some buildings first.');
 		const at = bulkDate(fd);
 		if (!at?.date) throw new FormError('Not seen yet in which year? Enter one, like 1955.');
-		const res = await locals.supabase.rpc('start_after_pages', { p_ids: ids, p_at: at.date, p_precision: at.precision });
+		const res = await bulk(locals, fd, 'notyet', ids, at);
 		check(res);
 		const r = res.data as BulkResult & { starts: string };
 		return { bulk: { ...r, action: 'notyet' as const, at: str(fd, 'at') } };
@@ -231,7 +203,7 @@ export const actions: Actions = {
 		const at = bulkDate(fd);
 		if (!at?.date) throw new FormError('Named from when? Enter a year, like 1925.');
 		const name = required(fd, 'name', 'Name');
-		const res = await locals.supabase.rpc('name_pages', { p_ids: ids, p_at: at.date, p_precision: at.precision, p_name: name, p_note: str(fd, 'note') });
+		const res = await bulk(locals, fd, 'name', ids, at, name);
 		check(res);
 		return { bulk: { ...(res.data as BulkResult), action: 'name' as const, at: str(fd, 'at'), name: name.replace(/\s+/g, ' ').trim() } };
 	}),

@@ -45,7 +45,7 @@ Built with **SvelteKit 2 / Svelte 5**, **Supabase** (Postgres 17 + PostGIS, Auth
 | ![1995: the same blocks after decline](docs/images/map-1995.png) | **Time machine.** Everything on the map is folded to the year on the slider: names, shapes, condition (active → vacant → abandoned → ruin → demolished), occupants and nearby events. The modern basemap fades as you go back. |
 | ![A building page](docs/images/entity-page.png) | **A wiki page for everything**, with prose, a dated timeline of every fact, connections, tags, spaces and tenants, photos, footnoted sources and a "snapshot as of year X" box. |
 | ![Tenants inside buildings](docs/images/map-spaces.png) | **Real building footprints** with **spaces inside them** (storefronts, suites, halls). Tenants occupy spaces over time, and at high zoom the map labels each space with who was there that year. |
-| ![The workbench](docs/images/workbench-trace.png) | **Editor workbench.** Pin a scanned Sanborn sheet over the map for the session, compare it with the data, and trace footprints and streets from it. Also bulk tools for area changes and GeoJSON import. |
+| ![The workbench](docs/images/workbench-trace.png) | **Editor workbench.** Pin a scanned Sanborn sheet over the map for the session, compare it with the data, and trace footprints and streets from it. Also bulk changes to a selection (box or lasso) and GeoJSON import. |
 | ![Import preview](docs/images/import-preview.png) | **Live import from OpenHistoricalMap and Wikidata.** Pick an area, fetch, and review a preview of every page that would be created or filled in before anything is written. |
 | ![The tip form](docs/images/tip-form.png) | **Anonymous tips.** Guests can send what they know, with optional photos and a map pin. Optional captcha, IP policy and rate limiting; editors review tips in a queue. |
 
@@ -398,16 +398,14 @@ Already georeferenced a sheet elsewhere (Map Warper, Allmaps…)? Paste its XYZ 
 
 ### When a whole area's layout changed
 
-![Area change: preview everything inside a polygon](docs/images/workbench-area.png)
-
 The modern grid is a poor guide to the past. The lakefront was filled for the mill, the Grand Calumet River was re-channelled, the Toll Road and urban renewal erased blocks, and streets were vacated and re-platted. Decaynet handles this in several ways:
 
 - **Everything has dated geometry.** Streets, parcels, shorelines (`water`) and terrain (`landform`) can each carry several shapes over time.
 - **Ended things become ghosts.** You can still see the old grid after it's gone.
 - **The basemap can be hidden** (Layers → Modern basemap → *Hidden*, or as the site default) when today's streets mislead.
-- **The Area change tool:** draw around a cleared block or highway corridor, enter the year, preview everything standing inside, untick anything that survived, and end the rest in one step, with a condition (demolished / vacated…), a note and a citation. Nothing is deleted; it just becomes history.
+- **Select the area and mark it gone:** lasso a cleared block or highway corridor in the workbench (see below), Shift-click whatever survived to untick it, and mark the rest *Gone by* that year, with a condition, a note and the source you're working from. A street that's gone is *vacated* rather than demolished. Nothing is deleted; it just becomes history.
 - Then **trace the new layout** from a later scan or import it.
-- **Select buildings** (Shift-click or Shift-drag a box; *Select* on a phone) to work on several at once:
+- **Select buildings** (Shift-click, Shift-drag a box, or Shift+Alt-drag a **lasso** around any area; on a phone, *Select*, then *Box* or *Lasso*) to work on several at once. The lasso takes everything whose middle is inside it, streets, parcels and water included. Anything you mark can be **cited**: pick the aerial or map you're working from (and the frame or sheet), and what it adds (the new condition or name) cites it.
   - *Gone by*, *Condition from*, *Still standing in* and *Name from* a year. A name runs from then until the next recorded one, and the name running then ends there; the page title stays.
   - *Gone by* asks why it's missing from the map:
     - **Demolished here** ends each lifespan then, with a condition (*Demolished*, *Empty lot*…).
@@ -426,7 +424,7 @@ The modern grid is a poor guide to the past. The lakefront was filled for the mi
 3. Set default dates, a condition, a confidence level and a source.
 4. **Import.** Each feature becomes a page with a dated shape.
 
-Bulk tools (area change and import) need the *Bulk map tools* permission.
+Bulk imports need the *Bulk map tools* permission.
 
 ### Spreadsheets: a block's businesses at once
 
@@ -598,7 +596,7 @@ Tick a box to grant a permission to a role, and add your own roles (e.g. "Archiv
 | Upload media | ✓ | ✓ | ✓ | ✓ |
 | Create tags | ✓ | ✓ | ✓ | ✓ |
 | Review tips | | ✓ | ✓ | ✓ |
-| Bulk map tools (area change, import) | | ✓ | ✓ | ✓ |
+| Bulk map tools (imports) | | ✓ | ✓ | ✓ |
 | Moderate (delete others' content, lock & feature articles) | | | ✓ | ✓ |
 | Clean up timelines (review and apply timeline fixes) | | | ✓ | ✓ |
 | Manage users | | | | ✓ |

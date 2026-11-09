@@ -34,7 +34,7 @@
 
 	let { data, form } = $props();
 
-	type Tool = 'overlay' | 'trace' | 'area' | 'import';
+	type Tool = 'overlay' | 'trace' | 'import';
 	type Corners = [[number, number], [number, number], [number, number], [number, number]];
 
 	let tool = $state<Tool>('overlay');
@@ -757,8 +757,8 @@
 	// ---------------------------------------------------------------- drawing (trace + area)
 	let drawMode = $state<'polygon' | 'line' | 'point'>('polygon');
 	let pts = $state<[number, number][]>([]);
-	const drawing = $derived(tool === 'trace' || tool === 'area');
-	const effectiveMode = $derived(tool === 'area' ? 'polygon' : drawMode);
+	const drawing = $derived(tool === 'trace');
+	const effectiveMode = $derived(drawMode);
 	const geometry = $derived.by((): GeoJSON.Geometry | null => {
 		if (effectiveMode === 'point') return pts.length ? { type: 'Point', coordinates: pts[pts.length - 1] } : null;
 		if (effectiveMode === 'line') return pts.length >= 2 ? { type: 'LineString', coordinates: pts } : null;
@@ -925,7 +925,6 @@
 	}
 
 	// ---------------------------------------------------------------- area preview
-	let previewIds = $state<string[]>([]);
 
 	// ---------------------------------------------------------------- bulk selection
 	// Shift-click a building to select it (Shift-drag selects a box); on a phone, the map's
@@ -943,6 +942,12 @@
 	let selecting = $state(false);
 	let boxMode = $state(false);
 	let box = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+	// a freehand area: everything whose middle is inside it (a highway corridor, a cleared block)
+	let lassoMode = $state(false);
+	let lasso = $state<{ x: number; y: number }[] | null>(null);
+	/** the source the selection's changes are cited to (kept for the next batch from the same aerial) */
+	let bulkSource = $state('');
+	let bulkDetail = $state('');
 	let bulkResult = $state<{
 		action: 'gone' | 'condition' | 'standing' | 'name' | 'notyet';
 		at: string;
@@ -951,6 +956,7 @@
 		starts?: string;
 		done: number;
 		skipped: { id: string; name: string; slug: string; reason: string }[];
+		cited?: number;
 	} | null>(null);
 	/** what the selection gets: gone by a year, a condition from a year, still standing in a year, or a name from a year */
 	let bulkMode = $state<'gone' | 'condition' | 'standing' | 'name'>('gone');
@@ -1013,9 +1019,47 @@
 		bulkResult = null;
 		selected = [...selected, ...hits.filter((h) => !have.has(h.id))];
 	}
+	/** Lasso: add everything whose middle (as drawn now) is inside the outline. */
+	function pickLasso(poly: { x: number; y: number }[]) {
+		if (moving || !map || poly.length < 3) return;
+		const xs = poly.map((p) => p.x);
+		const ys = poly.map((p) => p.y);
+		const inside = (x: number, y: number) => {
+			let c = false;
+			for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+				const a = poly[i];
+				const b = poly[j];
+				if (a.y > y !== b.y > y && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) c = !c;
+			}
+			return c;
+		};
+		const layers = snapshotLayers('snapshot').map((l) => l.id).filter((id) => map!.getLayer(id));
+		// a page drawn across several tiles comes back in pieces: gather them before finding its middle
+		const found = new Map<string, { p: Picked; sx: number; sy: number; n: number }>();
+		const walk = (c: unknown, add: (xy: [number, number]) => void) => {
+			if (Array.isArray(c) && typeof c[0] === 'number') add(c as [number, number]);
+			else if (Array.isArray(c)) c.forEach((x) => walk(x, add));
+		};
+		for (const f of map.queryRenderedFeatures([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { layers })) {
+			const p = pickedOf(f as unknown as { properties: Record<string, unknown> });
+			if (!p) continue;
+			const acc = found.get(p.id) ?? { p, sx: 0, sy: 0, n: 0 };
+			walk((f.geometry as { coordinates?: unknown }).coordinates, (xy) => {
+				const q = map!.project(xy);
+				acc.sx += q.x;
+				acc.sy += q.y;
+				acc.n++;
+			});
+			found.set(p.id, acc);
+		}
+		const have = new Set(selected.map((s) => s.id));
+		bulkResult = null;
+		selected = [...selected, ...[...found.values()].filter((a) => a.n && !have.has(a.p.id) && inside(a.sx / a.n, a.sy / a.n)).map((a) => a.p)];
+	}
 	function stopSelecting() {
 		selecting = false;
 		boxMode = false;
+		lassoMode = false;
 	}
 	/** After a bulk action: show what happened, reload the map, start a fresh selection. */
 	function afterBulk() {
@@ -1033,10 +1077,6 @@
 			}
 		};
 	}
-	$effect(() => {
-		const p = form && 'preview' in form ? form.preview : null;
-		previewIds = p ? p.map((r) => r.id) : [];
-	});
 	let highlighted: string[] = [];
 	function highlight(ids: string[]) {
 		if (!map || !ready) return;
@@ -1392,10 +1432,33 @@
 		// Shift-drag selects a box of buildings here (instead of zooming to it); so does a drag in Box mode
 		mm.boxZoom.disable();
 		const box0 = (e: PointerEvent) => {
-			if (!(e.shiftKey || boxMode) || e.button !== 0) return;
+			if (!(e.shiftKey || boxMode || lassoMode) || e.button !== 0) return;
 			if ((e.target as HTMLElement).closest('.maplibregl-marker, .maplibregl-ctrl')) return;
 			const r = mapEl.getBoundingClientRect();
 			mm.dragPan.disable();
+			if (lassoMode || (e.shiftKey && e.altKey)) {
+				// Lasso: a freehand outline
+				lasso = [{ x: e.clientX - r.left, y: e.clientY - r.top }];
+				const moveLasso = (ev: PointerEvent) => {
+					if (!lasso) return;
+					const q = { x: ev.clientX - r.left, y: ev.clientY - r.top };
+					const last = lasso[lasso.length - 1];
+					if (Math.hypot(q.x - last.x, q.y - last.y) > 3) lasso = [...lasso, q];
+				};
+				const endLasso = () => {
+					window.removeEventListener('pointermove', moveLasso);
+					window.removeEventListener('pointerup', endLasso);
+					window.removeEventListener('pointercancel', endLasso);
+					mm.dragPan.enable();
+					const l = lasso;
+					lasso = null;
+					if (l && l.length > 3) pickLasso(l);
+				};
+				window.addEventListener('pointermove', moveLasso);
+				window.addEventListener('pointerup', endLasso);
+				window.addEventListener('pointercancel', endLasso);
+				return;
+			}
 			box = { x0: e.clientX - r.left, y0: e.clientY - r.top, x1: e.clientX - r.left, y1: e.clientY - r.top };
 			const moveBox = (ev: PointerEvent) => {
 				if (box) box = { ...box, x1: ev.clientX - r.left, y1: ev.clientY - r.top };
@@ -1521,7 +1584,7 @@
 	});
 	// Hide handles while drawing so clicks land on the map
 	$effect(() => {
-		if (tool === 'trace' || tool === 'area') aligning = false;
+		if (tool === 'trace') aligning = false;
 	});
 	$effect(() => {
 		void [geometry, pts.length];
@@ -1558,14 +1621,13 @@
 	$effect(() => {
 		if (tool !== 'trace') untrack(() => redraw && cancelRedraw());
 	});
-	// the area preview and the bulk selection share the map's "selected" look
-	const highlightIds = $derived([...new Set([...previewIds, ...selected.map((x) => x.id)])]);
+	const highlightIds = $derived(selected.map((x) => x.id));
 	$effect(() => {
 		const ids = highlightIds;
 		untrack(() => highlight(ids));
 	});
 	$effect(() => {
-		if (map) map.getCanvas().style.cursor = drawing || pinning || streeting || boxMode ? 'crosshair' : selecting ? 'pointer' : '';
+		if (map) map.getCanvas().style.cursor = drawing || pinning || streeting || boxMode || lassoMode ? 'crosshair' : selecting ? 'pointer' : '';
 	});
 
 	function onkey(e: KeyboardEvent) {
@@ -1630,7 +1692,6 @@
 	const TOOLS: { id: Tool; label: string; ok: boolean }[] = $derived([
 		{ id: 'overlay', label: 'Scan', ok: true },
 		{ id: 'trace', label: 'Trace', ok: can('edit_content') },
-		{ id: 'area', label: 'Area change', ok: can('bulk_edit') },
 		{ id: 'import', label: 'Import', ok: can('bulk_edit') }
 	]);
 	const msg = $derived(form && form.tool === tool ? form : null);
@@ -2050,60 +2111,6 @@
 		{/if}
 
 		<!-- ======================= AREA ======================= -->
-		{#if tool === 'area'}
-			<p class="hint">
-				When a whole area's layout changed (a highway cut through, a block was cleared, streets were re-platted), draw around it
-				and end everything inside at once. Things become ghosts after that date; nothing is deleted.
-			</p>
-			<p class="muted small">{pts.length} vertices {geometry ? '· ready' : '· draw a polygon'}</p>
-			<form method="post" action="?/previewArea" class="stack" use:enhance={() => after(false)}>
-				<input type="hidden" name="tool" value="area" />
-				<input type="hidden" name="geojson" value={geojsonText} />
-				<div><label for="aat">Changed in</label><input id="aat" name="at" value={String(year)} placeholder="1956" required /></div>
-				<div class="kinds">
-					{#each ['building', 'street', 'site', 'parcel', 'space', 'infrastructure', 'water', 'landform'] as k (k)}
-						<label class="check"><input type="checkbox" name="kinds" value={k} checked={['building', 'street', 'site', 'parcel', 'space'].includes(k)} />{k}</label>
-					{/each}
-				</div>
-				<button disabled={!geometry}>Preview what's inside</button>
-			</form>
-			{#if msg && 'preview' in msg && msg.preview}
-				<form method="post" action="?/retireArea" class="stack" use:enhance={() => after()}>
-					<input type="hidden" name="tool" value="area" />
-					<input type="hidden" name="geojson" value={geojsonText} />
-					<input type="hidden" name="at" value={String(year)} />
-					<ul class="plain-list preview">
-						{#each msg.preview as r (r.id)}
-							<li>
-								<label class="check">
-									<input type="checkbox" name="ids" value={r.id} bind:group={previewIds} />
-									{r.name} <span class="muted small">{r.kind}{r.status ? ` · ${r.status}` : ''}</span>
-								</label>
-							</li>
-						{:else}
-							<li class="muted small">Nothing standing there in that year.</li>
-						{/each}
-					</ul>
-					{#if msg.preview.length}
-						<div class="fields">
-							<div>
-								<label for="ast">Mark as</label>
-								<select id="ast" name="status">
-									{#each data.vocab.statuses.filter((s) => s.decay_level >= 4) as s (s.id)}<option value={s.id} selected={s.id === 'demolished'}>{s.label}</option>{/each}
-								</select>
-							</div>
-							<div>
-								<label for="asrc">Source</label>
-								<select id="asrc" name="source_id"><option value="">(uncited)</option>{#each data.sources as s (s.id)}<option value={s.id}>{s.title}</option>{/each}</select>
-							</div>
-						</div>
-						<div><label for="anote">Note</label><input id="anote" name="note" placeholder="Cleared for the expressway" /></div>
-						<button class="primary">End {previewIds.length} in {year}</button>
-					{/if}
-				</form>
-			{/if}
-		{/if}
-
 		<!-- ======================= IMPORT ======================= -->
 		{#if tool === 'import'}
 			<p class="hint">
@@ -2255,6 +2262,9 @@
 					</div>
 				</details>
 			</div>
+			{#if lasso && lasso.length > 1}
+				<svg class="select-lasso" aria-hidden="true"><polygon points={lasso.map((q) => `${q.x},${q.y}`).join(' ')} /></svg>
+			{/if}
 			{#if box}
 				<div
 					class="select-box"
@@ -2340,9 +2350,8 @@
 	<div class="bar-row">
 		<strong class="sel-count">{selected.length} selected</strong>
 		<span class="spacer"></span>
-		{#if selecting || narrow}
-			<button class="ghost small-btn" class:on={boxMode} onclick={() => (boxMode = !boxMode)} title="Drag a box to select everything in it">Box</button>
-		{/if}
+		<button class="ghost small-btn" class:on={boxMode} onclick={() => ((boxMode = !boxMode), (lassoMode = false))} title="Drag a box to select everything in it">Box</button>
+		<button class="ghost small-btn" class:on={lassoMode} onclick={() => ((lassoMode = !lassoMode), (boxMode = false))} title="Draw around an area (a highway corridor, a cleared block) to select everything in it">Lasso</button>
 		{#if selected.length && can('manage_records')}
 			<a
 				class="btn ghost small-btn"
@@ -2368,7 +2377,7 @@
 										? `not seen yet in ${bulkResult.at} (built from ${bulkResult.starts})`
 										: `still standing in ${bulkResult.at}`
 					}.`
-				: 'Nothing changed.'}
+				: 'Nothing changed.'}{bulkResult.cited ? ` Cited ${bulkResult.cited} new record${bulkResult.cited === 1 ? '' : 's'} to the source.` : ''}
 			{#if bulkResult.skipped.length}
 				{bulkResult.skipped.length} skipped (still selected):
 				<ul class="skipped">
@@ -2379,7 +2388,7 @@
 	{/if}
 	{#if !selected.length}
 		<p class="hint">
-			{narrow || selecting ? 'Tap' : 'Shift-click'} buildings to select them{boxMode ? ', or drag a box' : narrow ? '; Box selects a whole area' : ', or Shift-drag a box'}. Then mark
+			{narrow || selecting ? 'Tap' : 'Shift-click'} buildings to select them{boxMode ? ', or drag a box' : lassoMode ? ', or draw around an area' : narrow ? '; Box or Lasso selects a whole area' : ', Shift-drag a box, or Shift+Alt-drag a lasso around any area'}. Then mark
 			them gone by a year (missing from an aerial), or still standing.
 		</p>
 	{:else}
@@ -2482,6 +2491,11 @@
 					</label>
 				{/if}
 			</div>
+			<div class="bulk-source">
+				<span class="lbl">Citing</span>
+				<SourcePicker name="source_id" sources={data.sources} bind:value={bulkSource} allowNew={false} noneLabel="Uncited" placeholder="The aerial or map you're working from…" />
+				<input name="source_detail" bind:value={bulkDetail} placeholder="frame, sheet, page" aria-label="Where in it" />
+			</div>
 			{#if bulkMode !== 'standing' && !notYet}
 				<label class="bulk-note">
 					<span>Note</span>
@@ -2582,21 +2596,12 @@
 	.opacity input[type='range'] {
 		width: 100%;
 	}
-	.kinds {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 2px 10px;
-	}
 	.check {
 		display: flex;
 		gap: 6px;
 		align-items: center;
 		margin: 0;
 		color: var(--ink);
-	}
-	.preview {
-		max-height: 260px;
-		overflow-y: auto;
 	}
 	kbd {
 		font-family: var(--mono);
@@ -3080,6 +3085,31 @@
 		background: #f2c14e;
 		border-color: #f2c14e;
 		color: #17130f;
+	}
+	.select-lasso {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		z-index: 3;
+	}
+	.select-lasso polygon {
+		fill: rgba(95, 208, 196, 0.15);
+		stroke: #5fd0c4;
+		stroke-width: 2;
+		stroke-dasharray: 5 3;
+	}
+	.bulk-source {
+		display: grid;
+		grid-template-columns: auto 1fr 9rem;
+		gap: 6px;
+		align-items: center;
+		margin: 6px 0;
+	}
+	.bulk-source .lbl {
+		font-size: 0.8rem;
+		color: var(--muted);
 	}
 	.select-box {
 		position: absolute;
