@@ -1,7 +1,8 @@
 <!--
 	Zoomable, pannable view of a scan for placing control-point pins.
 	Click or tap (without dragging) to drop a pin (or a point of the scale bar or north arrow being
-	drawn); drag a pin to move it; scroll or pinch to zoom; drag to pan.
+	drawn); drag a pin to move it; scroll or pinch to zoom; drag to pan (or, while boxing, to draw a
+	box round part of the sheet).
 	Pin positions are in the image's natural pixel coordinates.
 -->
 <script lang="ts">
@@ -22,8 +23,11 @@
 		waiting = null,
 		lines = [],
 		tip = null,
+		boxing = false,
+		boxes = [],
 		onpin,
-		onmove
+		onmove,
+		onbox
 	}: {
 		url: string;
 		width: number;
@@ -35,9 +39,16 @@
 		lines?: { id: string; kind: string; label: string; pts: XY[] }[];
 		/** the status line, instead of the pin one */
 		tip?: string | null;
+		/** a drag draws a box (cutting out a sub-map) instead of panning */
+		boxing?: boolean;
+		/** boxes to outline: areas cut out (mask), the one being cut (draft) */
+		boxes?: { x: number; y: number; w: number; h: number; kind: string }[];
 		onpin: (img: XY) => void;
 		onmove: (id: number, img: XY) => void;
+		/** a box drawn while boxing: [x, y, width, height] in the image's pixels */
+		onbox?: (r: [number, number, number, number]) => void;
 	} = $props();
+	let boxDraft = $state<[number, number, number, number] | null>(null);
 
 	let el: HTMLDivElement;
 	let scale = $state(1);
@@ -97,7 +108,9 @@
 	}
 
 	// Pan, or click-to-pin when the pointer barely moved; two fingers pinch-zoom
-	let drag: { x: number; y: number; tx: number; ty: number; moved: boolean; pin: number | null } | null = null;
+	let drag: { x: number; y: number; tx: number; ty: number; moved: boolean; pin: number | null; box: XY | null } | null = null;
+	const clampImg = ([x, y]: XY): XY => [Math.max(0, Math.min(width, x)), Math.max(0, Math.min(height, y))];
+	const boxOf = (a: XY, b: XY): [number, number, number, number] => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])];
 	const fingers = new Map<number, { x: number; y: number }>();
 	let pinch: { d: number; ix: number; iy: number; scale: number } | null = null;
 	const midpoint = () => {
@@ -118,7 +131,7 @@
 			return;
 		}
 		if (fingers.size > 2) return;
-		drag = { x: e.clientX, y: e.clientY, tx, ty, moved: false, pin };
+		drag = { x: e.clientX, y: e.clientY, tx, ty, moved: false, pin, box: boxing && pin == null ? clampImg(toImg(e.clientX, e.clientY)) : null };
 	}
 	function move(e: PointerEvent) {
 		if (fingers.has(e.pointerId)) fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -137,6 +150,10 @@
 		// a fingertip wobbles more than a mouse before a tap becomes a drag
 		if (!drag.moved && Math.hypot(dx, dy) < (e.pointerType === 'touch' ? 9 : 4)) return;
 		drag.moved = true;
+		if (drag.box) {
+			boxDraft = boxOf(drag.box, clampImg(toImg(e.clientX, e.clientY)));
+			return;
+		}
 		if (drag.pin != null) {
 			const p = toImg(e.clientX, e.clientY);
 			onmove(drag.pin, round([Math.max(0, Math.min(width, p[0])), Math.max(0, Math.min(height, p[1]))]));
@@ -155,6 +172,12 @@
 		if (!drag) return;
 		const d = drag;
 		drag = null;
+		if (d.box) {
+			const b = boxDraft;
+			boxDraft = null;
+			if (d.moved && b && b[2] >= 8 && b[3] >= 8) onbox?.(b.map(Math.round) as [number, number, number, number]);
+			return;
+		}
 		if (d.moved || d.pin != null) return;
 		const p = toImg(e.clientX, e.clientY);
 		if (inside(p)) onpin(round(p));
@@ -179,6 +202,7 @@
 		fingers.delete(e.pointerId);
 		pinch = null;
 		drag = null;
+		boxDraft = null;
 	}}
 	role="application"
 	aria-label="Scan: click or tap to place a pin; pinch or scroll to zoom"
@@ -210,6 +234,9 @@
 			{/each}
 		</svg>
 	{/if}
+	{#each [...boxes, ...(boxDraft ? [{ x: boxDraft[0], y: boxDraft[1], w: boxDraft[2], h: boxDraft[3], kind: 'draft' }] : [])] as bx, i (i)}
+		<div class="box {bx.kind}" style:left="{tx + bx.x * scale}px" style:top="{ty + bx.y * scale}px" style:width="{bx.w * scale}px" style:height="{bx.h * scale}px"></div>
+	{/each}
 	{#each pins as p (p.id)}
 		{#if p.img}
 			<button
@@ -285,6 +312,16 @@
 		paint-order: stroke;
 		stroke: #17130f;
 		stroke-width: 3;
+	}
+	.box {
+		position: absolute;
+		pointer-events: none;
+		border: 2px dashed #5fd0e8;
+		background: rgba(95, 208, 232, 0.12);
+	}
+	.box.mask {
+		border-color: #e0574a;
+		background: repeating-linear-gradient(45deg, rgba(224, 87, 74, 0.18) 0 6px, transparent 6px 12px);
 	}
 	.pin {
 		position: absolute;

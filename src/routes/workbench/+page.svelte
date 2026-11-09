@@ -81,7 +81,18 @@
 	let compare = $state<'blend' | 'swipe'>('blend');
 	let swipe = $state(0.5);
 	/** the sheet on the map; full size is the image's own, when it's shown reduced */
-	let scan = $state<{ name: string; url: string; corners: Corners; width: number; height: number; fullWidth: number; fullHeight: number } | null>(null);
+	let scan = $state<{
+		name: string;
+		/** what's shown: the image, with any parts cut out as sub-maps blanked */
+		url: string;
+		/** the image as decoded */
+		baseUrl: string;
+		corners: Corners;
+		width: number;
+		height: number;
+		fullWidth: number;
+		fullHeight: number;
+	} | null>(null);
 	let tileUrl = $state('');
 	let tileInput = $state('');
 	let aligning = $state(true); // show corner handles
@@ -128,6 +139,7 @@
 		if (src.kind === 'image') m.addSource('overlay', { type: 'image', url: src.url, coordinates: src.corners });
 		else m.addSource('overlay', { type: 'raster', tiles: [src.url], tileSize: 256 });
 		m.addLayer({ id: 'overlay', type: 'raster', source: 'overlay', paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0 } }, before);
+		if (m === map) applyOrder();
 	}
 
 	function applyOverlay() {
@@ -233,6 +245,8 @@
 	// stay on the map, small, to line the next one up against. Export writes them all out as world
 	// files (Web Mercator), alignment files and an index of the sheets: for QGIS, or for picking the
 	// book up here again. Like a single scan, nothing leaves the browser.
+	/** [x, y, width, height] in an image's pixels */
+	type Rect = [number, number, number, number];
 	type Alignment = {
 		decaynet_alignment: 1;
 		file: string;
@@ -246,6 +260,11 @@
 		scale_bar: { image: [XY, XY]; length: number | null; unit: ScaleUnit } | null;
 		north_arrow: [XY, XY] | null;
 		aligned: boolean;
+		/** parts blanked out of the sheet (cut out as sub-maps), in its pixels */
+		masks?: Rect[];
+		/** a sub-map: the sheet it was cut from, and where, in that sheet's full-size pixels */
+		crop_of?: string;
+		crop?: Rect;
 	};
 	type Sheet = {
 		id: number;
@@ -259,6 +278,9 @@
 		/** a small copy for the map while another sheet is being aligned */
 		thumb: string | null;
 		aligned: boolean;
+		/** a sub-map (an inset cut out of another sheet): that sheet, and where on it (full-size pixels) */
+		parent: number | null;
+		crop: Rect | null;
 	};
 	let book = $state<Sheet[]>([]);
 	let sheetSeq = 0;
@@ -293,11 +315,20 @@
 				alignment: readAlignment(s.alignment),
 				geo: null,
 				thumb: null,
-				aligned: false
+				aligned: false,
+				parent: null,
+				// a sub-map from an exported book: where it was cut from (its parent is linked below)
+				crop: Array.isArray(s.alignment?.crop) && s.alignment.crop.length === 4 ? (s.alignment.crop as Rect) : null
 			}));
 			for (const a of added) a.aligned = !!a.alignment?.aligned;
 			const fresh = added.filter((a) => !book.some((b) => b.name === a.name));
 			book.push(...fresh);
+			for (const [i, a] of fresh.entries()) {
+				const of = sets.find((x) => x.image.name === a.name)?.alignment?.crop_of;
+				if (typeof of === 'string') fresh[i].parent = book.find((b) => b.name === of)?.id ?? null;
+			}
+			addLayerKeys(fresh.map((a) => sheetKey(a.id)));
+			previewPlaced(fresh);
 			const notes = [note, fresh.length < added.length ? `${added.length - fresh.length} already in the book.` : null].filter(Boolean).join(' ') || null;
 			if (!scan && fresh.length) await openSheet(fresh[0].id, notes);
 			else bookNote = [fresh.length ? `${fresh.length} sheet${fresh.length === 1 ? '' : 's'} added to the book.` : null, notes].filter(Boolean).join(' ');
@@ -357,6 +388,18 @@
 				const p = map!.unproject([x, y]);
 				return [p.lng, p.lat];
 			};
+			let corners: Corners = [ll(x0, y0), ll(x0 + w, y0), ll(x0 + w, y0 + h), ll(x0, y0 + h)];
+			// a sub-map not placed yet: in the middle of the view, at its parent sheet's scale and turn
+			const par = sheet.parent != null ? book.find((x) => x.id === sheet.parent)?.alignment : null;
+			if (!sheet.alignment && par?.aligned && sheet.crop) {
+				const f = fit([[0, 0], [par.width, 0], [par.width, par.height], [0, par.height]], par.corners.map((c) => toMerc(c)), 'affine');
+				if (f) {
+					const pose = poseOf(f.m);
+					const k = (sheet.crop[2] / img.width) * (par.width / par.full_width);
+					const c = map.getCenter();
+					corners = cornersFor({ m: placeAt([img.width / 2, img.height / 2], toMerc([c.lng, c.lat]), pose.s * k, pose.th) }, img.width, img.height) as Corners;
+				}
+			}
 			tileUrl = '';
 			aligning = true;
 			panelOpen = false;
@@ -365,11 +408,12 @@
 			scan = {
 				name: file.name,
 				url,
+				baseUrl: url,
 				width: img.width,
 				height: img.height,
 				fullWidth: full?.fullWidth ?? img.width,
 				fullHeight: full?.fullHeight ?? img.height,
-				corners: [ll(x0, y0), ll(x0 + w, y0), ll(x0 + w, y0 + h), ll(x0, y0 + h)]
+				corners
 			};
 			scanAligned = false;
 			scanNote = notes.join(' ') || null;
@@ -393,6 +437,25 @@
 		}
 	}
 
+	/**
+	 * Sheets that come placed (a book opened again) show on the map before they're opened: the
+	 * ones the browser reads itself (PNG, JPEG…) at once, one after another. JPEG 2000 and TIFF
+	 * take seconds each to decode, so those show once they've been opened.
+	 */
+	async function previewPlaced(sheets: Sheet[]) {
+		for (const s of sheets) {
+			if (!s.alignment?.aligned || s.thumb || !/\.(png|jpe?g|webp|gif)$/i.test(s.name)) continue;
+			try {
+				const t = await thumbnail(s.file, s.alignment.masks ?? [], s.alignment.width);
+				const live = book.find((x) => x.id === s.id);
+				if (live && !live.thumb && live.id !== current) live.thumb = t;
+				else URL.revokeObjectURL(t);
+			} catch {
+				// not readable here: it shows once opened
+			}
+		}
+	}
+
 	/** Put the open sheet back in the book: where it is now, and a small copy to show on the map. */
 	async function stashSheet() {
 		if (!scan) return;
@@ -408,14 +471,20 @@
 		closeScan();
 	}
 
-	/** A copy at most 1600 px across, for the map: a whole book at full size would run out of graphics memory. */
-	async function thumbnail(url: string): Promise<string> {
-		const bmp = await createImageBitmap(await (await fetch(url)).blob());
+	/**
+	 * A copy at most 1600 px across, for the map: a whole book at full size would run out of graphics
+	 * memory. Parts cut out as sub-maps (masks, in pixels of an image `ofWidth` wide) are blanked.
+	 */
+	async function thumbnail(src: string | Blob, cut: Rect[] = [], ofWidth = 0): Promise<string> {
+		const bmp = await createImageBitmap(typeof src === 'string' ? await (await fetch(src)).blob() : src);
 		const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
 		const c = document.createElement('canvas');
 		c.width = Math.max(1, Math.round(bmp.width * k));
 		c.height = Math.max(1, Math.round(bmp.height * k));
-		c.getContext('2d')!.drawImage(bmp, 0, 0, c.width, c.height);
+		const g = c.getContext('2d')!;
+		g.drawImage(bmp, 0, 0, c.width, c.height);
+		const mk = ofWidth ? c.width / ofWidth : 1;
+		for (const m of cut) g.clearRect(m[0] * mk, m[1] * mk, m[2] * mk, m[3] * mk);
 		bmp.close();
 		const out = (await new Promise<Blob | null>((r) => c.toBlob(r, 'image/webp', 0.8))) ?? (await new Promise<Blob | null>((r) => c.toBlob(r, 'image/png')));
 		if (!out) throw new Error('no thumbnail');
@@ -467,7 +536,9 @@
 				);
 			}
 			bookOnMap.set(s.id, s.thumb!);
+			map.setLayoutProperty(`book-${s.id}`, 'visibility', hiddenSheets.includes(s.id) ? 'none' : 'visible');
 		}
+		applyOrder();
 	}
 
 	/** The open sheet's alignment, as saved in alignment files and the book's export. */
@@ -485,10 +556,18 @@
 			pins: pairs.map((p) => ({ image: [...p.img!] as XY, map: [...p.map!] as XY, ...(p.label ? { label: p.label } : {}) })),
 			scale_bar: scaleBar.pts.length === 2 ? { image: $state.snapshot(scaleBar.pts) as [XY, XY], length: scaleBar.length, unit: scaleBar.unit } : null,
 			north_arrow: north.length === 2 ? ($state.snapshot(north) as [XY, XY]) : null,
-			aligned: scanAligned
+			aligned: scanAligned,
+			...cropFields(book.find((s) => s.id === current)),
+			...(masks.length ? { masks: $state.snapshot(masks) as Rect[] } : {})
 		};
 	}
+	/** a sub-map's record of where it was cut from, for its alignment file */
+	function cropFields(s: Sheet | undefined): Pick<Alignment, 'crop_of' | 'crop'> {
+		const of = s?.parent != null ? book.find((x) => x.id === s.parent)?.name : undefined;
+		return s?.crop && of ? { crop_of: of, crop: [...s.crop] as Rect } : {};
+	}
 
+	const isRect = (v: unknown): v is Rect => Array.isArray(v) && v.length === 4 && v.every((n) => typeof n === 'number' && Number.isFinite(n)) && v[2] > 0 && v[3] > 0;
 	/** An alignment file's contents, checked; null if it isn't one. */
 	function readAlignment(j: Record<string, unknown> | null): Alignment | null {
 		if (!j) return null;
@@ -519,7 +598,9 @@
 					: null,
 			north_arrow: Array.isArray(na) && na.length === 2 && na.every(ok) ? (na as [XY, XY]) : null,
 			// alignment files from before books were all of aligned sheets
-			aligned: j.aligned !== false
+			aligned: j.aligned !== false,
+			...(Array.isArray(j.masks) ? { masks: (j.masks as unknown[]).filter(isRect) } : {}),
+			...(typeof j.crop_of === 'string' && isRect(j.crop) ? { crop_of: j.crop_of, crop: j.crop } : {})
 		};
 	}
 
@@ -541,6 +622,10 @@
 		pinSeq = pins.length;
 		if (a.scale_bar) scaleBar = { pts: a.scale_bar.image.map(px), length: a.scale_bar.length, unit: a.scale_bar.unit };
 		if (a.north_arrow) north = a.north_arrow.map(px);
+		if (a.masks?.length) {
+			masks = a.masks.map((m) => [m[0] * sx, m[1] * sy, m[2] * sx, m[3] * sy] as Rect);
+			renderMasks();
+		}
 		scanAligned = a.aligned;
 		placeMarkers();
 		if (fly) {
@@ -600,16 +685,17 @@
 							geometry: { type: 'Polygon', coordinates: [[...a.corners, a.corners[0]]] }
 						});
 					}
-					listed.push({ ...a, file: s.name, aligned });
+					listed.push({ ...a, file: s.name, aligned, ...cropFields(s) });
 				} else {
 					// never opened: its own georeferencing, as it came
 					if (s.world) {
 						put(`${st}.${WORLD_EXT[ext] ?? 'wld'}`, enc.encode(s.world.join('\n') + '\n'));
 						if (s.prj) put(`${st}.prj`, enc.encode(s.prj));
 					}
-					listed.push({ file: s.name, aligned: false });
+					listed.push({ file: s.name, aligned: false, ...cropFields(s) });
 				}
-				if (bookImages) {
+				// a sub-map's image only exists here: always in the zip
+				if (bookImages || s.parent != null || s.crop) {
 					bookBusy = `Packing ${s.name} (${i + 1} of ${book.length})…`;
 					// JPEG 2000, JPEG and PNG are compressed already
 					put(s.name, new Uint8Array(await s.file.arrayBuffer()), !/^(jp2|j2k|jpe?g|png|webp|gif)$/.test(ext));
@@ -638,6 +724,196 @@
 		for (const n of names) while (p && !n.startsWith(p)) p = p.slice(0, -1);
 		p = p.replace(/[\s._-]+$/, '').replace(/[^\w.-]+/g, '-');
 		return book.length > 1 && p.length >= 3 ? `${p}-book` : book.length === 1 && p ? p : 'decaynet-book';
+	}
+
+	// ---------------------------------------------------------------- sub-maps
+	// A Sanborn sheet often carries an inset: a block from somewhere else, at its own scale and
+	// turn. Cut it out (a box on the scan) and it becomes a sheet of its own in the book, aligned on
+	// its own; on the sheet it came from it's blanked out, so it doesn't cover the wrong place.
+	let masks = $state<Rect[]>([]);
+	let cropDraft = $state<Rect | null>(null);
+	let cropName = $state('');
+	let cropBlank = $state(true);
+	let cropBusy = $state(false);
+	/** the sub-map just cut out, to offer "Align it now" */
+	let lastSub = $state<number | null>(null);
+	let maskSeq = 0;
+
+	const loadImage = async (url: string) => {
+		const img = new Image();
+		img.src = url;
+		await img.decode();
+		return img;
+	};
+	const pngOf = (c: HTMLCanvasElement) =>
+		new Promise<Blob>((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('The image could not be drawn.'))), 'image/png'));
+
+	/** Show the open sheet with its cut-out parts blanked (see-through). */
+	async function renderMasks() {
+		const s = scan;
+		if (!s) return;
+		const base = s.baseUrl;
+		const my = ++maskSeq;
+		if (!masks.length) {
+			if (s.url !== base) {
+				URL.revokeObjectURL(s.url);
+				s.url = base;
+			}
+			return;
+		}
+		const img = await loadImage(base);
+		const c = document.createElement('canvas');
+		c.width = s.width;
+		c.height = s.height;
+		const g = c.getContext('2d')!;
+		g.drawImage(img, 0, 0, s.width, s.height);
+		for (const m of masks) g.clearRect(m[0], m[1], m[2], m[3]);
+		const blob = await pngOf(c);
+		// another sheet opened, or the masks changed again, meanwhile
+		if (my !== maskSeq || scan?.baseUrl !== base) return;
+		if (scan.url !== base) URL.revokeObjectURL(scan.url);
+		scan.url = URL.createObjectURL(blob);
+	}
+
+	function startCrop() {
+		alignMode = 'pins';
+		aligning = true;
+		cropDraft = null;
+		lastSub = null;
+		scanTarget = scanTarget === 'crop' ? 'pin' : 'crop';
+	}
+	function boxDrawn(r: Rect) {
+		if (scanTarget !== 'crop' || !scan) return;
+		cropDraft = r;
+		scanTarget = 'pin';
+		panelOpen = true;
+		const stem = stemOf(scan.name);
+		let n = book.filter((s) => s.parent === current).length + 1;
+		while (book.some((s) => s.name === `${stem}-inset-${n}.png`)) n++;
+		cropName = `${stem}-inset-${n}`;
+	}
+	/** Cut the box out of the open sheet as a sheet of its own, just after it in the book. */
+	async function makeSubMap() {
+		if (!scan || !cropDraft || current == null || cropBusy) return;
+		cropBusy = true;
+		try {
+			const [x, y, w, h] = cropDraft;
+			const img = await loadImage(scan.baseUrl);
+			const c = document.createElement('canvas');
+			c.width = w;
+			c.height = h;
+			c.getContext('2d')!.drawImage(img, x, y, w, h, 0, 0, w, h);
+			const blob = await pngOf(c);
+			let name = (cropName.trim() || `${stemOf(scan.name)}-inset`).replace(/[\\/:*?"<>|]+/g, '-').replace(/\.png$/i, '');
+			if (book.some((s) => s.name === `${name}.png`)) {
+				let k = 2;
+				while (book.some((s) => s.name === `${name}-${k}.png`)) k++;
+				name = `${name}-${k}`;
+			}
+			name += '.png';
+			const kx = scan.fullWidth / scan.width;
+			const ky = scan.fullHeight / scan.height;
+			const parent = current;
+			const sub: Sheet = {
+				id: ++sheetSeq,
+				name,
+				file: new File([blob], name, { type: 'image/png' }),
+				world: null,
+				prj: null,
+				alignment: null,
+				geo: null,
+				thumb: null,
+				aligned: false,
+				parent,
+				crop: [Math.round(x * kx), Math.round(y * ky), Math.round(w * kx), Math.round(h * ky)]
+			};
+			// after the sheet and the sub-maps already cut from it; on the map, just above it
+			let at = book.findIndex((s) => s.id === parent);
+			while (at + 1 < book.length && book[at + 1].parent === parent) at++;
+			book.splice(at + 1, 0, sub);
+			addLayerKeys([sheetKey(sub.id)], sheetKey(parent), 'above');
+			if (cropBlank) {
+				masks = [...masks, [x, y, w, h]];
+				await renderMasks();
+			}
+			cropDraft = null;
+			lastSub = sub.id;
+			bookNote = `${name} is a sheet of its own now, after this one in the book.`;
+		} catch (err) {
+			scanError = `Couldn't cut that out: ${(err as Error).message}`;
+		} finally {
+			cropBusy = false;
+		}
+	}
+	/** Show a blanked part of the sheet again (its sub-map stays in the book). */
+	function unmask(i: number) {
+		masks = masks.filter((_, k) => k !== i);
+		renderMasks();
+	}
+
+	// ---------------------------------------------------------------- layer order
+	// What's drawn over what: the existing shapes and each sheet of the book (the open one among
+	// them, so it keeps its place), top first. The base map is always underneath, and the tools
+	// (tracing, imports) always on top.
+	let layerOrder = $state<string[]>(['shapes']);
+	let hiddenSheets = $state<number[]>([]);
+	let dragKey = $state<string | null>(null);
+	const sheetKey = (id: number) => `sheet-${id}`;
+	type LayerRow = { key: string; label: string; kind: 'shapes' | 'open' | 'sheet' | 'tiles'; id?: number };
+	const layerRows = $derived.by((): LayerRow[] => {
+		const rows = new Map<string, LayerRow>([['shapes', { key: 'shapes', label: 'Existing shapes', kind: 'shapes' }]]);
+		if (tileUrl) rows.set('tiles', { key: 'tiles', label: 'Tile layer', kind: 'tiles' });
+		for (const s of book)
+			if (s.id === current || (s.thumb && s.alignment && s.aligned)) rows.set(sheetKey(s.id), { key: sheetKey(s.id), label: s.name, kind: s.id === current ? 'open' : 'sheet', id: s.id });
+		const keys = [...layerOrder.filter((k) => rows.has(k)), ...[...rows.keys()].filter((k) => !layerOrder.includes(k))];
+		return keys.map((k) => rows.get(k)!);
+	});
+	/** New sheets go just under `near` (the shapes), or just above it (a sub-map over its sheet). */
+	function addLayerKeys(keys: string[], near = 'shapes', where: 'below' | 'above' = 'below') {
+		const rest = layerOrder.filter((k) => !keys.includes(k));
+		let i = rest.indexOf(near);
+		if (i < 0) i = where === 'below' ? -1 : 0;
+		const at = where === 'below' ? i + 1 : i;
+		layerOrder = [...rest.slice(0, at), ...keys, ...rest.slice(at)];
+	}
+	/** Put the shown rows in a new order (keeping keys for sheets not shown now at the end). */
+	function setRows(keys: string[]) {
+		layerOrder = [...keys, ...layerOrder.filter((k) => !keys.includes(k))];
+	}
+	function moveLayerRow(key: string, by: number) {
+		const keys = layerRows.map((r) => r.key);
+		const i = keys.indexOf(key);
+		const j = i + by;
+		if (i < 0 || j < 0 || j >= keys.length) return;
+		[keys[i], keys[j]] = [keys[j], keys[i]];
+		setRows(keys);
+	}
+	function dropLayerRow(onto: string) {
+		const from = dragKey;
+		dragKey = null;
+		if (!from || from === onto) return;
+		const keys = layerRows.map((r) => r.key).filter((k) => k !== from);
+		keys.splice(keys.indexOf(onto), 0, from);
+		setRows(keys);
+	}
+	const layerShown = (r: LayerRow) =>
+		r.kind === 'shapes' ? showShapes : r.kind === 'open' || r.kind === 'tiles' ? !scanOff : !hiddenSheets.includes(r.id!);
+	function toggleLayer(r: LayerRow) {
+		if (r.kind === 'shapes') showShapes = !showShapes;
+		else if (r.kind === 'open' || r.kind === 'tiles') scanOff = !scanOff;
+		else hiddenSheets = hiddenSheets.includes(r.id!) ? hiddenSheets.filter((x) => x !== r.id) : [...hiddenSheets, r.id!];
+	}
+	function layerIdsOf(key: string): string[] {
+		if (key === 'shapes') return snapshotLayers('snapshot').map((l) => l.id);
+		if (key === 'tiles') return ['overlay'];
+		const id = Number(key.slice(6));
+		return [id === current ? 'overlay' : `book-${id}`];
+	}
+	/** Stack the map's layers in the order of the list (each moved just under the tools' layers). */
+	function applyOrder() {
+		if (!map || !ready || !map.getLayer('import-fill')) return;
+		const ids = layerRows.flatMap((r) => layerIdsOf(r.key)).filter((id) => map!.getLayer(id));
+		for (const id of ids.reverse()) map.moveLayer(id, 'import-fill');
 	}
 
 	/** A georeferenced scan: work out its coordinate system (named, from its .prj, or guessed), then place it. */
@@ -731,7 +1007,10 @@
 	}
 
 	function closeScan() {
-		if (scan) URL.revokeObjectURL(scan.url);
+		if (scan) {
+			URL.revokeObjectURL(scan.url);
+			if (scan.baseUrl !== scan.url) URL.revokeObjectURL(scan.baseUrl);
+		}
 		scan = null;
 		current = null;
 		scanNote = null;
@@ -755,7 +1034,7 @@
 	let scaleBar = $state<ScaleBar>({ pts: [], length: null, unit: 'ft' });
 	let north = $state<XY[]>([]);
 	/** what a click on the scan does */
-	let scanTarget = $state<'pin' | 'scale' | 'north'>('pin');
+	let scanTarget = $state<'pin' | 'scale' | 'north' | 'crop'>('pin');
 	let scaleInput = $state<HTMLInputElement | null>(null);
 	/** One pin: the sheet turns (radians, clockwise) and, without a scale bar, scales about it. */
 	let turnTh = $state(0);
@@ -839,8 +1118,14 @@
 				? north.length === 1
 					? 'Now the head of the north arrow'
 					: 'Click the tail of the north arrow'
-				: null
+				: scanTarget === 'crop'
+					? 'Drag a box round the part to cut out'
+					: null
 	);
+	const scanBoxes = $derived([
+		...masks.map(([x, y, w, h]) => ({ x, y, w, h, kind: 'mask' })),
+		...(cropDraft ? [{ x: cropDraft[0], y: cropDraft[1], w: cropDraft[2], h: cropDraft[3], kind: 'draft' }] : [])
+	]);
 	/** A click on the scan: a pin's spot, or a point of the scale bar or north arrow being drawn. */
 	function scanClick(img: XY) {
 		if (scanTarget === 'scale') {
@@ -943,6 +1228,8 @@
 		turnTh = 0;
 		fitChoice = 'auto';
 		crossProblem = null;
+		masks = [];
+		cropDraft = null;
 	}
 
 	// ---------------------------------------------------------------- pin a street corner by name
@@ -1746,6 +2033,8 @@
 			maxZoom: 21
 		});
 		const mm = map;
+		// for the browser tests: the map, to check what's drawn over what (dev server only)
+		if (import.meta.env.DEV) (window as unknown as { __wbMap?: MLMap }).__wbMap = mm;
 		// The map shares the stage with the scan pane while pinning, so follow its size
 		let lastW = 0;
 		let lastH = 0;
@@ -1940,8 +2229,13 @@
 	});
 	// the book's other sheets on the map
 	$effect(() => {
-		void [ready, showBook, current, tool, book.map((s) => `${s.id}:${s.thumb}:${s.aligned}:${s.alignment?.corners.flat().join()}`).join('|')];
+		void [ready, showBook, current, tool, hiddenSheets.join(), book.map((s) => `${s.id}:${s.thumb}:${s.aligned}:${s.alignment?.corners.flat().join()}`).join('|')];
 		untrack(drawBook);
+	});
+	// the layer list reordered
+	$effect(() => {
+		void [ready, layerRows.map((r) => r.key).join()];
+		untrack(applyOrder);
 	});
 	// Hide handles while drawing so clicks land on the map
 	$effect(() => {
@@ -2197,6 +2491,7 @@
 								<button title="Shrink" onclick={() => transform(0, 0.98)}>− 2%</button>
 								<button title="Grow" onclick={() => transform(0, 1.02)}>+ 2%</button>
 							</div>
+							{@render subMapUI()}
 						{:else}
 							<p class="hint">
 								Click a recognisable spot on the scan (a street corner, a church, a bridge), then the same spot on the map, or
@@ -2209,6 +2504,8 @@
 									<span class="sw scale"></span> Scale bar: click {scaleBar.pts.length === 1 ? 'its other end' : 'one end of it'} on the <strong>scan</strong>.
 								{:else if scanTarget === 'north'}
 									<span class="sw north"></span> North arrow: click its {north.length === 1 ? 'head' : 'tail'} on the <strong>scan</strong>.
+								{:else if scanTarget === 'crop'}
+									<span class="sw cut"></span> Sub-map: drag a box round it on the <strong>scan</strong>.
 								{:else if waitingMap != null && pins.find((p) => p.id === waitingMap)?.img}
 									<span class="sw pin"></span> Pin {waitingMap}: now click the same spot on the <strong>map</strong>, or type the corner below.
 								{:else if waitingImg != null}
@@ -2314,6 +2611,7 @@
 								</div>
 								<p class="hint">Optional. Click both ends of the sheet's scale bar on the scan (or any length you know) and say how long it is; click the north arrow's tail, then its head.</p>
 							</div>
+							{@render subMapUI()}
 							<div class="field">
 								<label for="fk">Fit</label>
 								<select id="fk" bind:value={fitChoice}>
@@ -2572,6 +2870,9 @@
 					waiting={waitingImg != null && !(waitingMap != null && pins.find((p) => p.id === waitingMap)?.img) ? waitingImg : null}
 					lines={scanLines}
 					tip={scanTip}
+					boxing={scanTarget === 'crop'}
+					boxes={scanBoxes}
+					onbox={boxDrawn}
 					onpin={scanClick}
 					onmove={moveImgPin}
 				/>
@@ -2649,6 +2950,7 @@
 							<p class="hint">Hold <kbd>F</kbd> to flicker the scan.</p>
 						{/if}
 						<label class="check"><input type="checkbox" bind:checked={showBase} /> Base map</label>
+						{#if layerRows.length > 1}{@render layersUI()}{/if}
 					</div>
 				</details>
 			</div>
@@ -2753,6 +3055,81 @@
 	{/if}
 {/snippet}
 
+{#snippet subMapUI()}
+	<div class="sheet-marks submaps">
+		<div class="mark-row">
+			<span class="sw cut"></span>
+			<strong>Sub-maps</strong>
+			<button class="small-btn" class:on={scanTarget === 'crop'} onclick={startCrop} disabled={!!cropDraft}>
+				{scanTarget === 'crop' ? 'Cancel' : 'Cut one out'}
+			</button>
+		</div>
+		{#if cropDraft}
+			<div class="crop-form">
+				<label for="cropname">Name of the sub-map</label>
+				<div class="row">
+					<input id="cropname" bind:value={cropName} />
+					<span class="muted small">.png</span>
+				</div>
+				<label class="check"><input type="checkbox" bind:checked={cropBlank} /> Blank it out on this sheet</label>
+				<div class="row">
+					<button class="primary" onclick={makeSubMap} disabled={cropBusy}>{cropBusy ? 'Cutting…' : 'Make it a sub-map'}</button>
+					<button class="ghost" onclick={() => (cropDraft = null)}>Cancel</button>
+				</div>
+			</div>
+		{:else if lastSub != null && book.some((b) => b.id === lastSub)}
+			<p class="hint">
+				{book.find((b) => b.id === lastSub)?.name} is in the book.
+				<button class="link" onclick={() => openSheet(lastSub!)}>Align it now →</button>
+			</p>
+		{/if}
+		{#if masks.length}
+			<ul class="mask-list">
+				{#each masks as m, i (i)}
+					<li>
+						<span class="muted small">Blanked: {Math.round(m[2])} × {Math.round(m[3])} px at {Math.round(m[0])}, {Math.round(m[1])}</span>
+						<button class="ghost x" title="Show this part of the sheet again" onclick={() => unmask(i)}>Show again</button>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+		<p class="hint">An inset (a block from somewhere else, at its own scale) can be cut out and aligned as a sheet of its own. It starts at this sheet's scale and turn.</p>
+	</div>
+{/snippet}
+
+{#snippet layersUI()}
+	<div class="layers">
+		<div class="layers-head">Layers, top first</div>
+		<ol class="layer-list">
+			{#each layerRows as r, i (r.key)}
+				<li
+					draggable="true"
+					class:dragging={dragKey === r.key}
+					class:open={r.kind === 'open'}
+					ondragstart={(e) => {
+						dragKey = r.key;
+						e.dataTransfer?.setData('text/plain', r.key);
+					}}
+					ondragover={(e) => e.preventDefault()}
+					ondrop={(e) => {
+						e.preventDefault();
+						dropLayerRow(r.key);
+					}}
+					ondragend={() => (dragKey = null)}
+				>
+					<span class="grip" aria-hidden="true">⠿</span>
+					<button class="ghost eye-btn" aria-pressed={layerShown(r)} title={layerShown(r) ? 'Hide' : 'Show'} onclick={() => toggleLayer(r)}>{@render eye(layerShown(r))}</button>
+					<span class="layer-name" title={r.label}>{r.label}</span>
+					{#if r.kind === 'open'}<span class="muted small">open</span>{/if}
+					<button class="ghost x" disabled={i === 0} title="Up (drawn over the one above)" aria-label="Move {r.label} up" onclick={() => moveLayerRow(r.key, -1)}>↑</button>
+					<button class="ghost x" disabled={i === layerRows.length - 1} title="Down" aria-label="Move {r.label} down" onclick={() => moveLayerRow(r.key, 1)}>↓</button>
+				</li>
+			{/each}
+		</ol>
+		<p class="hint">Drag, or ↑ ↓. The base map is always underneath.</p>
+	</div>
+{/snippet}
+
 {#snippet bookUI()}
 	<details class="book" open={book.length > 1}>
 		<summary>Book: {book.length} sheet{book.length === 1 ? '' : 's'}{#if book.length}, {alignedCount} placed{/if}</summary>
@@ -2760,8 +3137,8 @@
 			<ol class="sheets">
 				{#each book as s, i (s.id)}
 					{@const placed = s.id === current ? scanAligned : s.aligned}
-					<li class:current={s.id === current}>
-						<span class="sheet-no">{i + 1}</span>
+					<li class:current={s.id === current} class:sub={s.parent != null}>
+						<span class="sheet-no">{s.parent != null ? '↳' : i + 1}</span>
 						{#if s.id === current}
 							<strong class="sheet-name" title={s.name}>{s.name}</strong>
 						{:else}
@@ -3198,6 +3575,94 @@
 	}
 	.scale-len {
 		width: 6em;
+	}
+	.sw.cut {
+		width: 12px;
+		height: 10px;
+		border: 2px dashed #5fd0e8;
+	}
+	.crop-form {
+		margin: 6px 0;
+		display: grid;
+		gap: 4px;
+	}
+	.crop-form label[for] {
+		font-size: 0.8rem;
+		font-weight: 600;
+		color: var(--ink-2);
+	}
+	.crop-form .row {
+		gap: 4px;
+		align-items: center;
+		flex-wrap: nowrap;
+	}
+	.crop-form input#cropname {
+		flex: 1;
+		min-width: 0;
+	}
+	.mask-list {
+		list-style: none;
+		margin: 4px 0;
+		padding: 0;
+	}
+	.mask-list li {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		justify-content: space-between;
+	}
+	/* the order of what's drawn */
+	.layers {
+		margin-top: 8px;
+		border-top: 1px solid var(--line);
+		padding-top: 6px;
+	}
+	.layers-head {
+		font-size: 0.75rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--ink-2);
+		margin-bottom: 4px;
+	}
+	.layer-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		max-height: 16em;
+		overflow-y: auto;
+	}
+	.layer-list li {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		padding: 2px 2px;
+		border-radius: 3px;
+		font-size: 0.8rem;
+		cursor: grab;
+	}
+	.layer-list li.open {
+		background: rgba(242, 193, 78, 0.15);
+	}
+	.layer-list li.dragging {
+		opacity: 0.4;
+	}
+	.grip {
+		color: var(--ink-2);
+		width: 1em;
+	}
+	.eye-btn {
+		padding: 2px 4px;
+	}
+	.layer-name {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.sheets li.sub .sheet-name {
+		padding-left: 0.6em;
 	}
 	/* the book's sheets */
 	.book {

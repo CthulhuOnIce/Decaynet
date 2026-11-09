@@ -55,6 +55,7 @@ Pick any address in Gary and any year since 1906, and see:
 - [x] Alignment files (export / re-load corner positions as JSON) and session XYZ tile layers
 - [x] Pin a sheet by typing a street corner (the wiki's dated streets, by any name; OpenStreetMap for the rest), with its scale bar and north arrow: one pin is enough
 - [x] Sanborn books: align a volume's sheets one after another and export them together (world files, alignment files, index) for GIS
+- [x] Insets cut out of a sheet as sub-maps, aligned on their own; layer order of the sheets and shapes
 - [x] Blend, swipe and flicker (hold F) comparison of the scan vs. data
 - [x] Trace footprints / streets over a scan with vertex snapping
 - [x] End everything in an area at a date: select it with a box or lasso, untick what survived, mark it gone (cited)
