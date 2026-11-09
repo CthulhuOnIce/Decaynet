@@ -11,7 +11,7 @@ import { limits } from '$lib/jp2';
 export { CRS_PRESETS, crsFromEpsg, crsFromText, guessCrs, type Crs } from './crs';
 
 /** What the workbench's file picker takes, besides plain images and JPEG 2000. */
-export const GEO_ACCEPT = '.tif,.tiff,image/tiff,.zip,application/zip,.tfw,.tifw,.jgw,.jpgw,.j2w,.jp2w,.pgw,.pngw,.wld,.prj,.ecw,.sid';
+export const GEO_ACCEPT = '.tif,.tiff,image/tiff,.zip,application/zip,.json,.tfw,.tifw,.jgw,.jpgw,.j2w,.jp2w,.pgw,.pngw,.wld,.prj,.ecw,.sid';
 
 /** pixel corner (i, j) at full resolution → map x / y in the image's coordinate system */
 export type Transform = [number, number, number, number, number, number];
@@ -76,17 +76,22 @@ export interface ScanFiles {
 	/** six world-file numbers, if one came with it */
 	world: number[] | null;
 	prj: string | null;
-	/** what else was in a zip and left out */
-	note: string | null;
+	/** a Decaynet alignment file for it (its own, or its entry in a book's book.json) */
+	alignment: Record<string, unknown> | null;
 }
 
+/** "sheet 2.jp2" before "sheet 10.jp2" */
+const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
 /**
- * The image to open and its georeferencing files, from what was picked: one image, an image with
- * its world file and .prj, or a zip of them. Explains formats the browser can't read (ECW, MrSID).
+ * The images to open, each with its georeferencing files, from what was picked: images with their
+ * world files and .prj files, alignment files, a book's book.json, or zips of any of those. Each
+ * image is a sheet (several of the same name, a .tif and its .jpg say, are one: the best is kept),
+ * in the book's order, else by name. Explains formats the browser can't read (ECW, MrSID).
  */
-export async function gatherScanFiles(picked: File[]): Promise<ScanFiles> {
+export async function gatherScanSets(picked: File[]): Promise<{ sets: ScanFiles[]; note: string | null }> {
 	let files = picked;
-	let note: string | null = null;
+	const notes: string[] = [];
 	const zip = await Promise.all(picked.map(isZip));
 	if (zip.some(Boolean)) {
 		const inner: File[] = [];
@@ -97,37 +102,79 @@ export async function gatherScanFiles(picked: File[]): Promise<ScanFiles> {
 				continue;
 			}
 			const r = await ask<Extract<ScanReply, { op: 'unzip' }>>({ op: 'unzip', file: f });
-			for (const x of r.files) inner.push(new File([x.data], x.name));
+			// a folder in the zip doesn't matter: files are matched by name
+			for (const x of r.files) inner.push(new File([x.data], x.name.replace(/^.*\//, '')));
 			skipped.push(...r.skipped);
 		}
 		files = inner;
 		const locked = skipped.filter((n) => /\.(ecw|sid)$/i.test(n));
 		if (!files.some((f) => IMAGE_RANK[ext(f.name)] != null)) {
 			if (locked.length) throw new Error(lockedFormat(locked[0]));
-			throw new Error('There’s no image in that zip (TIFF, JPEG 2000, JPEG or PNG).');
+			throw new Error('There’s no image in that zip (TIFF, JPEG 2000, JPEG or PNG). A book’s zip without its scans needs the scans picked with it.');
 		}
-		if (locked.length) note = `${locked.join(', ')} left out: browsers can't read ECW or MrSID.`;
+		if (locked.length) notes.push(`${locked.join(', ')} left out: browsers can't read ECW or MrSID.`);
 	}
-	const images = files.filter((f) => IMAGE_RANK[ext(f.name)] != null).sort((a, b) => IMAGE_RANK[ext(a.name)] - IMAGE_RANK[ext(b.name)] || b.size - a.size);
+	const all = files.filter((f) => IMAGE_RANK[ext(f.name)] != null);
 	const locked = files.find((f) => /^(ecw|sid)$/.test(ext(f.name)));
-	if (!images.length) {
+	if (!all.length) {
 		if (locked) throw new Error(lockedFormat(locked.name));
 		// an image picked with an unusual extension: try it as one
-		if (files.length === 1 && !WANTED.test(files[0].name)) return { image: files[0], world: null, prj: null, note };
+		if (files.length === 1 && !WANTED.test(files[0].name)) return { sets: [{ image: files[0], world: null, prj: null, alignment: null }], note: null };
 		throw new Error('Pick an image (TIFF, JPEG 2000, JPEG or PNG), with its world file and .prj if it has them.');
 	}
-	const image = images[0];
-	if (images.length > 1) note = [note, `Opened ${image.name}; ${images.length - 1} other image${images.length > 2 ? 's were' : ' was'} left out.`].filter(Boolean).join(' ');
-	const same = (f: File) => stem(f.name) === stem(image.name) || stem(f.name) === image.name.toLowerCase();
-	const worldFile = files.find((f) => WORLD.test(ext(f.name)) && same(f)) ?? (files.filter((f) => WORLD.test(ext(f.name))).length === 1 ? files.find((f) => WORLD.test(ext(f.name))) : undefined);
-	const prjFile = files.find((f) => ext(f.name) === 'prj' && same(f)) ?? (files.filter((f) => ext(f.name) === 'prj').length === 1 ? files.find((f) => ext(f.name) === 'prj') : undefined);
-	let world: number[] | null = null;
-	if (worldFile) {
-		const nums = (await worldFile.text()).split(/\s+/).filter(Boolean).map(Number);
-		if (nums.length >= 6 && nums.slice(0, 6).every(Number.isFinite)) world = nums.slice(0, 6);
-		else note = [note, `${worldFile.name} isn't a world file (six numbers): ignored.`].filter(Boolean).join(' ');
+	// one image per name: the best kind, then the biggest
+	const byStem = new Map<string, File>();
+	for (const f of [...all].sort((a, b) => IMAGE_RANK[ext(a.name)] - IMAGE_RANK[ext(b.name)] || b.size - a.size))
+		if (!byStem.has(stem(f.name))) byStem.set(stem(f.name), f);
+	if (byStem.size < all.length) {
+		const extra = all.length - byStem.size;
+		notes.push(`${extra} image${extra > 1 ? 's' : ''} with the same name as another left out.`);
 	}
-	return { image, world, prj: prjFile ? (await prjFile.text()).trim() : null, note };
+
+	// alignment files: name.alignment.json, and a book's book.json (its sheets, in order)
+	const alignments = new Map<string, Record<string, unknown>>();
+	let order: string[] = [];
+	for (const f of files.filter((f) => ext(f.name) === 'json')) {
+		let j: unknown;
+		try {
+			j = JSON.parse(await f.text());
+		} catch {
+			continue;
+		}
+		if (!j || typeof j !== 'object') continue;
+		const o = j as Record<string, unknown>;
+		if (o.decaynet_book && Array.isArray(o.sheets)) {
+			for (const s of o.sheets as Record<string, unknown>[]) if (typeof s?.file === 'string') alignments.set(stem(s.file), s);
+			order = (o.sheets as Record<string, unknown>[]).map((s) => stem(String(s?.file ?? '')));
+		} else if (o.decaynet_alignment) {
+			const key = typeof o.file === 'string' ? stem(o.file) : f.name.toLowerCase().replace(/\.alignment\.json$/, '');
+			alignments.set(key, o);
+		}
+	}
+
+	const images = [...byStem.values()].sort((a, b) => {
+		const ia = order.indexOf(stem(a.name));
+		const ib = order.indexOf(stem(b.name));
+		if (ia >= 0 || ib >= 0) return (ia < 0 ? Infinity : ia) - (ib < 0 ? Infinity : ib);
+		return natural.compare(a.name, b.name);
+	});
+	const worlds = files.filter((f) => WORLD.test(ext(f.name)));
+	const prjs = files.filter((f) => ext(f.name) === 'prj');
+	const sets: ScanFiles[] = [];
+	for (const image of images) {
+		const same = (f: File) => stem(f.name) === stem(image.name) || stem(f.name) === image.name.toLowerCase();
+		// a lone world file or .prj goes with a lone image whatever its name
+		const worldFile = worlds.find(same) ?? (images.length === 1 && worlds.length === 1 ? worlds[0] : undefined);
+		const prjFile = prjs.find(same) ?? (prjs.length === 1 ? prjs[0] : undefined);
+		let world: number[] | null = null;
+		if (worldFile) {
+			const nums = (await worldFile.text()).split(/\s+/).filter(Boolean).map(Number);
+			if (nums.length >= 6 && nums.slice(0, 6).every(Number.isFinite)) world = nums.slice(0, 6);
+			else notes.push(`${worldFile.name} isn't a world file (six numbers): ignored.`);
+		}
+		sets.push({ image, world, prj: prjFile ? (await prjFile.text()).trim() : null, alignment: alignments.get(stem(image.name)) ?? null });
+	}
+	return { sets, note: notes.join(' ') || null };
 }
 
 const lockedFormat = (name: string) =>

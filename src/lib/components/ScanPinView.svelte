@@ -1,7 +1,7 @@
 <!--
 	Zoomable, pannable view of a scan for placing control-point pins.
-	Click or tap (without dragging) to drop a pin; drag a pin to move it; scroll or pinch to zoom;
-	drag to pan.
+	Click or tap (without dragging) to drop a pin (or a point of the scale bar or north arrow being
+	drawn); drag a pin to move it; scroll or pinch to zoom; drag to pan.
 	Pin positions are in the image's natural pixel coordinates.
 -->
 <script lang="ts">
@@ -31,8 +31,8 @@
 		pins: Pin[];
 		/** Pin id that is waiting for its image point, highlighted in the status line. */
 		waiting?: number | null;
-		/** street lines drawn on the scan (Streets alignment): one or two points each */
-		lines?: { id: number; pts: XY[] }[];
+		/** lines drawn on the scan (the scale bar, the north arrow): one or two points each */
+		lines?: { id: string; kind: string; label: string; pts: XY[] }[];
 		/** the status line, instead of the pin one */
 		tip?: string | null;
 		onpin: (img: XY) => void;
@@ -186,14 +186,27 @@
 	<img src={url} alt="" draggable="false" style:width="{width * scale}px" style:height="{height * scale}px" style:transform="translate({tx}px, {ty}px)" />
 	{#if lines.length}
 		<svg class="lines" aria-hidden="true">
+			<defs>
+				<marker id="scan-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+					<path d="M0 0 10 5 0 10z" fill="#5fd0e8" />
+				</marker>
+			</defs>
 			{#each lines as l (l.id)}
-				{#if l.pts.length === 2}
-					<line x1={tx + l.pts[0][0] * scale} y1={ty + l.pts[0][1] * scale} x2={tx + l.pts[1][0] * scale} y2={ty + l.pts[1][1] * scale} />
-				{/if}
-				{#each l.pts as q, i (i)}<circle cx={tx + q[0] * scale} cy={ty + q[1] * scale} r="5" />{/each}
-				{#if l.pts.length}
-					<text x={tx + l.pts[l.pts.length - 1][0] * scale + 8} y={ty + l.pts[l.pts.length - 1][1] * scale - 8}>{l.id}</text>
-				{/if}
+				<g class={l.kind}>
+					{#if l.pts.length === 2}
+						<line
+							x1={tx + l.pts[0][0] * scale}
+							y1={ty + l.pts[0][1] * scale}
+							x2={tx + l.pts[1][0] * scale}
+							y2={ty + l.pts[1][1] * scale}
+							marker-end={l.kind === 'north' ? 'url(#scan-arrow)' : undefined}
+						/>
+					{/if}
+					{#each l.pts as q, i (i)}<circle cx={tx + q[0] * scale} cy={ty + q[1] * scale} r="4" />{/each}
+					{#if l.pts.length}
+						<text x={tx + l.pts[l.pts.length - 1][0] * scale + 8} y={ty + l.pts[l.pts.length - 1][1] * scale - 8}>{l.label}</text>
+					{/if}
+				</g>
 			{/each}
 		</svg>
 	{/if}
@@ -256,6 +269,15 @@
 		fill: #f0a030;
 		stroke: #17130f;
 		stroke-width: 2;
+	}
+	.lines .north line {
+		stroke: #5fd0e8;
+	}
+	.lines .north circle {
+		fill: #5fd0e8;
+	}
+	.lines .north text {
+		fill: #5fd0e8;
 	}
 	.lines text {
 		fill: #f0a030;

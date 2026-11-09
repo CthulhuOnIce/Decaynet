@@ -374,17 +374,12 @@ The **workbench** lays a Sanborn fire-insurance sheet, an old plat or an aerial 
      - **ECW and MrSID** can't be read in a browser: their decoders are proprietary and licensed. Convert them to GeoTIFF on your computer first; the georeferencing comes along. In QGIS, use *Raster › Conversion › Translate*, or run `gdal_translate -of GTiff -co COMPRESS=JPEG in.ecw out.tif`. The free desktop reader in the QGIS installers for Windows and macOS opens ECW.
 2. **Align it**, either way (switch under *Alignment*):
    - **Drag corners:** drag each corner onto the matching street intersection; drag the blue centre handle to move the whole sheet. Use the ⟲/⟳ and ±2 % buttons for fine rotation and scale, and lower the opacity to see the streets underneath.
-   - **Match pins:** the scan opens in its own pane beside the map. Click a recognisable spot on the scan (a street corner, a church), then click the same spot on the map (map clicks snap to existing shapes); repeat. Two pins move, turn and scale the sheet into place; three or more also correct stretch and skew. Spread pins toward the edges of the sheet. Drag any pin on either side to fine-tune; with more pins than the fit needs, each pin shows how many metres off it is, so a misplaced one stands out. <kbd>Backspace</kbd> removes the last pin.
-   - **Streets:** for sheets where streets are easier to find than matching spots. Click two points along a street on the scan, then two points anywhere along the same street on the map. These are centrelines, not points that have to match, and street width doesn't matter. The sheet moves, turns and scales (no stretch) until the streets lie on each other; the scan's street shows dashed on the map where it currently lands. What's settled depends on the streets:
-
-     | Streets | Settled | Still yours to set |
-     |---|---|---|
-     | 1 | the turn, and which line it's on | drag ⇕ to slide it along the street, ⤢ to scale it |
-     | 2 parallel | also the scale (the gap between them) | ⇕ along the streets |
-     | 2 crossing | also where it sits (the crossing) | ⤢ the scale, about the crossing |
-     | 3 or more | everything (by least squares, with the typical error once there are more than 3) | nothing |
-
-     Streets within 2° of each other count as parallel: their crossing would be far off and unreliable. **Flip round** turns the sheet 180° about its street, since a street fits either way round. If the streets disagree about the turn by more than 1.5°, it says so: one is probably on the wrong street, or the sheet is stretched, which only *Match pins* can correct. <kbd>Backspace</kbd> undoes the last point.
+   - **Match pins:** the scan opens in its own pane beside the map. Click a recognisable spot on the scan (a street corner, a church), then click the same spot on the map (map clicks snap to existing shapes); repeat. Spread pins toward the edges of the sheet. Drag any pin on either side to fine-tune; with more pins than the fit needs, each pin shows how many metres off it is, so a misplaced one stands out. <kbd>Backspace</kbd> removes the last pin.
+     - **Type the street corner** instead of finding it on the map: click the corner on the scan, type `Broadway & 5th Ave` (or *and*, *at*, `/`), and the pin goes there and the map flies to it. It looks in the wiki's own streets first, by any name a street had and in the year the scan shows (so a renamed or vanished street is found under its old name; streets that stop just short of each other, within 25 m, count). Streets that aren't mapped as pages are looked up on OpenStreetMap, today's streets, the way address search does (one request a second, cached, signed-in editors only). When there's more than one match the others are listed: click one to move the pin there. *Not right? Look on today's map too* checks OpenStreetMap even when the wiki found something.
+     - **One pin is enough** to place a sheet: it jumps so that spot sits on the corner, keeping its size and turn. Then size it with the **scale bar** and turn it with the **north arrow**, or by hand: drag the orange ⟳ handle on the map, or use ⟲/⟳ 90°, 1° and 0.2° and **Flip** (180°), all about the pin. Without a scale bar, ±2 % sizes it.
+     - **Scale bar** (optional): click both ends of the sheet's scale bar on the scan (or any length you know), then type how long it is, in feet, metres, yards, chains, rods or miles. Before any pins, it sizes the sheet straight away.
+     - **North arrow** (optional): click its tail, then its head. The sheet turns so the arrow points north. With two or more pins it's a check instead: if the pins turn the sheet more than 2° away from the arrow, it says so.
+     - **Two pins** move, turn and scale the sheet into place; with a scale bar, they only move and turn it, at the bar's scale (better when the two corners are close together). **Three or more** also correct stretch and skew. *Fit* picks one of these by hand.
 3. **Compare** in *Blend* or *Swipe* mode, or hold <kbd>F</kbd> to flicker the scan off and on.
 4. Enter the **year the scan shows**. This moves the time slider and pre-fills dates on what you trace.
 5. Switch to **Trace**:
@@ -392,7 +387,14 @@ The **workbench** lays a Sanborn fire-insurance sheet, an old plat or an aerial 
    - Then either attach the shape to an existing page or create a new page (building, street, parcel…).
    - Pick a condition, a role (*footprint*, *centerline*…), dates and a citation.
    - Or skip the page entirely: under **Export** (at the top of the Trace tool), **Download** saves the shape as a `.geojson` file and **Copy** puts it on the clipboard (lon/lat, with the name, kind, role and year as properties). **Keep & draw another** sets shapes aside so you can export several at once with **Download all** / **Copy all**. Kept shapes live only in that browser tab.
-6. **Save alignment file** downloads the corner positions (and any pins) as a small JSON file. Next time, open the same scan and choose **Load alignment** to pick up where you left off. The scan itself never leaves your computer.
+6. **Save alignment file** downloads the corner positions (and the pins, scale bar and north arrow) as a small JSON file. Next time, open the same scan and choose **Load alignment** to pick up where you left off. The scan itself never leaves your computer.
+
+**A whole Sanborn volume.** Pick all its sheets at once (or a zip of them) and they open as a **book**, in name order (sheet 2 before sheet 10):
+
+- Align the first, then **Next sheet →** keeps it where it is and opens the next one still to do. Placed sheets stay on the map, at a lower resolution and opacity, to line the next one up against (*Show the placed sheets on the map* turns them off). Click any sheet in the book's list to reopen it where you left it, pins, scale bar and all. **Add sheets…** adds more; **Remove sheet** takes the open one out.
+- **Export the book (.zip)**: for every placed sheet, a world file for the scan at its **full resolution** (`.j2w`, `.jgw`, `.pgw`, `.tfw`…) with a `.prj` in Web Mercator (EPSG:3857), so QGIS or ArcGIS open the scans in place; its alignment file; `book.json` (the sheets in order); and `index.geojson`, the sheets' outlines. *Put the scans in the export too* adds the image files themselves (unchanged), for a self-contained book. Sheets you never opened keep the world file they came with.
+- To carry on later, open the zip again (with the scans picked alongside it, if you left them out): the book comes back in order, each sheet where it was.
+- World files can only stretch and skew, not bend: a sheet aligned by dragging its four corners independently is exported as the nearest fit. QGIS (through GDAL) prefers a GeoTIFF's own georeferencing to a world file, so for a GeoTIFF that was already georeferenced it keeps using the GeoTIFF's own.
 
 Already georeferenced a sheet elsewhere (Map Warper, Allmaps…)? Paste its XYZ tile URL under **…or a tile layer**. It's also session-only.
 
@@ -716,6 +718,7 @@ Almost everything is configured in the app: **Admin → Site settings** (identit
 | `SUPABASE_INTERNAL_URL` | How the server reaches Supabase, if different from the public URL |
 | `ORIGIN`, `ADDRESS_HEADER`, `XFF_DEPTH`, `BODY_SIZE_LIMIT`, `PORT`, `HOST` | Standard SvelteKit adapter-node settings |
 | `DATABASE_URL`, `SEED` | For the migration runner |
+| `NOMINATIM_URL` | Optional: your own Nominatim search endpoint (`https://…/search`) for address search and the workbench's street corners, instead of nominatim.openstreetmap.org |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME`, `SETUP_TOKEN` | First admin (see [First admin](#first-admin)); needs the service-role key |
 
 ## Project layout

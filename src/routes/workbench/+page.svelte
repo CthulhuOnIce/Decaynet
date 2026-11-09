@@ -1,6 +1,6 @@
 <script lang="ts">
 	import 'maplibre-gl/dist/maplibre-gl.css';
-	import { onDestroy, onMount, untrack } from 'svelte';
+	import { onDestroy, onMount, tick, untrack } from 'svelte';
 	import { enhance } from '$app/forms';
 	import type { GeoJSONSource, ImageSource, Map as MLMap, Marker } from 'maplibre-gl';
 	import YearSlider from '$lib/components/YearSlider.svelte';
@@ -15,7 +15,7 @@
 		crsFromEpsg,
 		crsFromText,
 		decodeTiff,
-		gatherScanFiles,
+		gatherScanSets,
 		georefPins,
 		guessCrs,
 		isTiff,
@@ -25,8 +25,26 @@
 	} from '$lib/georaster';
 	import { CONFIDENCES } from '$lib/types';
 	import ScanPinView from '$lib/components/ScanPinView.svelte';
-	import { apply, cornersFor, fit, fromMerc, metres, minPins, toMerc, type FitKind, type XY } from '$lib/map/georef';
-	import { fitStreets, onLine, placed, poseFromAffine, poseToAffine, scalePose, slidePose, type Pose } from '$lib/map/streetfit';
+	import {
+		WEB_MERCATOR_PRJ,
+		apply,
+		cornersFor,
+		fit,
+		fromMerc,
+		mercPerMetre,
+		metres,
+		minPins,
+		northTurn,
+		placeAt,
+		poseOf,
+		rigidFit,
+		toMerc,
+		worldFile,
+		type Affine,
+		type FitKind,
+		type XY
+	} from '$lib/map/georef';
+	import type { CrossingHit } from '$lib/map/crossings';
 	import { baseStyle, colorFeatures, mapView, snapshotLayers, type ColorBy } from '$lib/map/style';
 	import { loadView, saveView, loadYear, saveYear } from '$lib/mapMemory';
 	import { can } from '$lib/perms';
@@ -62,7 +80,8 @@
 	let colorBy = $state<ColorBy>('condition');
 	let compare = $state<'blend' | 'swipe'>('blend');
 	let swipe = $state(0.5);
-	let scan = $state<{ name: string; url: string; corners: Corners; width: number; height: number } | null>(null);
+	/** the sheet on the map; full size is the image's own, when it's shown reduced */
+	let scan = $state<{ name: string; url: string; corners: Corners; width: number; height: number; fullWidth: number; fullHeight: number } | null>(null);
 	let tileUrl = $state('');
 	let tileInput = $state('');
 	let aligning = $state(true); // show corner handles
@@ -86,11 +105,13 @@
 
 	// Two ways to align a scan: drag its four corners, or match pins (control
 	// points) on the scan to the same spots on the map and fit the sheet to them.
-	type Pin = { id: number; img: XY | null; map: XY | null };
-	let alignMode = $state<'corners' | 'pins' | 'streets'>('corners');
+	/** label: the street corner it was looked up as */
+	type Pin = { id: number; img: XY | null; map: XY | null; label?: string };
+	let alignMode = $state<'corners' | 'pins'>('corners');
 	let pins = $state<Pin[]>([]);
 	let pinSeq = $state(0);
-	let fitChoice = $state<'auto' | FitKind>('auto');
+	type FitChoice = 'auto' | FitKind | 'rigid';
+	let fitChoice = $state<FitChoice>('auto');
 	let pinMarkers: Marker[] = [];
 
 	const activeSource = $derived.by(() => {
@@ -145,6 +166,7 @@
 	function setCorners(c: Corners) {
 		if (!scan) return;
 		scan.corners = c;
+		scanAligned = true;
 		(map?.getSource('overlay') as ImageSource | undefined)?.setCoordinates(c);
 		(top?.getSource('overlay') as ImageSource | undefined)?.setCoordinates(c);
 	}
@@ -206,20 +228,99 @@
 		placeMarkers();
 	}
 
+	// ---------------------------------------------------------------- the book: several sheets, one at a time
+	// Open a whole Sanborn volume (or any set of sheets): each is aligned in turn, and the ones done
+	// stay on the map, small, to line the next one up against. Export writes them all out as world
+	// files (Web Mercator), alignment files and an index of the sheets: for QGIS, or for picking the
+	// book up here again. Like a single scan, nothing leaves the browser.
+	type Alignment = {
+		decaynet_alignment: 1;
+		file: string;
+		width: number;
+		height: number;
+		full_width: number;
+		full_height: number;
+		depicts: string | null;
+		corners: Corners;
+		pins: { image: XY; map: XY; label?: string }[];
+		scale_bar: { image: [XY, XY]; length: number | null; unit: ScaleUnit } | null;
+		north_arrow: [XY, XY] | null;
+		aligned: boolean;
+	};
+	type Sheet = {
+		id: number;
+		name: string;
+		file: File;
+		world: number[] | null;
+		prj: string | null;
+		/** an alignment file it came with, or where it was left when another sheet was opened */
+		alignment: Alignment | null;
+		geo: typeof scanGeo;
+		/** a small copy for the map while another sheet is being aligned */
+		thumb: string | null;
+		aligned: boolean;
+	};
+	let book = $state<Sheet[]>([]);
+	let sheetSeq = 0;
+	/** the sheet that's `scan` */
+	let current = $state<number | null>(null);
+	/** the open sheet has been placed (pins, corners, georeferencing), not just dropped in the view */
+	let scanAligned = $state(false);
+	let showBook = $state(true);
+	let bookImages = $state(true);
+	let bookBusy = $state<string | null>(null);
+	let bookNote = $state<string | null>(null);
+	const alignedCount = $derived(book.filter((s) => (s.id === current ? scanAligned : s.aligned)).length);
+
 	async function openScan(e: Event) {
 		const input = e.currentTarget as HTMLInputElement;
 		const picked = [...(input.files ?? [])];
+		// so choosing the same file again opens it again
+		input.value = '';
 		if (!picked.length || !map) return;
+		scanError = null;
+		bookNote = null;
+		try {
+			// zips, images picked with their world files and .prj, a book's export
+			if (picked.length > 1 || /\.zip$/i.test(picked[0].name)) scanBusy = 'Unpacking…';
+			const { sets, note } = await gatherScanSets(picked).finally(() => (scanBusy = null));
+			const added: Sheet[] = sets.map((s) => ({
+				id: ++sheetSeq,
+				name: s.image.name,
+				file: s.image,
+				world: s.world,
+				prj: s.prj,
+				alignment: readAlignment(s.alignment),
+				geo: null,
+				thumb: null,
+				aligned: false
+			}));
+			for (const a of added) a.aligned = !!a.alignment?.aligned;
+			const fresh = added.filter((a) => !book.some((b) => b.name === a.name));
+			book.push(...fresh);
+			const notes = [note, fresh.length < added.length ? `${added.length - fresh.length} already in the book.` : null].filter(Boolean).join(' ') || null;
+			if (!scan && fresh.length) await openSheet(fresh[0].id, notes);
+			else bookNote = [fresh.length ? `${fresh.length} sheet${fresh.length === 1 ? '' : 's'} added to the book.` : null, notes].filter(Boolean).join(' ');
+		} catch (err) {
+			scanError = `Couldn't open that: ${(err as Error).message}`;
+		}
+	}
+
+	/**
+	 * Make a sheet of the book the one on the map: decoded, and placed where it was left, or by its
+	 * alignment file, or by its georeferencing, or in the middle of the view.
+	 */
+	async function openSheet(id: number, note: string | null = null) {
+		const sheet = book.find((s) => s.id === id);
+		if (!sheet || !map || id === current) return;
+		if (scan) await stashSheet();
 		scanError = null;
 		scanNote = null;
 		scanGeo = null;
 		crsPaste = false;
+		const file = sheet.file;
 		try {
-			// a zip, or an image picked with its world file and .prj
-			if (picked.length > 1 || /\.zip$/i.test(picked[0].name)) scanBusy = 'Unpacking…';
-			const set = await gatherScanFiles(picked).finally(() => (scanBusy = null));
-			const file = set.image;
-			const notes: string[] = set.note ? [set.note] : [];
+			const notes: string[] = note ? [note] : [];
 			let image: Blob = file;
 			let full: { fullWidth: number; fullHeight: number } | null = null;
 			let geo: Georef | null = null;
@@ -231,7 +332,7 @@
 				full = t;
 				if (t.width < t.fullWidth)
 					notes.push(`Shown at ${t.width.toLocaleString()} × ${t.height.toLocaleString()} px (the image is ${t.fullWidth.toLocaleString()} × ${t.fullHeight.toLocaleString()}): as much as this browser can draw.`);
-				if (t.geo) geo = { transform: t.geo.transform, epsg: t.geo.epsg, prj: set.prj, citation: t.geo.citation, from: 'GeoTIFF' };
+				if (t.geo) geo = { transform: t.geo.transform, epsg: t.geo.epsg, prj: sheet.prj, citation: t.geo.citation, from: 'GeoTIFF' };
 			} else if (await isJpeg2000(file)) {
 				// JPEG 2000 (the Library of Congress's Sanborn sheets): decoded here, in a worker
 				scanBusy = `Decoding ${file.name}…`;
@@ -241,8 +342,7 @@
 				if (t.width < t.fullWidth)
 					notes.push(`Shown at ${t.width.toLocaleString()} × ${t.height.toLocaleString()} px (the sheet is ${t.fullWidth.toLocaleString()} × ${t.fullHeight.toLocaleString()}): as much as this browser can draw. Alignment files still match it on any device.`);
 			}
-			if (!geo && set.world) geo = { transform: worldTransform(set.world), epsg: null, prj: set.prj, citation: null, from: 'world file' };
-			if (scan) URL.revokeObjectURL(scan.url);
+			if (!geo && sheet.world) geo = { transform: worldTransform(sheet.world), epsg: null, prj: sheet.prj, citation: null, from: 'world file' };
 			const url = URL.createObjectURL(image);
 			const img = new Image();
 			img.src = url;
@@ -260,27 +360,284 @@
 			tileUrl = '';
 			aligning = true;
 			panelOpen = false;
-			clearPins();
-			clearStreets();
+			resetAlignment();
+			current = id;
 			scan = {
 				name: file.name,
 				url,
 				width: img.width,
 				height: img.height,
+				fullWidth: full?.fullWidth ?? img.width,
+				fullHeight: full?.fullHeight ?? img.height,
 				corners: [ll(x0, y0), ll(x0 + w, y0), ll(x0 + w, y0 + h), ll(x0, y0 + h)]
 			};
+			scanAligned = false;
 			scanNote = notes.join(' ') || null;
-			if (geo) placeGeo(geo, { width: img.width, height: img.height, fullWidth: full?.fullWidth ?? img.width, fullHeight: full?.fullHeight ?? img.height });
-			const y = file.name.match(/(1[89]\d\d|20\d\d)/);
-			if (y) {
-				depictsYear = y[1];
-				year = Number(y[1]);
+			if (sheet.alignment) {
+				// where it was left (or its alignment file); its georeferencing choices come back too
+				applyAlignment(sheet.alignment);
+				if (sheet.geo) scanGeo = sheet.geo;
+				if (sheet.alignment.pins.length) alignMode = 'pins';
+			} else if (geo) placeGeo(geo, { width: img.width, height: img.height, fullWidth: scan.fullWidth, fullHeight: scan.fullHeight });
+			if (!depictsYear || !sheet.alignment?.depicts) {
+				const y = file.name.match(/(1[89]\d\d|20\d\d)/);
+				if (y && !sheet.alignment?.depicts) {
+					depictsYear = y[1];
+					year = Number(y[1]);
+				}
 			}
 		} catch (err) {
-			scanError = `Couldn't open that: ${(err as Error).message}`;
+			scanError = `Couldn't open ${file.name}: ${(err as Error).message}`;
+			// a sheet that can't be read is no use in the book
+			if (!sheet.alignment && !sheet.thumb) book = book.filter((s) => s.id !== id);
 		}
-		// so choosing the same file again opens it again
-		input.value = '';
+	}
+
+	/** Put the open sheet back in the book: where it is now, and a small copy to show on the map. */
+	async function stashSheet() {
+		if (!scan) return;
+		const sheet = book.find((s) => s.id === current);
+		if (sheet) {
+			sheet.alignment = alignmentNow();
+			sheet.aligned = scanAligned;
+			sheet.geo = scanGeo ? $state.snapshot(scanGeo) : null;
+			const old = sheet.thumb;
+			sheet.thumb = await thumbnail(scan.url).catch(() => null);
+			if (old) URL.revokeObjectURL(old);
+		}
+		closeScan();
+	}
+
+	/** A copy at most 1600 px across, for the map: a whole book at full size would run out of graphics memory. */
+	async function thumbnail(url: string): Promise<string> {
+		const bmp = await createImageBitmap(await (await fetch(url)).blob());
+		const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+		const c = document.createElement('canvas');
+		c.width = Math.max(1, Math.round(bmp.width * k));
+		c.height = Math.max(1, Math.round(bmp.height * k));
+		c.getContext('2d')!.drawImage(bmp, 0, 0, c.width, c.height);
+		bmp.close();
+		const out = (await new Promise<Blob | null>((r) => c.toBlob(r, 'image/webp', 0.8))) ?? (await new Promise<Blob | null>((r) => c.toBlob(r, 'image/png')));
+		if (!out) throw new Error('no thumbnail');
+		return URL.createObjectURL(out);
+	}
+
+	/** The next sheet still to align (after this one, round to the start), else simply the next. */
+	function nextSheet() {
+		const i = book.findIndex((s) => s.id === current);
+		const after = [...book.slice(i + 1), ...book.slice(0, Math.max(0, i))];
+		const next = after.find((s) => !s.aligned) ?? after[0];
+		if (next) openSheet(next.id);
+	}
+	const nextUp = $derived.by(() => {
+		const i = book.findIndex((s) => s.id === current);
+		const after = [...book.slice(i + 1), ...book.slice(0, Math.max(0, i))];
+		return after.find((s) => !s.aligned) ?? null;
+	});
+
+	function removeSheet(id: number) {
+		const s = book.find((x) => x.id === id);
+		if (!s) return;
+		if (s.aligned && !confirm(`Take ${s.name} out of the book? Its alignment is lost unless you exported the book.`)) return;
+		if (s.thumb) URL.revokeObjectURL(s.thumb);
+		book = book.filter((x) => x.id !== id);
+	}
+
+	// the other sheets on the map, under the open one
+	let bookOnMap = new Map<number, string>();
+	function drawBook() {
+		if (!map || !ready) return;
+		const want = showBook && tool === 'overlay' ? book.filter((s) => s.thumb && s.alignment && s.aligned && s.id !== current) : [];
+		for (const [id] of bookOnMap) {
+			if (want.some((s) => s.id === id)) continue;
+			if (map.getLayer(`book-${id}`)) map.removeLayer(`book-${id}`);
+			if (map.getSource(`book-${id}`)) map.removeSource(`book-${id}`);
+			bookOnMap.delete(id);
+		}
+		for (const s of want) {
+			const src = map.getSource(`book-${s.id}`) as ImageSource | undefined;
+			const coordinates = $state.snapshot(s.alignment!.corners) as Corners;
+			if (src && bookOnMap.get(s.id) === s.thumb) src.setCoordinates(coordinates);
+			else if (src) src.updateImage({ url: s.thumb!, coordinates });
+			else {
+				map.addSource(`book-${s.id}`, { type: 'image', url: s.thumb!, coordinates });
+				map.addLayer(
+					{ id: `book-${s.id}`, type: 'raster', source: `book-${s.id}`, paint: { 'raster-opacity': 0.55, 'raster-fade-duration': 0 } },
+					map.getLayer('overlay') ? 'overlay' : 'snapshot-district-fill'
+				);
+			}
+			bookOnMap.set(s.id, s.thumb!);
+		}
+	}
+
+	/** The open sheet's alignment, as saved in alignment files and the book's export. */
+	function alignmentNow(): Alignment | null {
+		if (!scan) return null;
+		return {
+			decaynet_alignment: 1,
+			file: scan.name,
+			width: scan.width,
+			height: scan.height,
+			full_width: scan.fullWidth,
+			full_height: scan.fullHeight,
+			depicts: depictsYear || null,
+			corners: $state.snapshot(scan.corners) as Corners,
+			pins: pairs.map((p) => ({ image: [...p.img!] as XY, map: [...p.map!] as XY, ...(p.label ? { label: p.label } : {}) })),
+			scale_bar: scaleBar.pts.length === 2 ? { image: $state.snapshot(scaleBar.pts) as [XY, XY], length: scaleBar.length, unit: scaleBar.unit } : null,
+			north_arrow: north.length === 2 ? ($state.snapshot(north) as [XY, XY]) : null,
+			aligned: scanAligned
+		};
+	}
+
+	/** An alignment file's contents, checked; null if it isn't one. */
+	function readAlignment(j: Record<string, unknown> | null): Alignment | null {
+		if (!j) return null;
+		const ok = (v: unknown): v is XY => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' && Number.isFinite(n));
+		if (!Array.isArray(j.corners) || j.corners.length !== 4 || !j.corners.every(ok)) return null;
+		const num = (v: unknown) => (typeof v === 'number' && v > 0 ? v : null);
+		const sb = j.scale_bar as { image?: unknown[]; length?: unknown; unit?: unknown } | null | undefined;
+		const na = j.north_arrow as unknown[] | null | undefined;
+		const width = num(j.width) ?? 0;
+		const height = num(j.height) ?? 0;
+		return {
+			decaynet_alignment: 1,
+			file: typeof j.file === 'string' ? j.file : '',
+			width,
+			height,
+			full_width: num(j.full_width) ?? width,
+			full_height: num(j.full_height) ?? height,
+			depicts: j.depicts != null ? String(j.depicts) : null,
+			corners: j.corners as Corners,
+			pins: Array.isArray(j.pins)
+				? (j.pins as { image?: unknown; map?: unknown; label?: unknown }[])
+						.filter((p) => ok(p?.image) && ok(p?.map))
+						.map((p) => ({ image: p.image as XY, map: p.map as XY, ...(typeof p.label === 'string' ? { label: p.label } : {}) }))
+				: [],
+			scale_bar:
+				sb && Array.isArray(sb.image) && sb.image.length === 2 && sb.image.every(ok)
+					? { image: sb.image as [XY, XY], length: num(sb.length), unit: (sb.unit as ScaleUnit) in SCALE_UNITS ? (sb.unit as ScaleUnit) : 'ft' }
+					: null,
+			north_arrow: Array.isArray(na) && na.length === 2 && na.every(ok) ? (na as [XY, XY]) : null,
+			// alignment files from before books were all of aligned sheets
+			aligned: j.aligned !== false
+		};
+	}
+
+	/** Put the open sheet where an alignment says, with its pins, scale bar and north arrow. */
+	function applyAlignment(a: Alignment, fly = true) {
+		if (!scan) return;
+		// pins are in the scan's pixels: a sheet opened at another resolution (a big JPEG 2000 on
+		// another device) scales them to this one
+		const sx = a.width > 0 ? scan.width / a.width : 1;
+		const sy = a.height > 0 ? scan.height / a.height : 1;
+		const px = (p: XY): XY => [p[0] * sx, p[1] * sy];
+		resetAlignment();
+		setCorners(a.corners);
+		if (a.depicts) {
+			depictsYear = a.depicts;
+			if (/^\d{4}$/.test(a.depicts)) year = Number(a.depicts);
+		}
+		pins = a.pins.map((p, i) => ({ id: i + 1, img: px(p.image), map: p.map, label: p.label }));
+		pinSeq = pins.length;
+		if (a.scale_bar) scaleBar = { pts: a.scale_bar.image.map(px), length: a.scale_bar.length, unit: a.scale_bar.unit };
+		if (a.north_arrow) north = a.north_arrow.map(px);
+		scanAligned = a.aligned;
+		placeMarkers();
+		if (fly) {
+			const xs = a.corners.map((c) => c[0]);
+			const ys = a.corners.map((c) => c[1]);
+			map?.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: 40, duration: 0 });
+		}
+	}
+
+	const WORLD_EXT: Record<string, string> = { jp2: 'j2w', j2k: 'j2w', jpg: 'jgw', jpeg: 'jgw', png: 'pgw', tif: 'tfw', tiff: 'tfw', gif: 'gfw' };
+	const stemOf = (name: string) => name.replace(/\.[^.]+$/, '');
+
+	/**
+	 * The whole book as a zip: for each sheet placed, a world file for the scan at its full
+	 * resolution in Web Mercator (EPSG:3857) with a .prj, so GIS opens the scan in place; each
+	 * sheet's alignment file; book.json (the sheets in order) and index.geojson (their outlines);
+	 * and, if asked, the scans themselves.
+	 */
+	async function exportBook() {
+		if (!book.length || bookBusy) return;
+		bookBusy = 'Packing…';
+		try {
+			const { Zip, ZipDeflate, ZipPassThrough } = await import('fflate');
+			const chunks: Uint8Array[] = [];
+			const zip = new Zip();
+			const finished = new Promise<Blob>((resolve, reject) => {
+				zip.ondata = (err, data, final) => {
+					if (err) return reject(err);
+					chunks.push(data);
+					if (final) resolve(new Blob(chunks as BlobPart[], { type: 'application/zip' }));
+				};
+			});
+			const enc = new TextEncoder();
+			const put = (name: string, data: Uint8Array, deflate = true) => {
+				const f = deflate ? new ZipDeflate(name, { level: 6 }) : new ZipPassThrough(name);
+				zip.add(f);
+				f.push(data, true);
+			};
+			const features: GeoJSON.Feature[] = [];
+			const listed: Record<string, unknown>[] = [];
+			for (const [i, s] of book.entries()) {
+				const a = s.id === current ? alignmentNow() : s.alignment;
+				const aligned = s.id === current ? scanAligned : s.aligned;
+				const st = stemOf(s.name);
+				const ext = (s.name.match(/\.([^.]+)$/)?.[1] ?? '').toLowerCase();
+				if (a) {
+					put(`${st}.alignment.json`, enc.encode(JSON.stringify({ ...a, file: s.name }, null, 2)));
+					const box: XY[] = [[0, 0], [a.width, 0], [a.width, a.height], [0, a.height]];
+					const f = aligned ? fit(box, a.corners.map((c) => toMerc(c)), 'affine') : null;
+					if (f) {
+						const w = worldFile(f.m, a.width, a.height, a.full_width, a.full_height);
+						put(`${st}.${WORLD_EXT[ext] ?? 'wld'}`, enc.encode(w.map((v) => v.toFixed(10)).join('\n') + '\n'));
+						put(`${st}.prj`, enc.encode(WEB_MERCATOR_PRJ));
+						features.push({
+							type: 'Feature',
+							properties: { sheet: i + 1, file: s.name, depicts: a.depicts, pins: a.pins.length },
+							geometry: { type: 'Polygon', coordinates: [[...a.corners, a.corners[0]]] }
+						});
+					}
+					listed.push({ ...a, file: s.name, aligned });
+				} else {
+					// never opened: its own georeferencing, as it came
+					if (s.world) {
+						put(`${st}.${WORLD_EXT[ext] ?? 'wld'}`, enc.encode(s.world.join('\n') + '\n'));
+						if (s.prj) put(`${st}.prj`, enc.encode(s.prj));
+					}
+					listed.push({ file: s.name, aligned: false });
+				}
+				if (bookImages) {
+					bookBusy = `Packing ${s.name} (${i + 1} of ${book.length})…`;
+					// JPEG 2000, JPEG and PNG are compressed already
+					put(s.name, new Uint8Array(await s.file.arrayBuffer()), !/^(jp2|j2k|jpe?g|png|webp|gif)$/.test(ext));
+				}
+			}
+			put('book.json', enc.encode(JSON.stringify({ decaynet_book: 1, made: new Date().toISOString().slice(0, 10), crs: 'EPSG:3857', sheets: listed }, null, 2)));
+			put('index.geojson', enc.encode(JSON.stringify({ type: 'FeatureCollection', features })));
+			zip.end();
+			const blob = await finished;
+			const a = document.createElement('a');
+			a.href = URL.createObjectURL(blob);
+			a.download = `${bookName()}.zip`;
+			a.click();
+			setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+			bookNote = `Exported ${book.length} sheet${book.length === 1 ? '' : 's'} (${alignedCount} placed).`;
+		} catch (err) {
+			scanError = `Couldn't export the book: ${(err as Error).message}`;
+		} finally {
+			bookBusy = null;
+		}
+	}
+	/** What the sheets' names have in common ("gary-1925-vol1-"), else "book". */
+	function bookName() {
+		const names = book.map((s) => stemOf(s.name));
+		let p = names[0] ?? '';
+		for (const n of names) while (p && !n.startsWith(p)) p = p.slice(0, -1);
+		p = p.replace(/[\s._-]+$/, '').replace(/[^\w.-]+/g, '-');
+		return book.length > 1 && p.length >= 3 ? `${p}-book` : book.length === 1 && p ? p : 'decaynet-book';
 	}
 
 	/** A georeferenced scan: work out its coordinate system (named, from its .prj, or guessed), then place it. */
@@ -358,48 +715,107 @@
 		applyCrs(c);
 	}
 
-	/** "Remove scan": confirm when an alignment would be lost. */
+	/** "Remove scan": confirm when an alignment would be lost; in a book, the next sheet opens. */
 	function removeScan() {
-		const work = !!scan && (pins.length > 0 || aligning === false);
-		if (work && !confirm('Remove the scan from the map? Its alignment is lost unless you saved an alignment file.')) return;
+		const work = !!scan && (pins.length > 0 || scanAligned);
+		if (work && !confirm(`Remove ${book.length > 1 ? `${scan!.name} from the book` : 'the scan from the map'}? Its alignment is lost unless you saved it.`)) return;
+		const id = current;
+		const next = nextUp;
 		closeScan();
+		const gone = book.find((s) => s.id === id);
+		if (gone?.thumb) URL.revokeObjectURL(gone.thumb);
+		book = book.filter((s) => s.id !== id);
+		if (next && book.some((s) => s.id === next.id)) openSheet(next.id);
+		else if (book.length) openSheet(book[0].id);
 		tileUrl = '';
 	}
 
 	function closeScan() {
 		if (scan) URL.revokeObjectURL(scan.url);
 		scan = null;
+		current = null;
 		scanNote = null;
 		scanGeo = null;
-		clearStreets();
 		markers.forEach((m) => m.remove());
 		markers = [];
-		clearPins();
+		turnMarker?.remove();
+		turnMarker = null;
+		resetAlignment();
 	}
 
 	// ---------------------------------------------------------------- pin alignment
 	const pinning = $derived(tool === 'overlay' && !!scan && aligning && alignMode === 'pins');
 	const pairs = $derived(pins.filter((p) => p.img && p.map));
-	const fitKind = $derived<FitKind>(fitChoice === 'auto' ? (pairs.length >= 3 ? 'affine' : 'similarity') : fitChoice);
-	const pinFit = $derived(
-		pairs.length >= minPins(fitKind)
-			? fit(
-					pairs.map((p) => p.img!),
-					pairs.map((p) => toMerc(p.map!)),
-					fitKind
-				)
-			: null
-	);
+
+	// The sheet's scale bar and north arrow, drawn on the scan: with them one pin is enough (a street
+	// corner you can name), and two pins are fitted at the bar's scale.
+	const SCALE_UNITS = { ft: 0.3048, m: 1, yd: 0.9144, ch: 20.1168, rd: 5.0292, mi: 1609.344 } as const;
+	type ScaleUnit = keyof typeof SCALE_UNITS;
+	type ScaleBar = { pts: XY[]; length: number | null; unit: ScaleUnit };
+	let scaleBar = $state<ScaleBar>({ pts: [], length: null, unit: 'ft' });
+	let north = $state<XY[]>([]);
+	/** what a click on the scan does */
+	let scanTarget = $state<'pin' | 'scale' | 'north'>('pin');
+	let scaleInput = $state<HTMLInputElement | null>(null);
+	/** One pin: the sheet turns (radians, clockwise) and, without a scale bar, scales about it. */
+	let turnTh = $state(0);
+	let oneScale = $state<number | null>(null);
+	const metresPerPx = $derived.by(() => {
+		if (scaleBar.pts.length !== 2 || !scaleBar.length || scaleBar.length <= 0) return null;
+		const d = Math.hypot(scaleBar.pts[1][0] - scaleBar.pts[0][0], scaleBar.pts[1][1] - scaleBar.pts[0][1]);
+		return d > 0 ? (scaleBar.length * SCALE_UNITS[scaleBar.unit]) / d : null;
+	});
+	const northTh = $derived(north.length === 2 ? northTurn(north[0], north[1]) : null);
+	/** where on Earth the sheet is (for metres → Mercator) */
+	const sheetLat = $derived(pairs[0]?.map?.[1] ?? (scan ? centroid(scan.corners)[1] : 0));
+
+	type PinFitKind = FitKind | 'rigid' | 'one';
+	const needPins = (k: PinFitKind) => (k === 'one' ? 1 : k === 'rigid' ? 2 : minPins(k));
+	const fitKind = $derived.by((): PinFitKind => {
+		if (fitChoice === 'rigid') return metresPerPx ? 'rigid' : 'similarity';
+		if (fitChoice !== 'auto') return fitChoice;
+		if (pairs.length >= 3) return 'affine';
+		if (pairs.length === 2) return metresPerPx ? 'rigid' : 'similarity';
+		return 'one';
+	});
+	const pinFit = $derived.by((): { kind: PinFitKind; m: Affine } | null => {
+		const k = fitKind;
+		if (pairs.length < needPins(k)) return null;
+		if (k === 'one') {
+			const p = pairs[0];
+			const s = metresPerPx ? metresPerPx * mercPerMetre(p.map![1]) : oneScale;
+			return s ? { kind: k, m: placeAt(p.img!, toMerc(p.map!), s, turnTh) } : null;
+		}
+		if (k === 'rigid') {
+			const m = rigidFit(
+				pairs.map((p) => p.img!),
+				pairs.map((p) => toMerc(p.map!)),
+				metresPerPx! * mercPerMetre(sheetLat)
+			);
+			return m ? { kind: k, m } : null;
+		}
+		return fit(
+			pairs.map((p) => p.img!),
+			pairs.map((p) => toMerc(p.map!)),
+			k
+		);
+	});
 	/**
 	 * How far (metres) each pin's scan spot lands from its map spot under the current fit.
 	 * Only meaningful once there are more pins than the fit needs (otherwise every pin is matched exactly).
 	 */
 	const residuals = $derived(
 		new Map<number, number>(
-			pinFit && pairs.length > minPins(pinFit.kind) ? pairs.map((p) => [p.id, metres(fromMerc(apply(pinFit.m, p.img!)), p.map!)]) : []
+			pinFit && pairs.length > needPins(pinFit.kind) ? pairs.map((p) => [p.id, metres(fromMerc(apply(pinFit.m, p.img!)), p.map!)]) : []
 		)
 	);
 	const rms = $derived(residuals.size ? Math.sqrt([...residuals.values()].reduce((s, r) => s + r * r, 0) / residuals.size) : null);
+	/** with 2+ pins and a north arrow: how far the pins' turn is from the arrow's (a check on both) */
+	const northOff = $derived.by(() => {
+		if (!pinFit || pinFit.kind === 'one' || northTh == null) return null;
+		const d = ((((poseOf(pinFit.m).th - northTh) * 180) / Math.PI + 540) % 360) - 180;
+		return Math.abs(d) >= 2 ? d : null;
+	});
 	const waitingImg = $derived(pins.find((p) => !p.img)?.id ?? null);
 	const waitingMap = $derived(pins.find((p) => !p.map)?.id ?? null);
 	/** Where the next tap goes while pinning: a pin's scan spot, or its map spot. */
@@ -409,6 +825,87 @@
 		return { where: 'scan', id: pinSeq + 1 };
 	});
 
+	/** the scale bar and north arrow, drawn on the scan pane */
+	const scanLines = $derived([
+		...(scaleBar.pts.length ? [{ id: 'scale', kind: 'scale', label: metresPerPx ? `${scaleBar.length} ${scaleBar.unit}` : 'scale', pts: scaleBar.pts }] : []),
+		...(north.length ? [{ id: 'north', kind: 'north', label: 'N', pts: north }] : [])
+	]);
+	const scanTip = $derived(
+		scanTarget === 'scale'
+			? scaleBar.pts.length === 1
+				? 'Now the other end of the scale bar'
+				: 'Click one end of the scale bar'
+			: scanTarget === 'north'
+				? north.length === 1
+					? 'Now the head of the north arrow'
+					: 'Click the tail of the north arrow'
+				: null
+	);
+	/** A click on the scan: a pin's spot, or a point of the scale bar or north arrow being drawn. */
+	function scanClick(img: XY) {
+		if (scanTarget === 'scale') {
+			scaleBar.pts = scaleBar.pts.length >= 2 ? [img] : [...scaleBar.pts, img];
+			if (scaleBar.pts.length === 2) {
+				scanTarget = 'pin';
+				panelOpen = true;
+				tick().then(() => scaleInput?.focus());
+				applyScale();
+			}
+			return;
+		}
+		if (scanTarget === 'north') {
+			north = north.length >= 2 ? [img] : [...north, img];
+			if (north.length === 2) {
+				scanTarget = 'pin';
+				applyNorth();
+			}
+			return;
+		}
+		addImgPin(img);
+	}
+	/** The sheet's move-turn-scale now (from its corners). */
+	function sheetPose(): { s: number; th: number } | null {
+		if (!scan) return null;
+		const box: XY[] = [[0, 0], [scan.width, 0], [scan.width, scan.height], [0, scan.height]];
+		const f = fit(box, scan.corners.map((c) => toMerc(c)), 'affine');
+		return f ? poseOf(f.m) : null;
+	}
+	/** Turn and/or scale the sheet about its middle (before there are pins to do it about). */
+	function reposeSheet(s: number | null, th: number | null) {
+		if (!scan) return;
+		const now = sheetPose();
+		if (!now) return;
+		const mid: XY = [scan.width / 2, scan.height / 2];
+		const m = placeAt(mid, toMerc(centroid(scan.corners)), s ?? now.s, th ?? now.th);
+		setCorners(cornersFor({ m }, scan.width, scan.height));
+		placeMarkers();
+	}
+	/** The scale bar was drawn or its length changed: with no pins yet, size the sheet by it. */
+	function applyScale() {
+		if (metresPerPx && !pairs.length) reposeSheet(metresPerPx * mercPerMetre(sheetLat), null);
+	}
+	/** The north arrow was drawn: turn the sheet so it points north (about the pin, if there's one). */
+	function applyNorth() {
+		if (northTh == null) return;
+		if (pinFit?.kind === 'one') turnTh = northTh;
+		else if (!pairs.length) reposeSheet(null, northTh);
+	}
+	/** ⟲ ⟳ and Flip with one pin: turn the sheet about it. */
+	function turnBy(deg: number) {
+		turnTh += (deg * Math.PI) / 180;
+	}
+	function scaleBy(k: number) {
+		if (oneScale) oneScale *= k;
+	}
+	function clearScaleBar() {
+		scaleBar = { pts: [], length: null, unit: scaleBar.unit };
+		if (scanTarget === 'scale') scanTarget = 'pin';
+	}
+	function clearNorth() {
+		north = [];
+		if (scanTarget === 'north') scanTarget = 'pin';
+	}
+
 	function addImgPin(img: XY) {
 		const p = pins.find((x) => !x.img);
 		if (p) p.img = img;
@@ -416,8 +913,10 @@
 	}
 	function addMapPin(ll: XY) {
 		const p = pins.find((x) => !x.map);
-		if (p) p.map = ll;
-		else pins.push({ id: ++pinSeq, img: null, map: ll });
+		if (p) {
+			p.map = ll;
+			p.label = undefined;
+		} else pins.push({ id: ++pinSeq, img: null, map: ll });
 	}
 	function moveImgPin(id: number, img: XY) {
 		const p = pins.find((x) => x.id === id);
@@ -426,11 +925,79 @@
 	function removePin(id: number) {
 		pins = pins.filter((p) => p.id !== id);
 		if (!pins.length) pinSeq = 0;
+		if (crossPin === id) crossPin = null;
 	}
 	function clearPins() {
 		pins = [];
 		pinSeq = 0;
+		oneScale = null;
+		crossPin = null;
+		crossHits = [];
 	}
+	/** A fresh sheet: no pins, scale bar or north arrow. */
+	function resetAlignment() {
+		clearPins();
+		scaleBar = { pts: [], length: null, unit: scaleBar.unit };
+		north = [];
+		scanTarget = 'pin';
+		turnTh = 0;
+		fitChoice = 'auto';
+		crossProblem = null;
+	}
+
+	// ---------------------------------------------------------------- pin a street corner by name
+	// "Broadway & 5th Ave": the wiki's own streets first (in the sheet's year, by any name they had),
+	// then today's streets from OpenStreetMap for the ones not mapped here.
+	let crossQ = $state('');
+	let crossBusy = $state(false);
+	let crossHits = $state<CrossingHit[]>([]);
+	let crossProblem = $state<string | null>(null);
+	/** the pin the lookup placed (choosing another of the hits moves it) */
+	let crossPin = $state<number | null>(null);
+	async function findCrossing(e?: SubmitEvent, osm = false) {
+		e?.preventDefault();
+		const q = crossQ.trim();
+		if (!q || !map || crossBusy) return;
+		crossBusy = true;
+		crossProblem = null;
+		try {
+			const c = map.getCenter();
+			const params = new URLSearchParams({ q, near: `${c.lng.toFixed(6)},${c.lat.toFixed(6)}` });
+			if (/^\d{4}$/.test(depictsYear)) params.set('at', depictsYear);
+			if (osm) params.set('osm', '1');
+			const r = await fetch(`/api/crossing?${params}`);
+			if (!r.ok) throw new Error(r.status === 401 ? 'Sign in again to look up street corners.' : `The lookup failed (${r.status}).`);
+			const j = (await r.json()) as { hits: CrossingHit[]; problem?: string | null };
+			crossHits = j.hits;
+			crossProblem = j.problem ?? null;
+			if (!j.hits.length) return;
+			// the pin waiting for its map spot, else a new one (its scan spot comes next); looking
+			// again on today's map moves the same pin
+			const waiting = pins.find((x) => x.img && !x.map) ?? pins.find((x) => !x.map);
+			if (osm && crossPin != null && pins.some((x) => x.id === crossPin)) {
+				// keep it
+			} else if (waiting) crossPin = waiting.id;
+			else {
+				crossPin = ++pinSeq;
+				pins.push({ id: crossPin, img: null, map: null });
+			}
+			useCrossing((osm && j.hits.find((h) => h.from === 'osm')) || j.hits[0]);
+		} catch (err) {
+			crossProblem = (err as Error).message;
+		} finally {
+			crossBusy = false;
+		}
+	}
+	function useCrossing(h: CrossingHit) {
+		const p = pins.find((x) => x.id === crossPin);
+		if (!p || !map) return;
+		p.map = [h.lon, h.lat];
+		p.label = `${h.a} & ${h.b}`;
+		placePins();
+		map.flyTo({ center: [h.lon, h.lat], zoom: Math.max(map.getZoom(), 17), duration: 600 });
+	}
+	const crossFrom = (h: CrossingHit) =>
+		h.from === 'osm' ? "today's map" : `the wiki's streets${h.then ? (depictsYear ? ` in ${depictsYear}` : '') : ' (another year)'}`;
 
 	function placePins() {
 		pinMarkers.forEach((m) => m.remove());
@@ -441,7 +1008,7 @@
 			const el = document.createElement('div');
 			el.className = `handle pin${p.img ? '' : ' half'}`;
 			el.textContent = String(p.id);
-			el.title = `Pin ${p.id}: drag to adjust`;
+			el.title = `Pin ${p.id}${p.label ? ` (${p.label})` : ''}: drag to adjust`;
 			const id = p.id;
 			const m = new maplibre.Marker({ element: el, draggable: true }).setLngLat(p.map).addTo(map);
 			m.on('drag', () => {
@@ -453,291 +1020,61 @@
 		}
 	}
 
-	// ---------------------------------------------------------------- street alignment
-	// A street drawn on the scan and the same street drawn on the map are lines, not matching
-	// points: the sheet turns, slides and scales until they lie on each other. What the streets
-	// leave free (sliding along a street, the scale) is set with the ⇕ and ⤢ handles.
-	type Street = { id: number; scan: XY[]; map: XY[] };
-	let streets = $state<Street[]>([]);
-	let streetSeq = 0;
-	/** the placement the fit stays closest to (where the sheet is, or was dragged to) */
-	let streetPose = $state<Pose | null>(null);
-	let streetHistory: { id: number; side: 'scan' | 'map' }[] = [];
-	let streetMarkers: Marker[] = [];
-	let streetLabels: Marker[] = [];
-	let streetDragging = false;
-	const streeting = $derived(tool === 'overlay' && !!scan && aligning && alignMode === 'streets');
-	/** the scan's own pane beside the map: matching pins, or drawing streets */
-	const scanPicking = $derived(pinning || streeting);
-	const streetPairs = $derived(
-		streets
-			.filter((s) => s.scan.length === 2 && s.map.length === 2)
-			.map((s) => ({ id: s.id, scan: [s.scan[0], s.scan[1]] as [XY, XY], merc: [toMerc(s.map[0]), toMerc(s.map[1])] as [XY, XY] }))
-	);
-	const streetFit = $derived(scan && streetPose && streetPairs.length ? fitStreets(streetPairs, streetPose, scan) : null);
-	/** where the next click goes: the scan or the map, for which street, and how many points it has there */
-	const streetStep = $derived.by((): { where: 'scan' | 'map'; id: number; have: number } => {
-		const half = streets.find((s) => s.scan.length === 1) ?? streets.find((s) => s.map.length === 1);
-		if (half) return half.scan.length === 1 ? { where: 'scan', id: half.id, have: 1 } : { where: 'map', id: half.id, have: 1 };
-		const needsMap = streets.find((s) => s.scan.length === 2 && s.map.length < 2);
-		if (needsMap) return { where: 'map', id: needsMap.id, have: needsMap.map.length };
-		const needsScan = streets.find((s) => s.map.length === 2 && s.scan.length < 2);
-		if (needsScan) return { where: 'scan', id: needsScan.id, have: needsScan.scan.length };
-		return { where: 'scan', id: streetSeq + 1, have: 0 };
-	});
-
-	/** The sheet's current placement as a pose (its corners, fitted as a move-turn-scale). */
-	function poseNow(): Pose | null {
-		if (!scan) return null;
-		const box: XY[] = [
-			[0, 0],
-			[scan.width, 0],
-			[scan.width, scan.height],
-			[0, scan.height]
-		];
-		const f = fit(box, scan.corners.map((c) => toMerc(c)), 'affine');
-		return f ? poseFromAffine(f.m) : null;
-	}
-	/** Before the streets change: keep where the fit put the sheet as the placement to stay near. */
-	function commitPose() {
-		if (streetFit) streetPose = streetFit.pose;
-	}
-	function addStreetPoint(side: 'scan' | 'map', pt: XY) {
-		commitPose();
-		const open = streets.find((s) => s[side].length === 1) ?? streets.find((s) => s[side].length === 0 && s[side === 'scan' ? 'map' : 'scan'].length > 0);
-		if (open) {
-			open[side].push(pt);
-			streetHistory.push({ id: open.id, side });
-		} else {
-			const id = ++streetSeq;
-			streets.push({ id, scan: side === 'scan' ? [pt] : [], map: side === 'map' ? [pt] : [] });
-			streetHistory.push({ id, side });
-		}
-	}
-	function undoStreetPoint() {
-		const last = streetHistory.pop();
-		if (!last) return;
-		commitPose();
-		const s = streets.find((x) => x.id === last.id);
-		if (!s) return;
-		s[last.side].pop();
-		if (!s.scan.length && !s.map.length) streets = streets.filter((x) => x.id !== s.id);
-	}
-	function removeStreet(id: number) {
-		commitPose();
-		streets = streets.filter((s) => s.id !== id);
-		streetHistory = streetHistory.filter((h) => h.id !== id);
-	}
-	function clearStreets() {
-		streets = [];
-		streetSeq = 0;
-		streetHistory = [];
-	}
-	/** Turn the sheet round 180° about its street (it can lie either way round along one). */
-	function flipStreets() {
-		if (!scan) return;
-		const p = streetFit?.pose ?? streetPose ?? poseNow();
-		if (!p) return;
-		const centre = placed(p, [scan.width / 2, scan.height / 2]);
-		const first = streetPairs[0];
-		const about = first ? onLine(centre, first.merc) : centre;
-		streetPose = { s: p.s, th: p.th + Math.PI, tx: 2 * about[0] - p.tx, ty: 2 * about[1] - p.ty };
-	}
-
-	/** metres per Mercator unit where the sheet is (for "off by" readouts) */
-	const mercMetres = $derived.by(() => {
-		if (!scan) return 0;
-		const c = toMerc(scan.corners[0]);
-		return metres(fromMerc(c), fromMerc([c[0] + 1e-6, c[1]])) / 1e-6;
-	});
-	const streetRms = $derived(
-		streetFit && streetFit.free === 'none' && streetPairs.length > 3
-			? Math.sqrt(streetFit.residuals.reduce((s, r) => s + r * r, 0) / streetFit.residuals.length) * mercMetres
-			: null
-	);
-
-	// starting Streets: from where the sheet is now (it may have been moved by other means since)
-	$effect(() => {
-		const on = streeting;
-		untrack(() => (streetPose = on ? poseNow() : null));
-	});
-	// the fit moves the sheet
-	$effect(() => {
-		const f = streetFit;
-		if (!f || !streeting) return;
-		untrack(() => scan && setCorners(cornersFor({ kind: 'similarity', m: poseToAffine(f.pose) }, scan.width, scan.height)));
-	});
-	// the streets on the map: drawn on the map (solid), and the scan's, where they land now (dashed)
-	$effect(() => {
-		const on = streeting && ready;
-		const f = streetFit;
-		void streets.map((s) => `${s.id}:${s.scan.length}:${s.map.length}:${s.map.flat().join()}`).join();
-		untrack(() => drawStreets(on, f));
-	});
-	function drawStreets(on: boolean, f: typeof streetFit) {
-		if (!map) return;
-		const src = map.getSource('align-streets') as GeoJSONSource | undefined;
-		const features: GeoJSON.Feature[] = [];
-		if (on) {
-			for (const s of streets) {
-				if (s.map.length === 2) features.push({ type: 'Feature', properties: { kind: 'map' }, geometry: { type: 'LineString', coordinates: s.map } });
-				for (const q of s.map) features.push({ type: 'Feature', properties: { kind: 'pt' }, geometry: { type: 'Point', coordinates: q } });
-				const pose = f?.pose ?? streetPose;
-				if (s.scan.length === 2 && pose) {
-					features.push({ type: 'Feature', properties: { kind: 'scan' }, geometry: { type: 'LineString', coordinates: s.scan.map((q) => fromMerc(placed(pose, q))) } });
-				}
-			}
-		}
-		const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features };
-		if (src) src.setData(fc);
-		else if (on) {
-			map.addSource('align-streets', { type: 'geojson', data: fc });
-			map.addLayer({ id: 'align-streets-scan', type: 'line', source: 'align-streets', filter: ['==', ['get', 'kind'], 'scan'], paint: { 'line-color': '#5fd0e8', 'line-width': 2.5, 'line-dasharray': [2, 1.5] } });
-			map.addLayer({ id: 'align-streets-map', type: 'line', source: 'align-streets', filter: ['==', ['get', 'kind'], 'map'], paint: { 'line-color': '#f0a030', 'line-width': 3.5, 'line-opacity': 0.9 } });
-			map.addLayer({ id: 'align-streets-pt', type: 'circle', source: 'align-streets', filter: ['==', ['get', 'kind'], 'pt'], paint: { 'circle-radius': 5, 'circle-color': '#f0a030', 'circle-stroke-color': '#17130f', 'circle-stroke-width': 2 } });
-		}
-		for (const id of ['align-streets-scan', 'align-streets-map', 'align-streets-pt']) if (map.getLayer(id)) map.moveLayer(id);
-		// a number at the end of each street drawn on the map
-		streetLabels.forEach((m) => m.remove());
-		streetLabels = [];
-		if (on && maplibre)
-			for (const s of streets) {
-				if (!s.map.length) continue;
-				const el = document.createElement('div');
-				el.className = 'street-no';
-				el.textContent = String(s.id);
-				streetLabels.push(new maplibre.Marker({ element: el, offset: [10, -10] }).setLngLat(s.map[s.map.length - 1]).addTo(map));
-			}
-		placeStreetHandles(on, f);
-	}
-	/** ⇕ slides along the street(s); ⤢ scales (about the crossing, or the slide handle) */
-	function placeStreetHandles(on: boolean, f: typeof streetFit) {
-		if (streetDragging) return;
-		streetMarkers.forEach((m) => m.remove());
-		streetMarkers = [];
-		if (!on || !f || f.free === 'none' || !map || !maplibre || !scan) return;
-		const w = scan.width;
-		const h = scan.height;
-		const m0 = map;
-		// handles where they can be reached: on the street, nearest the middle of the view
-		const c = m0.getCenter();
-		const viewMid = toMerc([c.lng, c.lat]);
-		const first = streetPairs[0];
-		const slideAt = first ? onLine(viewMid, first.merc) : viewMid;
-		const mk = (cls: string, text: string, title: string, at: XY) => {
-			const el = document.createElement('div');
-			el.className = `handle ${cls}`;
-			el.textContent = text;
-			el.title = title;
-			const m = new maplibre!.Marker({ element: el, draggable: true }).setLngLat(fromMerc(at)).addTo(map!);
-			streetMarkers.push(m);
-			return m;
-		};
-		if (f.slide) {
-			const dir = f.slide;
-			const m = mk('slide', '⇕', 'Drag to slide the sheet along the street', slideAt);
-			const start = { pose: f.pose, at: slideAt };
-			m.on('dragstart', () => (streetDragging = true));
-			m.on('drag', () => {
-				const ll = m.getLngLat();
-				const now = toMerc([ll.lng, ll.lat]);
-				streetPose = slidePose(start.pose, [now[0] - start.at[0], now[1] - start.at[1]], dir);
-			});
-			m.on('dragend', () => {
-				streetDragging = false;
-				placeStreetHandles(streeting && ready, streetFit);
-			});
-		}
-		if (f.free === 'scale' || f.free === 'slide+scale') {
-			const anchor = f.anchor ?? slideAt;
-			// a little way from the point it scales about, along the sheet's top edge; the middle of
-			// the view when that point is off screen
-			const box = m0.getContainer();
-			const ap = m0.project(fromMerc(anchor));
-			const e0 = m0.project(fromMerc(placed(f.pose, [w / 2, h / 2])));
-			const e1 = m0.project(fromMerc(placed(f.pose, [w / 2 + w / 10, h / 2])));
-			const len = Math.hypot(e1.x - e0.x, e1.y - e0.y) || 1;
-			const visible = ap.x > 40 && ap.y > 40 && ap.x < box.clientWidth - 40 && ap.y < box.clientHeight - 40;
-			let pt = visible ? { x: ap.x + ((e1.x - e0.x) / len) * 140, y: ap.y + ((e1.y - e0.y) / len) * 140 } : { x: box.clientWidth / 2 + 90, y: box.clientHeight / 2 };
-			if (pt.x < 20 || pt.y < 20 || pt.x > box.clientWidth - 20 || pt.y > box.clientHeight - 20) pt = { x: ap.x - ((e1.x - e0.x) / len) * 140, y: ap.y - ((e1.y - e0.y) / len) * 140 };
-			const ll = m0.unproject([pt.x, pt.y]);
-			const at = toMerc([ll.lng, ll.lat]);
-			const m = mk('scale', '⤢', 'Drag to scale the sheet', at);
-			const start = { pose: f.pose, v: [at[0] - anchor[0], at[1] - anchor[1]] as XY };
-			const len2 = start.v[0] ** 2 + start.v[1] ** 2 || 1;
-			m.on('dragstart', () => (streetDragging = true));
-			m.on('drag', () => {
-				const ll = m.getLngLat();
-				const now = toMerc([ll.lng, ll.lat]);
-				const k = Math.max(0.05, Math.min(20, ((now[0] - anchor[0]) * start.v[0] + (now[1] - anchor[1]) * start.v[1]) / len2));
-				streetPose = scalePose(start.pose, k, anchor);
-			});
-			m.on('dragend', () => {
-				streetDragging = false;
-				placeStreetHandles(streeting && ready, streetFit);
-			});
-		}
-	}
-	/** − / + for the scale, without a drag */
-	function nudgeStreetScale(k: number) {
-		const f = streetFit;
-		if (!f || !scan) return;
-		const centre = placed(f.pose, [scan.width / 2, scan.height / 2]);
-		const anchor = f.anchor ?? (streetPairs[0] ? onLine(centre, streetPairs[0].merc) : centre);
-		streetPose = scalePose(f.pose, k, anchor);
+	// One pin: a ⟳ handle on the map turns the sheet about it
+	let turnMarker: Marker | null = null;
+	let turnDragging = false;
+	function placeTurnHandle() {
+		if (turnDragging) return;
+		turnMarker?.remove();
+		turnMarker = null;
+		const f = pinFit;
+		if (!pinning || !f || f.kind !== 'one' || !map || !maplibre || !scan) return;
+		const p = pairs[0];
+		const pm = toMerc(p.map!);
+		// "up" the sheet from the pin, a third of the sheet away
+		const at = apply(f.m, [p.img![0], p.img![1] - 0.33 * Math.hypot(scan.width, scan.height)]);
+		const el = document.createElement('div');
+		el.className = 'handle turn';
+		el.textContent = '⟳';
+		el.title = `Drag to turn the sheet about pin ${p.id}`;
+		const m = new maplibre.Marker({ element: el, draggable: true }).setLngLat(fromMerc(at)).addTo(map);
+		const a0 = Math.atan2(at[1] - pm[1], at[0] - pm[0]);
+		const th0 = turnTh;
+		m.on('dragstart', () => (turnDragging = true));
+		m.on('drag', () => {
+			const ll = m.getLngLat();
+			const q = toMerc([ll.lng, ll.lat]);
+			turnTh = th0 + Math.atan2(q[1] - pm[1], q[0] - pm[0]) - a0;
+		});
+		m.on('dragend', () => {
+			turnDragging = false;
+			placeTurnHandle();
+		});
+		turnMarker = m;
 	}
 
 	/** Save the alignment to a small file so the same scan can be re-aligned instantly next time. */
 	function exportAlignment() {
-		if (!scan) return;
-		const blob = new Blob(
-			[
-				JSON.stringify(
-					{
-						decaynet_alignment: 1,
-						file: scan.name,
-						width: scan.width,
-						height: scan.height,
-						depicts: depictsYear || null,
-						corners: scan.corners,
-						pins: pairs.map((p) => ({ image: p.img, map: p.map }))
-					},
-					null,
-					2
-				)
-			],
-			{ type: 'application/json' }
-		);
-		const a = document.createElement('a');
-		a.href = URL.createObjectURL(blob);
-		a.download = `${scan.name.replace(/\.[^.]+$/, '')}.alignment.json`;
-		a.click();
-		URL.revokeObjectURL(a.href);
+		const a = alignmentNow();
+		if (!a || !scan) return;
+		const blob = new Blob([JSON.stringify(a, null, 2)], { type: 'application/json' });
+		const link = document.createElement('a');
+		link.href = URL.createObjectURL(blob);
+		link.download = `${stemOf(scan.name)}.alignment.json`;
+		link.click();
+		URL.revokeObjectURL(link.href);
 	}
 
 	async function importAlignment(e: Event) {
-		const file = (e.currentTarget as HTMLInputElement).files?.[0];
+		const input = e.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
 		if (!file || !scan) return;
 		try {
 			const j = JSON.parse(await file.text());
-			if (!Array.isArray(j.corners) || j.corners.length !== 4) throw new Error('No corners in that file.');
-			setCorners(j.corners as Corners);
-			if (j.depicts) depictsYear = String(j.depicts);
-			// Pins saved with the alignment come back too, so you can keep refining
-			const ok = (v: unknown): v is XY => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number');
-			if (Array.isArray(j.pins)) {
-				const loaded = (j.pins as { image?: unknown; map?: unknown }[]).filter((p) => ok(p?.image) && ok(p?.map));
-				// pins are in the scan's pixels: a sheet opened at another resolution (a big JPEG 2000 on
-				// another device) scales them to this one
-				const sx = typeof j.width === 'number' && j.width > 0 ? scan.width / j.width : 1;
-				const sy = typeof j.height === 'number' && j.height > 0 ? scan.height / j.height : 1;
-				pins = loaded.map((p, i) => ({ id: i + 1, img: [(p.image as XY)[0] * sx, (p.image as XY)[1] * sy] as XY, map: p.map as XY }));
-				pinSeq = pins.length;
-			}
-			placeMarkers();
-			const xs = j.corners.map((c: number[]) => c[0]);
-			const ys = j.corners.map((c: number[]) => c[1]);
-			map?.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: 40 });
+			const a = readAlignment(j && typeof j === 'object' ? (j.decaynet_book && Array.isArray(j.sheets) ? (j.sheets.find((s: { file?: string }) => s?.file === scan!.name) ?? null) : j) : null);
+			if (!a) throw new Error('No corners for this scan in that file.');
+			applyAlignment(a);
 		} catch (err) {
 			scanError = (err as Error).message;
 		}
@@ -1416,7 +1753,7 @@
 		resizeObs = new ResizeObserver(() => {
 			const w = mapEl.clientWidth;
 			const h = mapEl.clientHeight;
-			const layout = `${focus}|${selectFocus}|${scanPicking}`;
+			const layout = `${focus}|${selectFocus}|${pinning}`;
 			map?.resize();
 			top?.resize();
 			// Only the bottom bar grew or shrank (same layout, same width): resizing keeps the centre,
@@ -1509,7 +1846,7 @@
 					pickAt(e.point.x, e.point.y);
 					return;
 				}
-				if (!drawing && !pinning && !streeting) return;
+				if (!drawing && !pinning) return;
 				// clicking a handle isn't a new vertex
 				if ((e.originalEvent.target as HTMLElement | null)?.closest('.maplibregl-marker')) return;
 				let c: [number, number] = [+e.lngLat.lng.toFixed(7), +e.lngLat.lat.toFixed(7)];
@@ -1523,7 +1860,6 @@
 					}
 				}
 				if (pinning) addMapPin(c);
-				else if (streeting) addStreetPoint('map', c);
 				else if (redraw && tool === 'trace') insertCorner(c, e.point);
 				else pts = effectiveMode === 'point' ? [c] : [...pts, c];
 			});
@@ -1576,11 +1912,36 @@
 		void [pinning, ready, pins.map((p) => `${p.id}:${p.map ? 1 : 0}:${p.img ? 1 : 0}`).join()];
 		untrack(placePins);
 	});
-	// Re-fit the sheet whenever the matched pins change
+	// Re-fit the sheet whenever the matched pins change (or, with one pin, its turn and scale)
 	$effect(() => {
 		const f = pinFit;
 		if (!f) return;
 		untrack(() => scan && setCorners(cornersFor(f, scan.width, scan.height)));
+	});
+	// The first pin: the sheet jumps to it, keeping its size and turn (until a scale bar, north arrow,
+	// ⟲ ⟳ or a second pin say otherwise)
+	$effect(() => {
+		if (pairs.length !== 1 || fitKind !== 'one') {
+			// back to one pin later: start again from where the sheet is then
+			untrack(() => (oneScale = null));
+			return;
+		}
+		untrack(() => {
+			if (oneScale != null) return;
+			const p = sheetPose();
+			if (!p) return;
+			oneScale = p.s;
+			turnTh = p.th;
+		});
+	});
+	$effect(() => {
+		void [pinning, ready, pinFit];
+		untrack(placeTurnHandle);
+	});
+	// the book's other sheets on the map
+	$effect(() => {
+		void [ready, showBook, current, tool, book.map((s) => `${s.id}:${s.thumb}:${s.aligned}:${s.alignment?.corners.flat().join()}`).join('|')];
+		untrack(drawBook);
 	});
 	// Hide handles while drawing so clicks land on the map
 	$effect(() => {
@@ -1627,7 +1988,7 @@
 		untrack(() => highlight(ids));
 	});
 	$effect(() => {
-		if (map) map.getCanvas().style.cursor = drawing || pinning || streeting || boxMode || lassoMode ? 'crosshair' : selecting ? 'pointer' : '';
+		if (map) map.getCanvas().style.cursor = drawing || pinning || boxMode || lassoMode ? 'crosshair' : selecting ? 'pointer' : '';
 	});
 
 	function onkey(e: KeyboardEvent) {
@@ -1661,10 +2022,6 @@
 		if (pinning && e.key === 'Backspace' && pins.length) {
 			e.preventDefault();
 			removePin(pins[pins.length - 1].id);
-		}
-		if (streeting && e.key === 'Backspace' && streets.length && !(e.target as HTMLElement).closest('input, textarea, select')) {
-			e.preventDefault();
-			undoStreetPoint();
 		}
 	}
 	function onkeyup(e: KeyboardEvent) {
@@ -1748,14 +2105,19 @@
 				<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,{JPEG2000_ACCEPT},{GEO_ACCEPT}" onchange={openScan} disabled={!!scanBusy} />
 				{#if scanBusy}<p class="notice small">{scanBusy} Big sheets take a few seconds.</p>{/if}
 				<p class="hint">
-					It appears with four corner handles. Drag each corner onto the matching intersection. PNG, JPEG, WebP, GIF, or JPEG 2000
+					It appears with four corner handles. Drag each corner onto the matching intersection, or pin street corners. PNG, JPEG, WebP, GIF, or JPEG 2000
 					(<code>.jp2</code>, as the Library of Congress serves its Sanborn sheets).
+				</p>
+				<p class="hint">
+					<strong>A whole volume?</strong> Pick all its sheets at once (or a zip of them): they're aligned one after another, and exported together as
+					a georeferenced book. A book exported here opens again the same way.
 				</p>
 				<p class="hint">
 					<strong>Already georeferenced?</strong> A GeoTIFF, an image picked together with its world file (<code>.tfw</code>, <code>.jgw</code>,
 					<code>.j2w</code>…) and <code>.prj</code>, or a zip of them lands in place by itself. ECW and MrSID can't be read in a browser: convert them to
 					GeoTIFF first.
 				</p>
+				{#if book.length}{@render bookUI()}{/if}
 				<h3>…or a tile layer</h3>
 				<p class="hint">Already georeferenced in Map Warper, Allmaps or similar? Paste its XYZ URL.</p>
 				<div class="row">
@@ -1799,9 +2161,15 @@
 								<button onclick={() => ((aligning = true), (panelOpen = false))} title="Show the corner handles or pins to line the scan up">Align scan</button>
 							{/if}
 						{/if}
-						<button class="ghost danger-btn" onclick={removeScan} title="Take the scan off the map">Remove scan</button>
+						{#if scan && book.length > 1}
+							<button class:primary={!aligning} onclick={nextSheet} title="Keep this one where it is and open the next sheet to align">
+								{nextUp ? 'Next sheet →' : 'Next sheet'}
+							</button>
+						{/if}
+						<button class="ghost danger-btn" onclick={removeScan} title="Take the scan off the map">Remove {book.length > 1 ? 'sheet' : 'scan'}</button>
 					</div>
 				</div>
+				{#if scan}{@render bookUI()}{/if}
 				<div class="field">
 					<label for="dy">Scan shows the year</label>
 					<input id="dy" bind:value={depictsYear} placeholder="1925" oninput={() => /^\d{4}$/.test(depictsYear) && (year = Number(depictsYear))} />
@@ -1818,7 +2186,6 @@
 						<div class="seg">
 							<button class:on={alignMode === 'corners'} onclick={() => (alignMode = 'corners')} title="Drag the sheet's corners into place">Drag corners</button>
 							<button class:on={alignMode === 'pins'} onclick={() => (alignMode = 'pins')} title="Pin matching spots on the scan and the map">Match pins</button>
-							<button class:on={alignMode === 'streets'} onclick={() => (alignMode = 'streets')} title="Draw the same streets on the scan and the map">Streets</button>
 						</div>
 						{#if alignMode === 'corners'}
 							<p class="hint">Drag the <span class="sw corner"></span> corners onto matching intersections; drag <span class="sw move"></span> to move the sheet. Lower the opacity to see streets beneath.</p>
@@ -1830,21 +2197,27 @@
 								<button title="Shrink" onclick={() => transform(0, 0.98)}>− 2%</button>
 								<button title="Grow" onclick={() => transform(0, 1.02)}>+ 2%</button>
 							</div>
-						{:else if alignMode === 'pins'}
+						{:else}
 							<p class="hint">
-								Click a recognisable spot on the scan (a street corner, a church, a bridge), then click the same spot on the map.
-								Map clicks snap to existing shapes. With <strong>2 pins</strong> the sheet moves, turns and scales into place;
-								<strong>3 or more</strong> also correct stretch and skew. Spread them out toward the edges of the sheet. Drag any pin to fine-tune.
+								Click a recognisable spot on the scan (a street corner, a church, a bridge), then the same spot on the map, or
+								<strong>type the street corner</strong> and it's found for you. <strong>One pin</strong> places the sheet there: set its size with the scale
+								bar and turn it with the north arrow or ⟲ ⟳. <strong>2 pins</strong> move, turn and scale it into place; <strong>3 or more</strong> also correct
+								stretch and skew. Spread them out toward the edges of the sheet. Drag any pin to fine-tune.
 							</p>
 							<p class="next">
-								{#if waitingMap != null && pins.find((p) => p.id === waitingMap)?.img}
-									<span class="sw pin"></span> Pin {waitingMap}: now click the same spot on the <strong>map</strong>.
+								{#if scanTarget === 'scale'}
+									<span class="sw scale"></span> Scale bar: click {scaleBar.pts.length === 1 ? 'its other end' : 'one end of it'} on the <strong>scan</strong>.
+								{:else if scanTarget === 'north'}
+									<span class="sw north"></span> North arrow: click its {north.length === 1 ? 'head' : 'tail'} on the <strong>scan</strong>.
+								{:else if waitingMap != null && pins.find((p) => p.id === waitingMap)?.img}
+									<span class="sw pin"></span> Pin {waitingMap}: now click the same spot on the <strong>map</strong>, or type the corner below.
 								{:else if waitingImg != null}
 									<span class="sw pin"></span> Pin {waitingImg}: now click that spot on the <strong>scan</strong>.
 								{:else}
 									<span class="sw pin"></span> Click a spot on the <strong>scan</strong> to place pin {pinSeq + 1}.
 								{/if}
 							</p>
+							{@render crossingForm('xq')}
 							{#if pins.length}
 								<table class="pins">
 									<thead><tr><th>#</th><th>Scan</th><th>Map</th><th title="Distance between where the fitted scan puts this spot and where you pinned it">Off by</th><th></th></tr></thead>
@@ -1853,7 +2226,7 @@
 											<tr>
 												<td><span class="pin-no">{p.id}</span></td>
 												<td>{p.img ? '✓' : '—'}</td>
-												<td>{p.map ? '✓' : '—'}</td>
+												<td class="pin-where" title={p.label ?? ''}>{p.map ? (p.label ?? '✓') : '—'}</td>
 												<td class:bad={(residuals.get(p.id) ?? 0) > 2 * (rms ?? Infinity)}>
 													{#if residuals.has(p.id)}{residuals.get(p.id)!.toFixed(1)} m{:else}<span class="muted">–</span>{/if}
 												</td>
@@ -1863,75 +2236,94 @@
 									</tbody>
 								</table>
 							{/if}
-							<p class="muted small">
-								{#if pinFit}
-									Fitted from {pairs.length} pins ({pinFit.kind === 'affine' ? 'stretch & skew' : 'move, turn & scale'}){#if rms != null}{' · '}typical error {rms.toFixed(1)} m; a pin far off the rest is probably misplaced{/if}.
-									{#if pairs.length === minPins(pinFit.kind)}Add another pin to check the fit.{/if}
+							<p class="muted small fit-says">
+								{#if pinFit?.kind === 'one'}
+									Placed at pin {pairs[0].id}{metresPerPx ? ", at the scale bar's scale" : ', at its size so far'}. Turn it about the pin
+									(<span class="sw turn">⟳</span> on the map, or the buttons){metresPerPx ? '' : ', and size it with the scale bar or − / +'}; a second pin settles both.
+								{:else if pinFit}
+									Fitted from {pairs.length} pins ({pinFit.kind === 'affine' ? 'stretch & skew' : pinFit.kind === 'rigid' ? "move & turn, at the scale bar's scale" : 'move, turn & scale'}){#if rms != null}{' · '}typical error {rms.toFixed(1)} m; a pin far off the rest is probably misplaced{/if}.
+									{#if pairs.length === needPins(pinFit.kind)}Add another pin to check the fit.{/if}
+									{#if northOff != null}<br /><strong>The pins turn the sheet {Math.abs(northOff).toFixed(1)}° {northOff > 0 ? 'clockwise' : 'anticlockwise'} of its north arrow</strong>: a pin may be on the wrong corner, or the arrow is off.{/if}
 								{:else}
-									{Math.max(0, minPins(fitKind) - pairs.length)} more matched pin{minPins(fitKind) - pairs.length === 1 ? '' : 's'} to fit the sheet.
+									{Math.max(0, needPins(fitKind) - pairs.length)} more matched pin{needPins(fitKind) - pairs.length === 1 ? '' : 's'} to place the sheet.
 								{/if}
 							</p>
+							{#if pinFit?.kind === 'one'}
+								<div class="row nudges">
+									<button title="Turn a quarter anticlockwise" onclick={() => turnBy(-90)}>⟲ 90°</button>
+									<button title="Turn anticlockwise" onclick={() => turnBy(-1)}>⟲ 1°</button>
+									<button title="Turn anticlockwise a little" onclick={() => turnBy(-0.2)}>⟲ .2°</button>
+									<button title="Turn clockwise a little" onclick={() => turnBy(0.2)}>⟳ .2°</button>
+									<button title="Turn clockwise" onclick={() => turnBy(1)}>⟳ 1°</button>
+									<button title="Turn a quarter clockwise" onclick={() => turnBy(90)}>⟳ 90°</button>
+									<button title="Turn it right round (180°) about the pin" onclick={() => turnBy(180)}>Flip</button>
+									{#if !metresPerPx}
+										<button title="Shrink" onclick={() => scaleBy(0.98)}>− 2%</button>
+										<button title="Grow" onclick={() => scaleBy(1.02)}>+ 2%</button>
+									{/if}
+								</div>
+							{/if}
+							<div class="sheet-marks">
+								<div class="mark-row">
+									<span class="sw scale"></span>
+									<strong>Scale bar</strong>
+									{#if scaleBar.pts.length === 2}
+										<input
+											class="scale-len"
+											type="number"
+											min="0"
+											step="any"
+											bind:this={scaleInput}
+											bind:value={scaleBar.length}
+											onchange={applyScale}
+											placeholder="100"
+											aria-label="How long the scale bar is"
+										/>
+										<select bind:value={scaleBar.unit} onchange={applyScale} aria-label="Unit">
+											<option value="ft">feet</option>
+											<option value="m">metres</option>
+											<option value="yd">yards</option>
+											<option value="ch">chains</option>
+											<option value="rd">rods</option>
+											<option value="mi">miles</option>
+										</select>
+										<button class="ghost x" title="Draw the scale bar again" onclick={() => ((scaleBar.pts = []), (scanTarget = 'scale'))}>↺</button>
+										<button class="ghost x" title="Take the scale bar off" onclick={clearScaleBar}>✕</button>
+									{:else}
+										<button class="small-btn" class:on={scanTarget === 'scale'} onclick={() => ((scaleBar.pts = []), (scanTarget = scanTarget === 'scale' ? 'pin' : 'scale'))}>
+											{scanTarget === 'scale' ? 'Cancel' : 'Draw it'}
+										</button>
+									{/if}
+								</div>
+								{#if scaleBar.pts.length === 2 && !metresPerPx}<p class="hint">How long is the line you drew? (A Sanborn bar is usually in feet.)</p>{/if}
+								{#if metresPerPx && scan}
+									<p class="muted small">{(metresPerPx * 100).toFixed(1)} cm a pixel: the sheet is {Math.round(scan.width * metresPerPx)} × {Math.round(scan.height * metresPerPx)} m.</p>
+								{/if}
+								<div class="mark-row">
+									<span class="sw north"></span>
+									<strong>North arrow</strong>
+									{#if north.length === 2}
+										<span class="muted small">turns the sheet north-up</span>
+										<button class="ghost x" title="Draw the north arrow again" onclick={() => ((north = []), (scanTarget = 'north'))}>↺</button>
+										<button class="ghost x" title="Take the north arrow off" onclick={clearNorth}>✕</button>
+									{:else}
+										<button class="small-btn" class:on={scanTarget === 'north'} onclick={() => ((north = []), (scanTarget = scanTarget === 'north' ? 'pin' : 'north'))}>
+											{scanTarget === 'north' ? 'Cancel' : 'Draw it'}
+										</button>
+									{/if}
+								</div>
+								<p class="hint">Optional. Click both ends of the sheet's scale bar on the scan (or any length you know) and say how long it is; click the north arrow's tail, then its head.</p>
+							</div>
 							<div class="field">
 								<label for="fk">Fit</label>
 								<select id="fk" bind:value={fitChoice}>
 									<option value="auto">Automatic</option>
 									<option value="similarity">Move, turn &amp; scale only (2+ pins)</option>
+									<option value="rigid" disabled={!metresPerPx}>Move &amp; turn at the scale bar's scale (2+ pins)</option>
 									<option value="affine">Also stretch &amp; skew (3+ pins)</option>
 								</select>
 							</div>
 							{#if pins.length}<button class="ghost" onclick={clearPins}>Clear pins</button>{/if}
-						{:else if alignMode === 'streets'}
-							<p class="hint">
-								Click two points along a street on the <strong>scan</strong>, then two points anywhere along the same street on the <strong>map</strong>:
-								centrelines, not spots that have to match. One street turns the sheet and puts it on that line; a <strong>parallel</strong> one
-								also sets the scale; a <strong>crossing</strong> one sets where it sits; three settle everything.
-							</p>
-							<p class="next">
-								<span class="sw street"></span>
-								Street {streetStep.id}: {streetStep.have === 1 ? 'one more point' : 'two points'} along it on the <strong>{streetStep.where}</strong>.
-							</p>
-							{#if streets.length}
-								<table class="pins">
-									<thead><tr><th>#</th><th>Scan</th><th>Map</th><th></th></tr></thead>
-									<tbody>
-										{#each streets as s (s.id)}
-											<tr>
-												<td><span class="pin-no street-no-cell">{s.id}</span></td>
-												<td>{s.scan.length === 2 ? '✓' : s.scan.length ? '½' : '—'}</td>
-												<td>{s.map.length === 2 ? '✓' : s.map.length ? '½' : '—'}</td>
-												<td><button class="ghost x" title="Remove street {s.id}" onclick={() => removeStreet(s.id)}>✕</button></td>
-											</tr>
-										{/each}
-									</tbody>
-								</table>
-							{/if}
-							{#if streetFit}
-								<p class="hint fitted">
-									{#if streetFit.free === 'slide+scale'}
-										On its street. Drag <span class="sw slide">⇕</span> to slide it along and <span class="sw scale">⤢</span> to scale it, or draw a
-										parallel street to set the scale, or a crossing one to set where it sits.
-									{:else if streetFit.free === 'slide'}
-										The scale is set by the parallel streets. Drag <span class="sw slide">⇕</span> to slide it along them, or draw a crossing street.
-									{:else if streetFit.free === 'scale'}
-										Placed at the crossing. Drag <span class="sw scale">⤢</span> to scale it about the crossing, or draw a street parallel to one of these.
-									{:else}
-										Placed by {streetPairs.length} streets (move, turn and scale; no stretch){#if streetRms != null}; typical error {streetRms.toFixed(1)} m{/if}.
-									{/if}
-									{#if streetFit.turnSpread > 1.5}
-										<br /><strong>The streets disagree about the turn by {streetFit.turnSpread.toFixed(1)}°</strong>: one may be on the wrong street, or the sheet is
-										stretched (<em>Match pins</em> can correct stretch).
-									{/if}
-								</p>
-							{/if}
-							<div class="row">
-								{#if streetFit && (streetFit.free === 'scale' || streetFit.free === 'slide+scale')}
-									<button title="Shrink" onclick={() => nudgeStreetScale(0.98)}>− 2%</button>
-									<button title="Grow" onclick={() => nudgeStreetScale(1.02)}>+ 2%</button>
-								{/if}
-								{#if streetFit}<button title="The sheet the other way round along its street" onclick={flipStreets}>Flip round</button>{/if}
-								{#if streets.length}<button class="ghost" onclick={undoStreetPoint}>Undo point</button>{/if}
-								{#if streets.length}<button class="ghost" onclick={clearStreets}>Clear streets</button>{/if}
-							</div>
 						{/if}
 						{#if narrow}
 							<button class="primary" onclick={() => (panelOpen = false)}>Back to full-screen aligning</button>
@@ -2169,23 +2561,23 @@
 		{/if}
 	</aside>
 
-	<div class="stage" class:split={scanPicking}>
-		{#if scanPicking && scan}
-			<div class="scanpane" class:await={streeting ? streetStep.where === 'scan' : pinStep.where === 'scan'}>
+	<div class="stage" class:split={pinning}>
+		{#if pinning && scan}
+			<div class="scanpane" class:await={pinStep.where === 'scan' || scanTarget !== 'pin'}>
 				<ScanPinView
 					url={scan.url}
 					width={scan.width}
 					height={scan.height}
-					pins={streeting ? [] : pins}
-					lines={streeting ? streets.map((s) => ({ id: s.id, pts: s.scan })) : []}
-					tip={streeting && streetStep.where === 'scan' ? `Street ${streetStep.id}: ${streetStep.have === 1 ? 'one more point' : 'two points'} along it on the scan` : null}
+					{pins}
 					waiting={waitingImg != null && !(waitingMap != null && pins.find((p) => p.id === waitingMap)?.img) ? waitingImg : null}
-					onpin={(px) => (streeting ? addStreetPoint('scan', px) : addImgPin(px))}
+					lines={scanLines}
+					tip={scanTip}
+					onpin={scanClick}
 					onmove={moveImgPin}
 				/>
 			</div>
 		{/if}
-		<div class="mapwrap" class:await={(pinning && pinStep.where === 'map') || (streeting && streetStep.where === 'map')}>
+		<div class="mapwrap" class:await={pinning && pinStep.where === 'map' && scanTarget === 'pin'}>
 			<div class="map" bind:this={mapEl}></div>
 			<div class="top" bind:this={topEl} class:hidden={compare !== 'swipe' || !activeSource || scanOff} style:clip-path="inset(0 {100 - swipe * 100}% 0 0)"></div>
 			{#if compare === 'swipe' && activeSource}
@@ -2196,9 +2588,7 @@
 			{#if scan && aligning}
 				<div class="banner">
 					{#if alignMode === 'pins'}
-						Pinning: a spot on the scan, then the same spot here
-					{:else if alignMode === 'streets'}
-						Streets: {streetStep.where === 'map' ? `two points along street ${streetStep.id} here` : `a street on the scan (two points), then the same street here`}
+						Pinning: a spot on the scan, then the same spot here (or type the street corner)
 					{:else}
 						Aligning: drag the corners · lower the opacity to see streets beneath
 					{/if}
@@ -2285,7 +2675,6 @@
 				<div class="seg">
 					<button class:on={alignMode === 'corners'} onclick={() => (alignMode = 'corners')}>Corners</button>
 					<button class:on={alignMode === 'pins'} onclick={() => (alignMode = 'pins')}>Pins</button>
-					<button class:on={alignMode === 'streets'} onclick={() => (alignMode = 'streets')}>Streets</button>
 				</div>
 				<button class="primary" onclick={() => (aligning = false)}>Finish aligning</button>
 			</div>
@@ -2303,41 +2692,102 @@
 					<button title="Shrink" onclick={() => transform(0, 0.98)}>− 2%</button>
 					<button title="Grow" onclick={() => transform(0, 1.02)}>+ 2%</button>
 				</div>
-			{:else if alignMode === 'streets'}
-				<p class="bar-next">
-					<span class="pin-no street-no-cell">{streetStep.id}</span>
-					<span>{streetStep.have === 1 ? 'One more point' : 'Two points'} along a street on the <strong>{streetStep.where}</strong> {streetStep.where === 'map' ? '↓' : '↑'}</span>
-				</p>
-				<div class="bar-row">
-					<span class="muted small">
-						{#if !streetFit}Draw a street on both{:else if streetFit.free === 'slide+scale'}Drag ⇕ to slide, ⤢ to scale{:else if streetFit.free === 'slide'}Scale set · drag ⇕ to slide{:else if streetFit.free === 'scale'}Placed · drag ⤢ to scale{:else}Placed by {streetPairs.length} streets{/if}
-					</span>
-					<span class="spacer"></span>
-					{#if streetFit}<button class="ghost" onclick={flipStreets}>Flip</button>{/if}
-					<button class="ghost" disabled={!streets.length} onclick={undoStreetPoint}>Undo</button>
-					<button class="ghost" disabled={!streets.length} onclick={clearStreets}>Clear</button>
-				</div>
 			{:else}
 				<p class="bar-next">
 					<span class="pin-no">{pinStep.id}</span>
-					<span>{#if pinStep.where === 'map'}Now tap the same spot on the <strong>map</strong> ↓{:else}Tap a recognisable spot on the <strong>scan</strong> ↑{/if}</span>
+					<span>
+						{#if scanTarget !== 'pin'}{scanTip}{:else if pinStep.where === 'map'}Now tap the same spot on the <strong>map</strong> ↓, or type the corner{:else}Tap a recognisable spot on the <strong>scan</strong> ↑{/if}
+					</span>
 				</p>
+				{#if pinStep.where === 'map' || crossHits.length}{@render crossingForm('xq-bar')}{/if}
+				{#if pinFit?.kind === 'one'}
+					<div class="bar-nudges">
+						<button title="Turn a quarter anticlockwise" onclick={() => turnBy(-90)}>⟲ 90°</button>
+						<button title="Turn anticlockwise" onclick={() => turnBy(-1)}>⟲ 1°</button>
+						<button title="Turn clockwise" onclick={() => turnBy(1)}>⟳ 1°</button>
+						<button title="Turn a quarter clockwise" onclick={() => turnBy(90)}>⟳ 90°</button>
+						<button title="Turn it right round (180°) about the pin" onclick={() => turnBy(180)}>Flip</button>
+					</div>
+				{/if}
 				<div class="bar-row">
 					<span class="muted small">
-						{#if pinFit}{pairs.length} pins{#if rms != null} · typical error {rms.toFixed(1)} m{/if}{:else}{Math.max(0, minPins(fitKind) - pairs.length)} more matched pin{minPins(fitKind) - pairs.length === 1 ? '' : 's'} to fit{/if}
+						{#if pinFit?.kind === 'one'}1 pin{metresPerPx ? ' · scale bar' : ''}{:else if pinFit}{pairs.length} pins{#if rms != null} · typical error {rms.toFixed(1)} m{/if}{:else}{Math.max(0, needPins(fitKind) - pairs.length)} more matched pin{needPins(fitKind) - pairs.length === 1 ? '' : 's'}{/if}
 					</span>
 					<span class="spacer"></span>
 					<button class="ghost" disabled={!pins.length} onclick={() => removePin(pins[pins.length - 1].id)}>Undo pin</button>
 					<button class="ghost" disabled={!pins.length} onclick={clearPins}>Clear</button>
 				</div>
 			{/if}
-			<button class="link more" onclick={() => (panelOpen = true)}>More options (fit, alignment files, year…)</button>
+			<button class="link more" onclick={() => (panelOpen = true)}>More options (scale bar, north arrow, fit, book, year…)</button>
 		</div>
 	{/if}
 	{#if selectFocus}
 		<div class="alignbar selectbar">{@render selectionUI()}</div>
 	{/if}
 </div>
+
+{#snippet crossingForm(id: string)}
+	<form class="crossing" onsubmit={(e) => findCrossing(e)}>
+		<label for={id}>{pinStep.where === 'map' ? `Pin ${pinStep.id} is the corner of…` : 'Pin a street corner by name'}</label>
+		<div class="row">
+			<input {id} bind:value={crossQ} placeholder="Broadway & 5th Ave" autocomplete="off" />
+			<button disabled={crossBusy || !crossQ.trim()}>{crossBusy ? 'Finding…' : 'Find'}</button>
+		</div>
+	</form>
+	{#if crossProblem}<p class="notice small">{crossProblem}</p>{/if}
+	{#if crossHits.length}
+		{@const at = pins.find((p) => p.id === crossPin)?.map}
+		<ul class="cross-hits">
+			{#each crossHits as h, i (i)}
+				<li>
+					<button class="link" class:on={at?.[0] === h.lon && at?.[1] === h.lat} onclick={() => useCrossing(h)} title="Put pin {crossPin} here">
+						{h.a} &amp; {h.b}
+					</button>
+					<span class="muted small">from {crossFrom(h)}{h.gap_m > 0 ? `, where they come within ${Math.round(h.gap_m)} m` : ''}</span>
+				</li>
+			{/each}
+		</ul>
+		{#if crossHits.every((h) => h.from === 'wiki')}
+			<button class="link small" onclick={() => findCrossing(undefined, true)} disabled={crossBusy}>Not right? Look on today's map too</button>
+		{/if}
+	{/if}
+{/snippet}
+
+{#snippet bookUI()}
+	<details class="book" open={book.length > 1}>
+		<summary>Book: {book.length} sheet{book.length === 1 ? '' : 's'}{#if book.length}, {alignedCount} placed{/if}</summary>
+		{#if book.length}
+			<ol class="sheets">
+				{#each book as s, i (s.id)}
+					{@const placed = s.id === current ? scanAligned : s.aligned}
+					<li class:current={s.id === current}>
+						<span class="sheet-no">{i + 1}</span>
+						{#if s.id === current}
+							<strong class="sheet-name" title={s.name}>{s.name}</strong>
+						{:else}
+							<button class="link sheet-name" onclick={() => openSheet(s.id)} title="Open {s.name} to align it" disabled={!!scanBusy}>{s.name}</button>
+						{/if}
+						<span class="sheet-state" class:done={placed}>{s.id === current ? 'open' : placed ? '✓ placed' : 'to do'}</span>
+						{#if s.id !== current}<button class="ghost x" title="Take {s.name} out of the book" onclick={() => removeSheet(s.id)}>✕</button>{/if}
+					</li>
+				{/each}
+			</ol>
+		{/if}
+		<label class="btn ghost filebtn">
+			Add sheets…
+			<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,{JPEG2000_ACCEPT},{GEO_ACCEPT}" onchange={openScan} disabled={!!scanBusy} />
+		</label>
+		{#if bookNote}<p class="hint">{bookNote}</p>{/if}
+		<label class="check"><input type="checkbox" bind:checked={showBook} /> Show the placed sheets on the map</label>
+		<label class="check"><input type="checkbox" bind:checked={bookImages} /> Put the scans in the export too</label>
+		<button onclick={exportBook} disabled={!!bookBusy || !book.length}>{bookBusy ?? 'Export the book (.zip)'}</button>
+		<p class="hint">
+			Each placed sheet gets a world file at the scan's full resolution and a <code>.prj</code> (Web Mercator, EPSG:3857), so QGIS or ArcGIS open the
+			scans in place; plus its alignment file, <code>book.json</code> and <code>index.geojson</code> (the sheets' outlines). Open the zip here again (with
+			the scans, if you left them out) to carry on.
+		</p>
+	</details>
+{/snippet}
 
 {#snippet eye(on: boolean)}
 	<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" class="eye">
@@ -2664,27 +3114,147 @@
 		background: #e0574a;
 		border-radius: 50%;
 	}
-	.sw.street {
-		width: 16px;
-		height: 3px;
+	.sw.scale {
+		height: 4px;
+		width: 14px;
 		background: #f0a030;
 	}
-	.sw.slide,
-	.sw.scale {
+	.sw.north {
+		height: 4px;
+		width: 14px;
+		background: #5fd0e8;
+	}
+	.sw.turn {
 		width: auto;
 		height: auto;
 		padding: 0 4px;
-		border-radius: 3px;
-		background: #5fd0c4;
+		background: #f0a030;
+		border-radius: 50%;
 		color: #17130f;
+		font-size: 0.75rem;
+		line-height: 1.3;
+	}
+	/* pin a street corner by name */
+	.crossing {
+		margin: 8px 0 4px;
+	}
+	.crossing label {
+		display: block;
+		font-size: 0.8rem;
+		font-weight: 600;
+		color: var(--ink-2);
+		margin-bottom: 3px;
+	}
+	.crossing .row {
+		gap: 4px;
+		flex-wrap: nowrap;
+	}
+	.crossing input {
+		flex: 1;
+		min-width: 0;
+	}
+	.cross-hits {
+		list-style: none;
+		margin: 4px 0;
+		padding: 0;
+		font-size: 0.8rem;
+	}
+	.cross-hits li {
+		padding: 2px 0;
+	}
+	.cross-hits button.on {
 		font-weight: 700;
 	}
-	.street-no-cell {
-		background: #f0a030 !important;
-		color: #17130f !important;
+	.cross-hits button.on::before {
+		content: '● ';
+		color: #e0574a;
 	}
-	.fitted {
+	td.pin-where {
+		max-width: 9em;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.fit-says strong {
+		color: #e0574a;
+	}
+	/* the sheet's scale bar and north arrow */
+	.sheet-marks {
+		margin: 8px 0;
+		padding: 6px 8px;
+		border: 1px solid var(--line);
+		border-radius: 4px;
+	}
+	.mark-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex-wrap: wrap;
+		min-height: 30px;
+	}
+	.mark-row strong {
+		font-size: 0.85rem;
+		margin-right: auto;
+	}
+	.scale-len {
+		width: 6em;
+	}
+	/* the book's sheets */
+	.book {
+		margin: 10px 0;
+		border-top: 1px solid var(--line);
+		padding-top: 8px;
+	}
+	.book summary {
+		cursor: pointer;
 		color: var(--ink-2);
+		font-weight: 600;
+	}
+	.book[open] summary {
+		margin-bottom: 8px;
+	}
+	.book > button,
+	.book > label {
+		margin: 4px 0;
+	}
+	.sheets {
+		list-style: none;
+		margin: 0 0 6px;
+		padding: 0;
+		max-height: 14em;
+		overflow-y: auto;
+		font-size: 0.82rem;
+	}
+	.sheets li {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 2px 4px;
+		border-radius: 3px;
+	}
+	.sheets li.current {
+		background: rgba(242, 193, 78, 0.15);
+	}
+	.sheet-no {
+		width: 1.6em;
+		text-align: right;
+		color: var(--ink-2);
+		font: 600 0.75rem var(--mono);
+	}
+	.sheet-name {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		text-align: left;
+	}
+	.sheet-state {
+		font-size: 0.75rem;
+		color: var(--ink-2);
+	}
+	.sheet-state.done {
+		color: #6fbf73;
 	}
 	.stage {
 		position: relative;
@@ -2869,28 +3439,19 @@
 			0 0 0 2px #17130f,
 			0 0 0 4px rgba(255, 255, 255, 0.85);
 	}
-	/* Streets alignment: slide along the street, scale */
-	:global(.handle.slide),
-	:global(.handle.scale) {
-		width: 28px;
-		height: 28px;
-		display: grid;
-		place-items: center;
-		background: #5fd0c4;
-		color: #17130f;
-		border-radius: 50%;
-		font: 700 16px/1 var(--sans);
-	}
-	:global(.street-no) {
-		color: #f0a030;
-		font: 700 13px/1 var(--sans);
-		text-shadow:
-			0 0 3px #17130f,
-			0 0 3px #17130f;
-		pointer-events: none;
-	}
 	:global(.handle.pin.half) {
 		opacity: 0.75;
+	}
+	/* one pin: turn the sheet about it */
+	:global(.handle.turn) {
+		width: 26px;
+		height: 26px;
+		display: grid;
+		place-items: center;
+		background: #f0a030;
+		color: #17130f;
+		border-radius: 50%;
+		font: 700 16px/1 var(--sans, sans-serif);
 	}
 	/* where the next pin tap goes */
 	.scanpane.await::after,

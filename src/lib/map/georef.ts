@@ -114,7 +114,7 @@ export function fit(img: XY[], merc: XY[], kind: FitKind): Fit | null {
 }
 
 /** The image's four corners (top-left, clockwise) as lng/lat, ready for an ImageSource. */
-export function cornersFor(f: Fit, width: number, height: number): [XY, XY, XY, XY] {
+export function cornersFor(f: { m: Affine }, width: number, height: number): [XY, XY, XY, XY] {
 	const box: XY[] = [[0, 0], [width, 0], [width, height], [0, height]];
 	return box.map((p) => fromMerc(apply(f.m, p))) as [XY, XY, XY, XY];
 }
@@ -126,3 +126,63 @@ export function metres([lng1, lat1]: XY, [lng2, lat2]: XY): number {
 	const h = Math.sin(((lat2 - lat1) * r) / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lng2 - lng1) * r) / 2) ** 2;
 	return 2 * R * Math.asin(Math.sqrt(h));
 }
+
+// ---------------------------------------------------------------- placing by one pin, a scale and a turn
+// A Sanborn sheet often shows one street corner you can name and a scale bar: that's enough to
+// place it, with the turn set by its north arrow or by hand.
+
+/** EPSG:3857 metres per normalised Mercator unit (the Earth's circumference at the equator). */
+export const MERC_C = 40075016.686;
+/** Normalised Mercator units per metre on the ground at a latitude. */
+export const mercPerMetre = (lat: number) => 1 / (MERC_C * Math.cos((lat * Math.PI) / 180));
+
+/** The placement (move, turn, scale) that puts image point `img` at Mercator point `at`; s in Mercator units per pixel, th in radians (clockwise on the map). */
+export function placeAt(img: XY, at: XY, s: number, th: number): Affine {
+	const a = s * Math.cos(th);
+	const b = s * Math.sin(th);
+	return [a, -b, at[0] - (a * img[0] - b * img[1]), b, a, at[1] - (b * img[0] + a * img[1])];
+}
+
+/** A placement's scale (Mercator units per pixel) and turn: an affine's nearest move-turn-scale. */
+export function poseOf(m: Affine): { s: number; th: number } {
+	return { s: Math.sqrt(Math.abs(m[0] * m[4] - m[1] * m[3])), th: Math.atan2(m[3] - m[1], m[0] + m[4]) };
+}
+
+/** Fit at a known scale (from the sheet's scale bar): turn and move only, from 2+ pins. */
+export function rigidFit(img: XY[], merc: XY[], s: number): Affine | null {
+	if (img.length !== merc.length || img.length < 2 || !(s > 0)) return null;
+	const n = img.length;
+	const ci: XY = [img.reduce((t, p) => t + p[0], 0) / n, img.reduce((t, p) => t + p[1], 0) / n];
+	const cm: XY = [merc.reduce((t, p) => t + p[0], 0) / n, merc.reduce((t, p) => t + p[1], 0) / n];
+	let cross = 0;
+	let dot = 0;
+	img.forEach((p, i) => {
+		const px = p[0] - ci[0];
+		const py = p[1] - ci[1];
+		const qx = merc[i][0] - cm[0];
+		const qy = merc[i][1] - cm[1];
+		cross += px * qy - py * qx;
+		dot += px * qx + py * qy;
+	});
+	if (Math.abs(cross) + Math.abs(dot) < 1e-30) return null;
+	return placeAt(ci, cm, s, Math.atan2(cross, dot));
+}
+
+/** The turn that makes a north arrow drawn on the scan (tail → head) point north. */
+export const northTurn = (tail: XY, head: XY) => -Math.PI / 2 - Math.atan2(head[1] - tail[1], head[0] - tail[0]);
+
+/**
+ * A world file (A D B E C F) in EPSG:3857 metres for the image at its full resolution, from a
+ * placement of the image as shown (width × height, maybe reduced from fullWidth × fullHeight).
+ * C and F are the centre of the top-left pixel, as world files have it.
+ */
+export function worldFile(m: Affine, width: number, height: number, fullWidth: number, fullHeight: number): number[] {
+	const sx = width / fullWidth;
+	const sy = height / fullHeight;
+	const c = apply(m, [0.5 * sx, 0.5 * sy]);
+	return [m[0] * sx * MERC_C, -m[3] * sx * MERC_C, m[1] * sy * MERC_C, -m[4] * sy * MERC_C, (c[0] - 0.5) * MERC_C, (0.5 - c[1]) * MERC_C];
+}
+
+/** The .prj that goes with worldFile(): Web Mercator, as Esri writes it (QGIS and ArcGIS both read it). */
+export const WEB_MERCATOR_PRJ =
+	'PROJCS["WGS_1984_Web_Mercator_Auxiliary_Sphere",GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Mercator_Auxiliary_Sphere"],PARAMETER["False_Easting",0.0],PARAMETER["False_Northing",0.0],PARAMETER["Central_Meridian",0.0],PARAMETER["Standard_Parallel_1",0.0],PARAMETER["Auxiliary_Sphere_Type",0.0],UNIT["Meter",1.0]]';
