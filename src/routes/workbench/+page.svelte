@@ -247,6 +247,8 @@
 	// book up here again. Like a single scan, nothing leaves the browser.
 	/** [x, y, width, height] in an image's pixels */
 	type Rect = [number, number, number, number];
+	/** an outline (a box's four corners, or a lasso's), in an image's pixels */
+	type Outline = XY[];
 	type Alignment = {
 		decaynet_alignment: 1;
 		file: string;
@@ -260,11 +262,12 @@
 		scale_bar: { image: [XY, XY]; length: number | null; unit: ScaleUnit } | null;
 		north_arrow: [XY, XY] | null;
 		aligned: boolean;
-		/** parts blanked out of the sheet (cut out as sub-maps), in its pixels */
-		masks?: Rect[];
-		/** a sub-map: the sheet it was cut from, and where, in that sheet's full-size pixels */
+		/** parts blanked out of the sheet (cut out as sub-maps): outlines, in its pixels */
+		masks?: Outline[];
+		/** a sub-map: the sheet it was cut from, and where (the box round it, and its outline), in that sheet's full-size pixels */
 		crop_of?: string;
 		crop?: Rect;
+		crop_outline?: Outline;
 	};
 	type Sheet = {
 		id: number;
@@ -281,6 +284,7 @@
 		/** a sub-map (an inset cut out of another sheet): that sheet, and where on it (full-size pixels) */
 		parent: number | null;
 		crop: Rect | null;
+		cropOutline: Outline | null;
 	};
 	let book = $state<Sheet[]>([]);
 	let sheetSeq = 0;
@@ -318,7 +322,8 @@
 				aligned: false,
 				parent: null,
 				// a sub-map from an exported book: where it was cut from (its parent is linked below)
-				crop: Array.isArray(s.alignment?.crop) && s.alignment.crop.length === 4 ? (s.alignment.crop as Rect) : null
+				crop: Array.isArray(s.alignment?.crop) && s.alignment.crop.length === 4 ? (s.alignment.crop as Rect) : null,
+				cropOutline: isOutline(s.alignment?.crop_outline) ? s.alignment.crop_outline : null
 			}));
 			for (const a of added) a.aligned = !!a.alignment?.aligned;
 			const fresh = added.filter((a) => !book.some((b) => b.name === a.name));
@@ -475,7 +480,7 @@
 	 * A copy at most 1600 px across, for the map: a whole book at full size would run out of graphics
 	 * memory. Parts cut out as sub-maps (masks, in pixels of an image `ofWidth` wide) are blanked.
 	 */
-	async function thumbnail(src: string | Blob, cut: Rect[] = [], ofWidth = 0): Promise<string> {
+	async function thumbnail(src: string | Blob, cut: Outline[] = [], ofWidth = 0): Promise<string> {
 		const bmp = await createImageBitmap(typeof src === 'string' ? await (await fetch(src)).blob() : src);
 		const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
 		const c = document.createElement('canvas');
@@ -483,8 +488,7 @@
 		c.height = Math.max(1, Math.round(bmp.height * k));
 		const g = c.getContext('2d')!;
 		g.drawImage(bmp, 0, 0, c.width, c.height);
-		const mk = ofWidth ? c.width / ofWidth : 1;
-		for (const m of cut) g.clearRect(m[0] * mk, m[1] * mk, m[2] * mk, m[3] * mk);
+		blankOut(g, cut, ofWidth ? c.width / ofWidth : 1);
 		bmp.close();
 		const out = (await new Promise<Blob | null>((r) => c.toBlob(r, 'image/webp', 0.8))) ?? (await new Promise<Blob | null>((r) => c.toBlob(r, 'image/png')));
 		if (!out) throw new Error('no thumbnail');
@@ -558,16 +562,46 @@
 			north_arrow: north.length === 2 ? ($state.snapshot(north) as [XY, XY]) : null,
 			aligned: scanAligned,
 			...cropFields(book.find((s) => s.id === current)),
-			...(masks.length ? { masks: $state.snapshot(masks) as Rect[] } : {})
+			...(masks.length ? { masks: $state.snapshot(masks) as Outline[] } : {})
 		};
 	}
 	/** a sub-map's record of where it was cut from, for its alignment file */
-	function cropFields(s: Sheet | undefined): Pick<Alignment, 'crop_of' | 'crop'> {
+	function cropFields(s: Sheet | undefined): Pick<Alignment, 'crop_of' | 'crop' | 'crop_outline'> {
 		const of = s?.parent != null ? book.find((x) => x.id === s.parent)?.name : undefined;
-		return s?.crop && of ? { crop_of: of, crop: [...s.crop] as Rect } : {};
+		if (!s?.crop || !of) return {};
+		return { crop_of: of, crop: [...s.crop] as Rect, ...(s.cropOutline ? { crop_outline: s.cropOutline.map((q) => [...q] as XY) } : {}) };
 	}
 
 	const isRect = (v: unknown): v is Rect => Array.isArray(v) && v.length === 4 && v.every((n) => typeof n === 'number' && Number.isFinite(n)) && v[2] > 0 && v[3] > 0;
+	const isXY = (v: unknown): v is XY => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' && Number.isFinite(n));
+	const isOutline = (v: unknown): v is Outline => Array.isArray(v) && v.length >= 3 && v.every(isXY);
+	/** a box's four corners, clockwise from the top left */
+	const rectOutline = ([x, y, w, h]: Rect): Outline => [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+	/** the box round an outline, to whole pixels, inside an image w × h */
+	function boxAround(o: Outline, w: number, h: number): Rect {
+		const x0 = Math.max(0, Math.floor(Math.min(...o.map((q) => q[0]))));
+		const y0 = Math.max(0, Math.floor(Math.min(...o.map((q) => q[1]))));
+		const x1 = Math.min(w, Math.ceil(Math.max(...o.map((q) => q[0]))));
+		const y1 = Math.min(h, Math.ceil(Math.max(...o.map((q) => q[1]))));
+		return [x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0)];
+	}
+	/** the outline as a canvas path (scaled by k, then moved by dx, dy) */
+	function tracePath(g: CanvasRenderingContext2D, o: Outline, k = 1, dx = 0, dy = 0) {
+		g.beginPath();
+		o.forEach((q, i) => (i ? g.lineTo(q[0] * k + dx, q[1] * k + dy) : g.moveTo(q[0] * k + dx, q[1] * k + dy)));
+		g.closePath();
+	}
+	/** make the outlined parts see-through */
+	function blankOut(g: CanvasRenderingContext2D, cut: Outline[], k = 1) {
+		if (!cut.length) return;
+		g.save();
+		g.globalCompositeOperation = 'destination-out';
+		for (const o of cut) {
+			tracePath(g, o, k);
+			g.fill();
+		}
+		g.restore();
+	}
 	/** An alignment file's contents, checked; null if it isn't one. */
 	function readAlignment(j: Record<string, unknown> | null): Alignment | null {
 		if (!j) return null;
@@ -599,8 +633,13 @@
 			north_arrow: Array.isArray(na) && na.length === 2 && na.every(ok) ? (na as [XY, XY]) : null,
 			// alignment files from before books were all of aligned sheets
 			aligned: j.aligned !== false,
-			...(Array.isArray(j.masks) ? { masks: (j.masks as unknown[]).filter(isRect) } : {}),
-			...(typeof j.crop_of === 'string' && isRect(j.crop) ? { crop_of: j.crop_of, crop: j.crop } : {})
+			// masks: outlines (and boxes, as the first sub-maps saved them)
+			...(Array.isArray(j.masks)
+				? { masks: (j.masks as unknown[]).flatMap((m) => (isOutline(m) ? [m] : isRect(m) ? [rectOutline(m)] : [])) }
+				: {}),
+			...(typeof j.crop_of === 'string' && isRect(j.crop)
+				? { crop_of: j.crop_of, crop: j.crop, ...(isOutline(j.crop_outline) ? { crop_outline: j.crop_outline } : {}) }
+				: {})
 		};
 	}
 
@@ -623,7 +662,7 @@
 		if (a.scale_bar) scaleBar = { pts: a.scale_bar.image.map(px), length: a.scale_bar.length, unit: a.scale_bar.unit };
 		if (a.north_arrow) north = a.north_arrow.map(px);
 		if (a.masks?.length) {
-			masks = a.masks.map((m) => [m[0] * sx, m[1] * sy, m[2] * sx, m[3] * sy] as Rect);
+			masks = a.masks.map((o) => o.map(px));
 			renderMasks();
 		}
 		scanAligned = a.aligned;
@@ -730,8 +769,10 @@
 	// A Sanborn sheet often carries an inset: a block from somewhere else, at its own scale and
 	// turn. Cut it out (a box on the scan) and it becomes a sheet of its own in the book, aligned on
 	// its own; on the sheet it came from it's blanked out, so it doesn't cover the wrong place.
-	let masks = $state<Rect[]>([]);
-	let cropDraft = $state<Rect | null>(null);
+	let masks = $state<Outline[]>([]);
+	let cropDraft = $state<Outline | null>(null);
+	/** cut out with a box, or a lasso (an inset that isn't a rectangle: a box and a triangle, say) */
+	let cutShape = $state<'box' | 'lasso'>('box');
 	let cropName = $state('');
 	let cropBlank = $state(true);
 	let cropBusy = $state(false);
@@ -767,7 +808,7 @@
 		c.height = s.height;
 		const g = c.getContext('2d')!;
 		g.drawImage(img, 0, 0, s.width, s.height);
-		for (const m of masks) g.clearRect(m[0], m[1], m[2], m[3]);
+		blankOut(g, masks);
 		const blob = await pngOf(c);
 		// another sheet opened, or the masks changed again, meanwhile
 		if (my !== maskSeq || scan?.baseUrl !== base) return;
@@ -782,9 +823,9 @@
 		lastSub = null;
 		scanTarget = scanTarget === 'crop' ? 'pin' : 'crop';
 	}
-	function boxDrawn(r: Rect) {
+	function cutDrawn(o: Outline) {
 		if (scanTarget !== 'crop' || !scan) return;
-		cropDraft = r;
+		cropDraft = o;
 		scanTarget = 'pin';
 		panelOpen = true;
 		const stem = stemOf(scan.name);
@@ -797,12 +838,17 @@
 		if (!scan || !cropDraft || current == null || cropBusy) return;
 		cropBusy = true;
 		try {
-			const [x, y, w, h] = cropDraft;
+			const outline = $state.snapshot(cropDraft) as Outline;
+			const [x, y, w, h] = boxAround(outline, scan.width, scan.height);
 			const img = await loadImage(scan.baseUrl);
 			const c = document.createElement('canvas');
 			c.width = w;
 			c.height = h;
-			c.getContext('2d')!.drawImage(img, x, y, w, h, 0, 0, w, h);
+			const g = c.getContext('2d')!;
+			// only what's inside the outline; the rest of the box is see-through
+			tracePath(g, outline, 1, -x, -y);
+			g.clip();
+			g.drawImage(img, x, y, w, h, 0, 0, w, h);
 			const blob = await pngOf(c);
 			let name = (cropName.trim() || `${stemOf(scan.name)}-inset`).replace(/[\\/:*?"<>|]+/g, '-').replace(/\.png$/i, '');
 			if (book.some((s) => s.name === `${name}.png`)) {
@@ -825,7 +871,8 @@
 				thumb: null,
 				aligned: false,
 				parent,
-				crop: [Math.round(x * kx), Math.round(y * ky), Math.round(w * kx), Math.round(h * ky)]
+				crop: [Math.round(x * kx), Math.round(y * ky), Math.round(w * kx), Math.round(h * ky)],
+				cropOutline: outline.map(([u, v]) => [Math.round(u * kx * 10) / 10, Math.round(v * ky * 10) / 10] as XY)
 			};
 			// after the sheet and the sub-maps already cut from it; on the map, just above it
 			let at = book.findIndex((s) => s.id === parent);
@@ -833,7 +880,7 @@
 			book.splice(at + 1, 0, sub);
 			addLayerKeys([sheetKey(sub.id)], sheetKey(parent), 'above');
 			if (cropBlank) {
-				masks = [...masks, [x, y, w, h]];
+				masks = [...masks, outline];
 				await renderMasks();
 			}
 			cropDraft = null;
@@ -1119,13 +1166,12 @@
 					? 'Now the head of the north arrow'
 					: 'Click the tail of the north arrow'
 				: scanTarget === 'crop'
-					? 'Drag a box round the part to cut out'
+					? cutShape === 'lasso'
+						? 'Click its corners, or drag round it; click the first corner to close'
+						: 'Drag a box round the part to cut out'
 					: null
 	);
-	const scanBoxes = $derived([
-		...masks.map(([x, y, w, h]) => ({ x, y, w, h, kind: 'mask' })),
-		...(cropDraft ? [{ x: cropDraft[0], y: cropDraft[1], w: cropDraft[2], h: cropDraft[3], kind: 'draft' }] : [])
-	]);
+	const scanBoxes = $derived([...masks.map((pts) => ({ pts, kind: 'mask' })), ...(cropDraft ? [{ pts: cropDraft, kind: 'draft' }] : [])]);
 	/** A click on the scan: a pin's spot, or a point of the scale bar or north arrow being drawn. */
 	function scanClick(img: XY) {
 		if (scanTarget === 'scale') {
@@ -2870,9 +2916,11 @@
 					waiting={waitingImg != null && !(waitingMap != null && pins.find((p) => p.id === waitingMap)?.img) ? waitingImg : null}
 					lines={scanLines}
 					tip={scanTip}
-					boxing={scanTarget === 'crop'}
+					boxing={scanTarget === 'crop' && cutShape === 'box'}
+					lassoing={scanTarget === 'crop' && cutShape === 'lasso'}
 					boxes={scanBoxes}
-					onbox={boxDrawn}
+					onbox={(b) => cutDrawn(rectOutline(b))}
+					onlasso={cutDrawn}
 					onpin={scanClick}
 					onmove={moveImgPin}
 				/>
@@ -3064,6 +3112,10 @@
 				{scanTarget === 'crop' ? 'Cancel' : 'Cut one out'}
 			</button>
 		</div>
+		<div class="seg cut-shape" role="radiogroup" aria-label="Cut out with">
+			<button class:on={cutShape === 'box'} role="radio" aria-checked={cutShape === 'box'} onclick={() => (cutShape = 'box')} title="Drag a box round it">Box</button>
+			<button class:on={cutShape === 'lasso'} role="radio" aria-checked={cutShape === 'lasso'} onclick={() => (cutShape = 'lasso')} title="Click its corners, or drag round it: for an inset that isn't a rectangle">Lasso</button>
+		</div>
 		{#if cropDraft}
 			<div class="crop-form">
 				<label for="cropname">Name of the sub-map</label>
@@ -3086,14 +3138,18 @@
 		{#if masks.length}
 			<ul class="mask-list">
 				{#each masks as m, i (i)}
+					{@const bx = scan ? boxAround(m, scan.width, scan.height) : boxAround(m, Infinity, Infinity)}
 					<li>
-						<span class="muted small">Blanked: {Math.round(m[2])} × {Math.round(m[3])} px at {Math.round(m[0])}, {Math.round(m[1])}</span>
+						<span class="muted small">Blanked: {bx[2]} × {bx[3]} px at {bx[0]}, {bx[1]}{m.length !== 4 ? ` (${m.length} corners)` : ''}</span>
 						<button class="ghost x" title="Show this part of the sheet again" onclick={() => unmask(i)}>Show again</button>
 					</li>
 				{/each}
 			</ul>
 		{/if}
-		<p class="hint">An inset (a block from somewhere else, at its own scale) can be cut out and aligned as a sheet of its own. It starts at this sheet's scale and turn.</p>
+		<p class="hint">
+			An inset (a block from somewhere else, at its own scale) can be cut out and aligned as a sheet of its own. It starts at this sheet's scale and turn.
+			<strong>Lasso</strong> is for one that isn't a rectangle: click its corners (or drag round it), then click the first corner again.
+		</p>
 	</div>
 {/snippet}
 
@@ -3580,6 +3636,9 @@
 		width: 12px;
 		height: 10px;
 		border: 2px dashed #5fd0e8;
+	}
+	.cut-shape {
+		margin: 4px 0;
 	}
 	.crop-form {
 		margin: 6px 0;

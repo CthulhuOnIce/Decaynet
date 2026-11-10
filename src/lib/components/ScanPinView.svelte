@@ -1,8 +1,8 @@
 <!--
 	Zoomable, pannable view of a scan for placing control-point pins.
 	Click or tap (without dragging) to drop a pin (or a point of the scale bar or north arrow being
-	drawn); drag a pin to move it; scroll or pinch to zoom; drag to pan (or, while boxing, to draw a
-	box round part of the sheet).
+	drawn); drag a pin to move it; scroll or pinch to zoom; drag to pan (or, while cutting out a
+	sub-map, to draw a box or lasso round part of the sheet).
 	Pin positions are in the image's natural pixel coordinates.
 -->
 <script lang="ts">
@@ -24,10 +24,12 @@
 		lines = [],
 		tip = null,
 		boxing = false,
+		lassoing = false,
 		boxes = [],
 		onpin,
 		onmove,
-		onbox
+		onbox,
+		onlasso
 	}: {
 		url: string;
 		width: number;
@@ -41,14 +43,31 @@
 		tip?: string | null;
 		/** a drag draws a box (cutting out a sub-map) instead of panning */
 		boxing?: boolean;
-		/** boxes to outline: areas cut out (mask), the one being cut (draft) */
-		boxes?: { x: number; y: number; w: number; h: number; kind: string }[];
+		/** clicks place the corners of an outline, a drag draws it freehand (cutting out a sub-map) */
+		lassoing?: boolean;
+		/** outlines to show: parts cut out (mask), the one being cut (draft) */
+		boxes?: { pts: XY[]; kind: string }[];
 		onpin: (img: XY) => void;
 		onmove: (id: number, img: XY) => void;
 		/** a box drawn while boxing: [x, y, width, height] in the image's pixels */
 		onbox?: (r: [number, number, number, number]) => void;
+		/** an outline closed while lassoing, in the image's pixels */
+		onlasso?: (pts: XY[]) => void;
 	} = $props();
 	let boxDraft = $state<[number, number, number, number] | null>(null);
+	// the lasso being drawn: its corners so far
+	let lassoPts = $state<XY[]>([]);
+	let lastClick = 0;
+	$effect(() => {
+		if (!lassoing) lassoPts = [];
+	});
+	/** how far apart two image points are on screen */
+	const screenGap = (a: XY, b: XY) => Math.hypot(a[0] - b[0], a[1] - b[1]) * scale;
+	function closeLasso() {
+		const pts = lassoPts.map(round);
+		lassoPts = [];
+		if (pts.length >= 3) onlasso?.(pts);
+	}
 
 	let el: HTMLDivElement;
 	let scale = $state(1);
@@ -92,6 +111,8 @@
 		const r = el.getBoundingClientRect();
 		return [(cx - r.left - tx) / scale, (cy - r.top - ty) / scale];
 	};
+	/** an image point as an SVG point on screen */
+	const sp = (q: XY) => `${tx + q[0] * scale},${ty + q[1] * scale}`;
 	const inside = ([x, y]: XY) => x >= 0 && y >= 0 && x <= width && y <= height;
 	const round = ([x, y]: XY): XY => [Math.round(x * 10) / 10, Math.round(y * 10) / 10];
 
@@ -108,7 +129,7 @@
 	}
 
 	// Pan, or click-to-pin when the pointer barely moved; two fingers pinch-zoom
-	let drag: { x: number; y: number; tx: number; ty: number; moved: boolean; pin: number | null; box: XY | null } | null = null;
+	let drag: { x: number; y: number; tx: number; ty: number; moved: boolean; pin: number | null; box: XY | null; lasso: { start: XY; fresh: boolean } | null } | null = null;
 	const clampImg = ([x, y]: XY): XY => [Math.max(0, Math.min(width, x)), Math.max(0, Math.min(height, y))];
 	const boxOf = (a: XY, b: XY): [number, number, number, number] => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])];
 	const fingers = new Map<number, { x: number; y: number }>();
@@ -131,7 +152,17 @@
 			return;
 		}
 		if (fingers.size > 2) return;
-		drag = { x: e.clientX, y: e.clientY, tx, ty, moved: false, pin, box: boxing && pin == null ? clampImg(toImg(e.clientX, e.clientY)) : null };
+		const at = clampImg(toImg(e.clientX, e.clientY));
+		drag = {
+			x: e.clientX,
+			y: e.clientY,
+			tx,
+			ty,
+			moved: false,
+			pin,
+			box: boxing && pin == null ? at : null,
+			lasso: lassoing && pin == null ? { start: at, fresh: !lassoPts.length } : null
+		};
 	}
 	function move(e: PointerEvent) {
 		if (fingers.has(e.pointerId)) fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -152,6 +183,13 @@
 		drag.moved = true;
 		if (drag.box) {
 			boxDraft = boxOf(drag.box, clampImg(toImg(e.clientX, e.clientY)));
+			return;
+		}
+		if (drag.lasso) {
+			// freehand: a point every few screen pixels
+			const q = clampImg(toImg(e.clientX, e.clientY));
+			if (!lassoPts.length) lassoPts = [drag.lasso.start];
+			if (screenGap(q, lassoPts[lassoPts.length - 1]) >= 4) lassoPts = [...lassoPts, q];
 			return;
 		}
 		if (drag.pin != null) {
@@ -176,6 +214,23 @@
 			const b = boxDraft;
 			boxDraft = null;
 			if (d.moved && b && b[2] >= 8 && b[3] >= 8) onbox?.(b.map(Math.round) as [number, number, number, number]);
+			return;
+		}
+		if (d.lasso) {
+			if (d.moved) {
+				// a lasso drawn in one stroke closes when let go; a stroke added to clicked corners
+				// closes if it ends back at the first one
+				if (d.lasso.fresh || (lassoPts.length >= 3 && screenGap(lassoPts[lassoPts.length - 1], lassoPts[0]) < 12)) closeLasso();
+				return;
+			}
+			const q = clampImg(toImg(e.clientX, e.clientY));
+			const now = Date.now();
+			const n = lassoPts.length;
+			// click the first corner again (or double-click) to close it
+			if (n >= 3 && screenGap(q, lassoPts[0]) < 12) closeLasso();
+			else if (n >= 3 && now - lastClick < 400 && screenGap(q, lassoPts[n - 1]) < 8) closeLasso();
+			else if (!n || screenGap(q, lassoPts[n - 1]) >= 3) lassoPts = [...lassoPts, q];
+			lastClick = now;
 			return;
 		}
 		if (d.moved || d.pin != null) return;
@@ -234,9 +289,25 @@
 			{/each}
 		</svg>
 	{/if}
-	{#each [...boxes, ...(boxDraft ? [{ x: boxDraft[0], y: boxDraft[1], w: boxDraft[2], h: boxDraft[3], kind: 'draft' }] : [])] as bx, i (i)}
-		<div class="box {bx.kind}" style:left="{tx + bx.x * scale}px" style:top="{ty + bx.y * scale}px" style:width="{bx.w * scale}px" style:height="{bx.h * scale}px"></div>
-	{/each}
+	{#if boxes.length || boxDraft || lassoPts.length}
+		<svg class="cuts" aria-hidden="true">
+			<defs>
+				<pattern id="cut-hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+					<rect width="6" height="12" fill="rgba(224, 87, 74, 0.18)" />
+				</pattern>
+			</defs>
+			{#each boxes as bx, i (i)}<polygon class={bx.kind} points={bx.pts.map(sp).join(' ')} />{/each}
+			{#if boxDraft}
+				{@const [x, y, w, h] = boxDraft}
+				<polygon class="draft" points={([[x, y], [x + w, y], [x + w, y + h], [x, y + h]] as XY[]).map(sp).join(' ')} />
+			{/if}
+			{#if lassoPts.length}
+				<polyline class="lasso" points={lassoPts.map(sp).join(' ')} />
+				<circle class="lasso-start" cx={tx + lassoPts[0][0] * scale} cy={ty + lassoPts[0][1] * scale} r="7" />
+				{#each lassoPts.slice(1) as q, i (i)}<circle class="lasso-pt" cx={tx + q[0] * scale} cy={ty + q[1] * scale} r="3" />{/each}
+			{/if}
+		</svg>
+	{/if}
 	{#each pins as p (p.id)}
 		{#if p.img}
 			<button
@@ -313,15 +384,40 @@
 		stroke: #17130f;
 		stroke-width: 3;
 	}
-	.box {
+	.cuts {
 		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
 		pointer-events: none;
-		border: 2px dashed #5fd0e8;
-		background: rgba(95, 208, 232, 0.12);
+		overflow: visible;
 	}
-	.box.mask {
-		border-color: #e0574a;
-		background: repeating-linear-gradient(45deg, rgba(224, 87, 74, 0.18) 0 6px, transparent 6px 12px);
+	.cuts polygon {
+		stroke-width: 2;
+		stroke-dasharray: 6 4;
+		stroke-linejoin: round;
+	}
+	.cuts .draft {
+		stroke: #5fd0e8;
+		fill: rgba(95, 208, 232, 0.12);
+	}
+	.cuts .mask {
+		stroke: #e0574a;
+		fill: url(#cut-hatch);
+	}
+	.cuts .lasso {
+		fill: rgba(95, 208, 232, 0.08);
+		stroke: #5fd0e8;
+		stroke-width: 2;
+		stroke-linejoin: round;
+	}
+	.cuts .lasso-start {
+		fill: #5fd0e8;
+		stroke: #17130f;
+		stroke-width: 2;
+	}
+	.cuts .lasso-pt {
+		fill: #5fd0e8;
 	}
 	.pin {
 		position: absolute;
