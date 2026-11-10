@@ -2,7 +2,7 @@
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import { onDestroy, onMount, tick, untrack } from 'svelte';
 	import { enhance } from '$app/forms';
-	import type { GeoJSONSource, ImageSource, Map as MLMap, Marker } from 'maplibre-gl';
+	import type { GeoJSONSource, ImageSource, LineLayerSpecification, Map as MLMap, Marker } from 'maplibre-gl';
 	import YearSlider from '$lib/components/YearSlider.svelte';
 	import EntityPicker from '$lib/components/EntityPicker.svelte';
 	import TemporalFields from '$lib/components/TemporalFields.svelte';
@@ -44,7 +44,7 @@
 		type FitKind,
 		type XY
 	} from '$lib/map/georef';
-	import type { CrossingHit } from '$lib/map/crossings';
+	import type { CrossingHit, CrossingLookup, CrossingSide } from '$lib/map/crossings';
 	import { baseStyle, colorFeatures, mapView, snapshotLayers, type ColorBy } from '$lib/map/style';
 	import { loadView, saveView, loadYear, saveYear } from '$lib/mapMemory';
 	import { can } from '$lib/perms';
@@ -1263,7 +1263,7 @@
 		pinSeq = 0;
 		oneScale = null;
 		crossPin = null;
-		crossHits = [];
+		clearCrossing();
 	}
 	/** A fresh sheet: no pins, scale bar or north arrow. */
 	function resetAlignment() {
@@ -1285,6 +1285,10 @@
 	let crossBusy = $state(false);
 	let crossHits = $state<CrossingHit[]>([]);
 	let crossProblem = $state<string | null>(null);
+	/** what the last lookup made of each street, and how close they come if they don't meet */
+	let crossSides = $state<CrossingLookup['sides']>(null);
+	let crossNearest = $state<CrossingLookup['nearest']>(null);
+	let crossLines = $state<GeoJSON.FeatureCollection | null>(null);
 	/** the pin the lookup placed (choosing another of the hits moves it) */
 	let crossPin = $state<number | null>(null);
 	async function findCrossing(e?: SubmitEvent, osm = false) {
@@ -1300,37 +1304,91 @@
 			if (osm) params.set('osm', '1');
 			const r = await fetch(`/api/crossing?${params}`);
 			if (!r.ok) throw new Error(r.status === 401 ? 'Sign in again to look up street corners.' : `The lookup failed (${r.status}).`);
-			const j = (await r.json()) as { hits: CrossingHit[]; problem?: string | null };
+			const j = (await r.json()) as CrossingLookup;
 			crossHits = j.hits;
 			crossProblem = j.problem ?? null;
-			if (!j.hits.length) return;
-			// the pin waiting for its map spot, else a new one (its scan spot comes next); looking
-			// again on today's map moves the same pin
-			const waiting = pins.find((x) => x.img && !x.map) ?? pins.find((x) => !x.map);
-			if (osm && crossPin != null && pins.some((x) => x.id === crossPin)) {
-				// keep it
-			} else if (waiting) crossPin = waiting.id;
-			else {
-				crossPin = ++pinSeq;
-				pins.push({ id: crossPin, img: null, map: null });
+			crossSides = j.sides;
+			crossNearest = j.nearest;
+			crossLines = j.lines?.features.length ? j.lines : null;
+			if (j.hits.length) useCrossing((osm && j.hits.find((h) => h.from !== 'wiki')) || j.hits[0], osm);
+			else if (crossLines) {
+				// nothing to pin: show what it did find, to click the corner by hand
+				const pts = crossLines.features.flatMap((f) => (f.geometry as GeoJSON.MultiLineString).coordinates.flat());
+				if (pts.length)
+					map.fitBounds(
+						[
+							[Math.min(...pts.map((q) => q[0])), Math.min(...pts.map((q) => q[1]))],
+							[Math.max(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[1]))]
+						],
+						{ padding: 60, maxZoom: 17, duration: 600 }
+					);
 			}
-			useCrossing((osm && j.hits.find((h) => h.from === 'osm')) || j.hits[0]);
 		} catch (err) {
 			crossProblem = (err as Error).message;
 		} finally {
 			crossBusy = false;
 		}
 	}
-	function useCrossing(h: CrossingHit) {
+	/** Put the lookup's pin on a hit (or the closest point): the pin waiting for its map spot, else a new one. */
+	function useCrossing(h: { lon: number; lat: number; a: string; b: string }, keep = true) {
+		if (!map) return;
+		if (!(keep && crossPin != null && pins.some((x) => x.id === crossPin))) {
+			const waiting = pins.find((x) => x.img && !x.map) ?? pins.find((x) => !x.map);
+			if (waiting) crossPin = waiting.id;
+			else {
+				crossPin = ++pinSeq;
+				pins.push({ id: crossPin, img: null, map: null });
+			}
+		}
 		const p = pins.find((x) => x.id === crossPin);
-		if (!p || !map) return;
+		if (!p) return;
 		p.map = [h.lon, h.lat];
 		p.label = `${h.a} & ${h.b}`;
 		placePins();
 		map.flyTo({ center: [h.lon, h.lat], zoom: Math.max(map.getZoom(), 17), duration: 600 });
 	}
+	/** A suggested name in place of the one typed for that street, and look again. */
+	function trySuggestion(i: 0 | 1, name: string) {
+		const st = crossSides?.map((x) => x.typed) ?? [];
+		st[i] = name;
+		crossQ = `${st[0]} & ${st[1]}`;
+		crossPin = null;
+		findCrossing();
+	}
+	function clearCrossing() {
+		crossHits = [];
+		crossProblem = null;
+		crossSides = null;
+		crossNearest = null;
+		crossLines = null;
+	}
+	// the streets the lookup found, on the map (a: amber, b: blue; today's dashed)
+	function drawCrossLines() {
+		if (!map || !ready) return;
+		const fc = crossLines && pinning ? $state.snapshot(crossLines) : { type: 'FeatureCollection' as const, features: [] };
+		const src = map.getSource('cross-lines') as GeoJSONSource | undefined;
+		if (src) src.setData(fc);
+		else {
+			map.addSource('cross-lines', { type: 'geojson', data: fc });
+			const paint: LineLayerSpecification['paint'] = { 'line-color': ['match', ['get', 'side'], 'a', '#f0a030', '#5fd0e8'], 'line-width': 4, 'line-opacity': 0.85 };
+			map.addLayer({ id: 'cross-lines-wiki', type: 'line', source: 'cross-lines', filter: ['==', ['get', 'from'], 'wiki'], paint });
+			map.addLayer({ id: 'cross-lines-osm', type: 'line', source: 'cross-lines', filter: ['==', ['get', 'from'], 'osm'], paint: { ...paint, 'line-dasharray': [2, 1] } });
+		}
+	}
 	const crossFrom = (h: CrossingHit) =>
-		h.from === 'osm' ? "today's map" : `the wiki's streets${h.then ? (depictsYear ? ` in ${depictsYear}` : '') : ' (another year)'}`;
+		h.from === 'osm'
+			? "today's map"
+			: h.from === 'mixed'
+				? "the wiki's street and today's map"
+				: `the wiki's streets${h.then ? (depictsYear ? ` in ${depictsYear}` : '') : ' (another year)'}`;
+	/** what was found for one street, in a few words */
+	const sideSays = (x: CrossingSide) => {
+		const shaped = x.pages.filter((p) => p.shapes > 0);
+		if (shaped.length) return `the wiki's ${shaped.map((p) => p.name).join(', ')}${x.osm ? `, and ${x.osm} on today's map` : ''}`;
+		if (x.osm) return `${x.osm}, on today's map${x.pages.length ? ` (${x.pages[0].name} has a page, but no shape on the map)` : ''}`;
+		if (x.pages.length) return `${x.pages[0].name} has a page, but no shape on the map${x.osmTried ? ", and isn't on today's map" : ''}`;
+		return x.osmTried ? "not in the wiki's streets or on today's map" : "not in the wiki's streets";
+	};
 
 	function placePins() {
 		pinMarkers.forEach((m) => m.remove());
@@ -2278,6 +2336,11 @@
 		void [ready, showBook, current, tool, hiddenSheets.join(), book.map((s) => `${s.id}:${s.thumb}:${s.aligned}:${s.alignment?.corners.flat().join()}`).join('|')];
 		untrack(drawBook);
 	});
+	// the streets a lookup found
+	$effect(() => {
+		void [ready, pinning, crossLines];
+		untrack(drawCrossLines);
+	});
 	// the layer list reordered
 	$effect(() => {
 		void [ready, layerRows.map((r) => r.key).join()];
@@ -3084,7 +3147,30 @@
 			<button disabled={crossBusy || !crossQ.trim()}>{crossBusy ? 'Finding…' : 'Find'}</button>
 		</div>
 	</form>
-	{#if crossProblem}<p class="notice small">{crossProblem}</p>{/if}
+	{#if crossBusy}<p class="muted small">Looking in the wiki's streets, then on OpenStreetMap: that can take a few seconds.</p>{/if}
+	{#if crossProblem}<p class="notice small cross-problem">{crossProblem}</p>{/if}
+	{#if crossSides && !crossBusy && (!crossHits.length || crossSides.some((x) => !x.found))}
+		<ul class="cross-sides">
+			{#each crossSides as x, i (i)}
+				<li class:missing={!x.found}>
+					<span class="sw" class:a={i === 0} class:b={i === 1}></span>
+					<span><strong>{x.found ? '✓' : '✗'} “{x.typed}”</strong>: {sideSays(x)}</span>
+					{#if !x.found && x.suggest.length}
+						<span class="suggest">
+							Did you mean
+							{#each x.suggest as name, k (name)}{k ? ', ' : ' '}<button class="link" onclick={() => trySuggestion(i as 0 | 1, name)}>{name}</button>{/each}?
+						</span>
+					{/if}
+				</li>
+			{/each}
+		</ul>
+	{/if}
+	{#if crossNearest && !crossHits.length}
+		<button class="link small" onclick={() => crossSides && useCrossing({ ...crossNearest!, a: crossSides[0].typed, b: crossSides[1].typed }, false)}>
+			Use the closest point anyway ({Math.round(crossNearest.gap_m)} m apart)
+		</button>
+	{/if}
+	{#if crossLines && !crossHits.length}<p class="hint">What it found is drawn on the map: click the corner there to pin it by hand.</p>{/if}
 	{#if crossHits.length}
 		{@const at = pins.find((p) => p.id === crossPin)?.map}
 		<ul class="cross-hits">
@@ -3585,6 +3671,38 @@
 	.crossing input {
 		flex: 1;
 		min-width: 0;
+	}
+	.cross-sides {
+		list-style: none;
+		margin: 4px 0;
+		padding: 0;
+		font-size: 0.8rem;
+		display: grid;
+		gap: 3px;
+	}
+	.cross-sides li {
+		display: grid;
+		grid-template-columns: 14px 1fr;
+		align-items: baseline;
+		gap: 2px 6px;
+	}
+	.cross-sides li.missing strong {
+		color: #e0574a;
+	}
+	.cross-sides .sw.a,
+	.cross-sides .sw.b {
+		width: 14px;
+		height: 4px;
+		align-self: center;
+	}
+	.cross-sides .sw.a {
+		background: #f0a030;
+	}
+	.cross-sides .sw.b {
+		background: #5fd0e8;
+	}
+	.cross-sides .suggest {
+		grid-column: 2;
 	}
 	.cross-hits {
 		list-style: none;

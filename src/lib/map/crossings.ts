@@ -26,9 +26,34 @@ export type CrossingHit = {
   b_slug?: string;
   /** metres between the streets' ends, when they stop just short of each other */
   gap_m: number;
-  /** wiki: from the streets mapped here (in the sheet's year, if `then`); osm: today's streets */
-  from: "wiki" | "osm";
+  /** wiki: from the streets mapped here (in the sheet's year, if `then`); osm: today's streets;
+   *  mixed: a street mapped here crossed with one of today's */
+  from: "wiki" | "osm" | "mixed";
   then?: boolean;
+};
+
+/** What a lookup made of one of the two streets typed. */
+export type CrossingSide = {
+  typed: string;
+  /** the wiki's streets it matched; shapes: how many shapes each has to cross */
+  pages: { slug: string; name: string; shapes: number }[];
+  /** looked for on OpenStreetMap, and what it's called there if found */
+  osmTried: boolean;
+  osm: string | null;
+  found: boolean;
+  /** for a name that matched nothing: the wiki's streets named like it */
+  suggest: string[];
+};
+
+export type CrossingLookup = {
+  hits: CrossingHit[];
+  streets: [string, string] | null;
+  sides: [CrossingSide, CrossingSide] | null;
+  /** both found, not meeting: the middle of their closest approach */
+  nearest: (Crossing & { from: "wiki" | "osm" }) | null;
+  /** the streets found, to draw on the map (properties: side "a" | "b", from) */
+  lines: GeoJSON.FeatureCollection;
+  problem: string | null;
 };
 
 export type Crossing = { lon: number; lat: number; gap_m: number };
@@ -180,4 +205,60 @@ function segGap(p: P, p2: P, q: P, q2: P): { d: number; mid: P } {
     if (d < best.d) best = { d, mid: [(c[0] + x[0]) / 2, (c[1] + x[1]) / 2] };
   }
   return best;
+}
+
+/**
+ * Where two sets of street lines come closest, when they don't cross: the middle of the gap, how
+ * wide it is, and where they'd meet if the two nearest stretches carried on straight (within
+ * 2 km: a long street comes back from a search in pieces, and the piece at the corner can be
+ * missing). For looking again, there.
+ */
+export function closestApproach(
+  a: LL[][],
+  b: LL[][],
+): (Crossing & { meet: LL }) | null {
+  const all = [...a, ...b].flat();
+  if (!a.length || !b.length || !all.length) return null;
+  const lat0 = all.reduce((s, p) => s + p[1], 0) / all.length;
+  const lon0 = all.reduce((s, p) => s + p[0], 0) / all.length;
+  const kx = (Math.PI / 180) * R * Math.cos((lat0 * Math.PI) / 180);
+  const ky = (Math.PI / 180) * R;
+  const fwd = ([x, y]: LL): P => [(x - lon0) * kx, (y - lat0) * ky];
+  const back = ([x, y]: P): LL => [x / kx + lon0, y / ky + lat0];
+  let best: { d: number; mid: P; sa: [P, P]; sb: [P, P] } | null = null;
+  for (const la of a.map((l) => l.map(fwd)))
+    for (const lb of b.map((l) => l.map(fwd)))
+      for (let i = 0; i + 1 < la.length; i++)
+        for (let k = 0; k + 1 < lb.length; k++) {
+          const g = segCross(la[i], la[i + 1], lb[k], lb[k + 1])
+            ? { d: 0, mid: segCross(la[i], la[i + 1], lb[k], lb[k + 1])! }
+            : segGap(la[i], la[i + 1], lb[k], lb[k + 1]);
+          if (!best || g.d < best.d)
+            best = {
+              d: g.d,
+              mid: g.mid,
+              sa: [la[i], la[i + 1]],
+              sb: [lb[k], lb[k + 1]],
+            };
+        }
+  if (!best) return null;
+  // the two stretches, carried on
+  const [p, p2] = best.sa;
+  const [q, q2] = best.sb;
+  const r: P = [p2[0] - p[0], p2[1] - p[1]];
+  const s: P = [q2[0] - q[0], q2[1] - q[1]];
+  const den = r[0] * s[1] - r[1] * s[0];
+  let meet = best.mid;
+  if (Math.abs(den) > 1e-9 * Math.hypot(...r) * Math.hypot(...s)) {
+    const t = ((q[0] - p[0]) * s[1] - (q[1] - p[1]) * s[0]) / den;
+    const x: P = [p[0] + t * r[0], p[1] + t * r[1]];
+    if (Math.hypot(x[0] - best.mid[0], x[1] - best.mid[1]) < 2000) meet = x;
+  }
+  const [lon, lat] = back(best.mid);
+  return {
+    lon: +lon.toFixed(7),
+    lat: +lat.toFixed(7),
+    gap_m: Math.round(best.d),
+    meet: back(meet),
+  };
 }

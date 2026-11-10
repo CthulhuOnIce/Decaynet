@@ -1,5 +1,5 @@
 import { env } from '$env/dynamic/private';
-import { crossings, linesOf, type LL } from '$lib/map/crossings';
+import { closestApproach, crossings, linesOf, type LL } from '$lib/map/crossings';
 import type { GeoAddressHit, SiteSettings } from '$lib/types';
 
 /**
@@ -142,7 +142,7 @@ export async function geocodeAddresses(q: string, settings: SiteSettings, origin
 // streets from OpenStreetMap (each street's ways, as lines), and where they cross. Two requests,
 // one per street, each a second apart; cached like addresses.
 
-const streetCache = new Map<string, { at: number; lines: LL[][]; name: string | null }>();
+const streetCache = new Map<string, { at: number; lines: LL[][]; name: string | null; ways: number }>();
 const ORDINALS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth',
 	'eleventh', 'twelfth', 'thirteenth', 'fourteenth', 'fifteenth', 'sixteenth', 'seventeenth', 'eighteenth', 'nineteenth', 'twentieth'];
 const SUFFIX = (n: number) => `${n}${n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th'}`;
@@ -169,11 +169,14 @@ export function osmSpelling(name: string): string {
 }
 
 /** A street's ways in a box (the site's, or where the other street runs): at most 40 of them. */
-async function osmStreet(name: string, settings: SiteSettings, origin: string, box: string = viewbox(settings)): Promise<{ lines: LL[][]; name: string | null }> {
+type OsmStreet = { lines: LL[][]; name: string | null; /** ways found: 40 means the search was cut off */ ways: number };
+
+/** A street's ways in a box (the site's, the view's, or round a corner): at most 40 of them. */
+async function osmStreet(name: string, settings: SiteSettings, origin: string, box: string = viewbox(settings)): Promise<OsmStreet> {
 	const key = `${name.toLowerCase()}|${box}`;
 	const cached = streetCache.get(key);
 	if (cached && Date.now() - cached.at < TTL_MS) return cached;
-	let out: { lines: LL[][]; name: string | null } = { lines: [], name: null };
+	let out: OsmStreet = { lines: [], name: null, ways: 0 };
 	for (const q of [...new Set([name, osmSpelling(name)])]) {
 		const params = new URLSearchParams({
 			q,
@@ -193,7 +196,7 @@ async function osmStreet(name: string, settings: SiteSettings, origin: string, b
 			if (!res.ok) break;
 			const rows = (await res.json()) as NominatimHit[];
 			const ways = rows.filter((r) => r.category === 'highway' && r.geojson);
-			out = { lines: ways.flatMap((r) => linesOf(r.geojson)), name: ways[0]?.name ?? null };
+			out = { lines: ways.flatMap((r) => linesOf(r.geojson)), name: ways[0]?.name ?? null, ways: rows.length };
 		} catch {
 			break; // offline or rate limited
 		}
@@ -204,8 +207,6 @@ async function osmStreet(name: string, settings: SiteSettings, origin: string, b
 	return out;
 }
 
-export type OsmCrossing = { lon: number; lat: number; gap_m: number; a: string; b: string };
-
 /** The box round some lines, ~300 m wider each way, as a Nominatim viewbox. */
 function boxAround(lines: LL[][]): string {
 	const pts = lines.flat();
@@ -215,22 +216,72 @@ function boxAround(lines: LL[][]): string {
 	return `${Math.min(...xs) - pad},${Math.max(...ys) + pad},${Math.max(...xs) + pad},${Math.min(...ys) - pad}`;
 }
 
+export type OsmCrossing = { lon: number; lat: number; gap_m: number; a: string; b: string };
+export type OsmSide = {
+	/** found on OpenStreetMap (or given: the wiki's own shape of it) */
+	found: boolean;
+	/** as OpenStreetMap names it */
+	name: string | null;
+	lines: LL[][];
+};
+export type OsmLookup = { hits: OsmCrossing[]; a: OsmSide; b: OsmSide; nearest: { lon: number; lat: number; gap_m: number } | null };
+
+/** A Nominatim viewbox d degrees each way round a point. */
+const boxAt = ([x, y]: LL, d: number) => `${x - d},${y + d},${x + d},${y - d}`;
+
 /**
- * Where two of today's streets cross, from OpenStreetMap: nearest `near` first. A long street is
- * many ways, more than one search returns, so the second street is looked for only where the first
- * runs, and (if they still don't meet) the first again where the second runs. A few requests, a second apart.
+ * Where two of today's streets cross, from OpenStreetMap, nearest `near` first; and, when they
+ * don't, which street wasn't found or how close they come. A search returns at most 40 ways and
+ * a long street has more, so the piece at the corner can be missing: it looks first round the
+ * view (~2 km), then across the site; and where the streets come closest without meeting, it
+ * looks again right there. `known` lines stand in for a street the wiki has a shape of (so a
+ * street that's gone can still be crossed with one of today's). A few requests, a second apart.
  */
-export async function osmCrossings(a: string, b: string, settings: SiteSettings, origin: string, near: LL | null): Promise<OsmCrossing[]> {
-	const sa = await osmStreet(a, settings, origin);
-	if (!sa.lines.length) return [];
-	const sb = await osmStreet(b, settings, origin, boxAround(sa.lines));
-	if (!sb.lines.length) return [];
-	let hits = crossings(sa.lines, sb.lines, near);
-	let names = { a: sa.name ?? a, b: sb.name ?? b };
-	if (!hits.length) {
-		const sa2 = await osmStreet(a, settings, origin, boxAround(sb.lines));
-		hits = crossings(sa2.lines, sb.lines, near);
-		names = { a: sa2.name ?? names.a, b: names.b };
+export async function osmLookup(
+	a: string,
+	b: string,
+	settings: SiteSettings,
+	origin: string,
+	near: LL | null,
+	known: { a?: LL[][]; b?: LL[][] } = {}
+): Promise<OsmLookup> {
+	const A: OsmSide = { found: !!known.a?.length, name: null, lines: known.a ?? [] };
+	const B: OsmSide = { found: !!known.b?.length, name: null, lines: known.b ?? [] };
+	const add = (side: OsmSide, got: OsmStreet) => {
+		if (!got.lines.length) return;
+		side.found = true;
+		side.name ??= got.name;
+		side.lines = [...side.lines, ...got.lines];
+	};
+	const done = (hits: OsmCrossing[], nearest: OsmLookup['nearest'] = null): OsmLookup => ({ hits, a: A, b: B, nearest });
+	const named = (h: ReturnType<typeof crossings>) => h.slice(0, 6).map((c) => ({ ...c, a: A.name ?? a, b: B.name ?? b }));
+	const boxes = [near ? boxAt(near, 0.02) : null, viewbox(settings)].filter((x): x is string => !!x);
+	for (const [round, box] of boxes.entries()) {
+		const last = round === boxes.length - 1;
+		// a known street's lines say where to look for the other
+		if (!known.a?.length) add(A, await osmStreet(a, settings, origin, known.b?.length ? boxAround(known.b) : box));
+		if (!known.b?.length) add(B, await osmStreet(b, settings, origin, known.a?.length ? boxAround(known.a) : box));
+		if (!A.found || !B.found) {
+			// a known street with the other not near it: no wider search will help
+			if (known.a?.length || known.b?.length) break;
+			continue;
+		}
+		let hits = crossings(A.lines, B.lines, near);
+		if (hits.length) return done(named(hits));
+		// both found, not meeting in what came back: look again where they'd meet
+		const c = closestApproach(A.lines, B.lines);
+		if (c && c.gap_m < 5000) {
+			const there = boxAt(c.meet, 0.006);
+			if (!known.a?.length) add(A, await osmStreet(a, settings, origin, there));
+			if (!known.b?.length) add(B, await osmStreet(b, settings, origin, there));
+			hits = crossings(A.lines, B.lines, near);
+			if (hits.length) return done(named(hits));
+		}
+		// searched everywhere they could be: they don't meet
+		if (last || known.a?.length || known.b?.length) {
+			const n = closestApproach(A.lines, B.lines);
+			return done([], n && n.gap_m <= 2000 ? { lon: n.lon, lat: n.lat, gap_m: n.gap_m } : null);
+		}
 	}
-	return hits.slice(0, 6).map((c) => ({ ...c, ...names }));
+	return done([]);
 }
